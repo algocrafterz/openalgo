@@ -1,0 +1,5151 @@
+{
+  "artifacts": {
+    "assumptions.json": "a2b6718fb71ff27cfab8625a314eb57bbafcd82df036ec3f279688d8f49438f3",
+    "data_quality.json": "74bacc24f73ffffcead66bdabe2e6afe79fc2bb19d6bae630f2c4573d2734373",
+    "evidence/exclusions.parquet": "f74db6457dbbd0d91cfe74498084254419ed61e70768ab28ebb3b3417d203a69",
+    "evidence/fills.parquet": "50ca2e36e9e65c28efba735748f3a8b2464117c3b355556e04900e12f8285002",
+    "evidence/orders.parquet": "9b07224f3804b293b5c708702f2d2fdebfa2ca132fa88e4f81ff4262431019a9",
+    "evidence/signals.parquet": "3024da2593843980b13cf5fe6cd9d5914b4fba74bd0ea5cf47efd66f7f8f0595",
+    "evidence/tick_grid.json": "7c1dbc2e2ffbc80f796008a554650ed0ca6ed0ed09d0055848516e8153e3edec",
+    "evidence/trades.parquet": "4e28416ce68b143e32b489b29abd64717ad91c18ba3b0974047f2103f06d9410",
+    "execution/config.json": "dbea4c35c890a58866382c82ce0c50a0dd4c163a22498d86c225237a8173a829",
+    "execution/universe.parquet": "97f9a30df7e90ceac327a766ea5a5b3db9cb6e140d257d2ca3d1ff5bb08c7182",
+    "report/report.json": "7a6530ac01e6dbf4af5aae7d8bba15aaf1fcf569f50fbb23134b4a3d68c6b390",
+    "strategy/spec.yaml": "6871442c113dcac7aa1fffa0b7c3d83d6f84c2bd9ded242da035e787e914baa7",
+    "strategy/strategy.json": "d4cd6b2b9806e5004218baf61c76432d16c372fc7c898712ddbf4052240590f1"
+  },
+  "calendar_version": "nse-official-37f70eff",
+  "change_classes": [
+    "STRATEGY_CHANGE",
+    "PARAMETER_CHANGE",
+    "ENGINE_CHANGE"
+  ],
+  "created_ist": "2026-10-28T15:00:31.508327+05:30",
+  "data_policy_version": "e7522cd2c5c539210bb000ddd02c0f8a59a0ddd78eae6f205db111c5bf9ed006",
+  "dataset": {
+    "calendar_version": "b421112497193bce867b4c32633aa1f79b1a5cd5ae3d72ef863368b3d138468b",
+    "corporate_action_policy": "canonical NSE: each session converted from the vendor basis to NSE raw prices by a per-session factor, then back-adjusted with the factors of the daily version",
+    "corporate_action_version": "bd14a59e0135b60031a80ec2c3fd445a0636a9f16d546e2ff1464eedf92f3c73",
+    "coverage": {
+      "end": "2026-10-19",
+      "rows": 32875444,
+      "sessions_price_valid": 440450,
+      "sessions_requested": 443618,
+      "start": "2017-01-01",
+      "symbols": 213
+    },
+    "data_as_of": "2026-10-19",
+    "fingerprint": "d1642641de1169b00008f2c4c95cf8a756167a36953457ac02dae07cba36c0ef",
+    "fingerprint_algo": "snapshot-v1: sha256(canonical_json(manifest body)); objects sha256 of bytes",
+    "id": "nse-intraday-5m-20261021-002",
+    "interval": "5m",
+    "known_limitations": "legacy row-level provenance unavailable (sample-verified); dividends not adjusted; renames not joined; universe is today's F&O list (survivorship); minute bars exclude pre-open auction volume; NSE daily extremes may lie outside the minute range (2023-06 to 2024-03)",
+    "latest_session": "2026-10-19",
+    "overrides_source": null,
+    "price_basis": "canonical NSE: each session converted from the vendor basis to NSE raw prices by a per-session factor, then back-adjusted with the factors of the daily version",
+    "root_hash": "a696073e23eb970a0e918bca2baea336c23857cdf44bae8430d37ad0cbab8eab",
+    "run_fingerprint": "d1642641de1169b00008f2c4c95cf8a756167a36953457ac02dae07cba36c0ef",
+    "series_rule_version": null,
+    "source": "AngelOne 1m (legacy Historify store, frozen, plus targeted AngelOne recovery)",
+    "status": "published",
+    "symbol_count": 206,
+    "version_id": "nse-intraday-5m-20261021-002"
+  },
+  "deployment_profile": {
+    "name": "flattrade-nse-cash",
+    "product": "MIS",
+    "sha256": "82ea4452cf52cddd33a3d10ce8ef137b92be7be1a4e7df554074b9e4525a835b"
+  },
+  "engine": {
+    "code_commit": "3d642406313e2835c67a6ec761e5cd93659812a7",
+    "code_dirty": true,
+    "dirty_paths": [
+      "signal_engine/analysis/breakingtrade/tp_watch.py",
+      "signal_engine/backtest/__main__.py",
+      "signal_engine/backtest/strategies/balance_breakout.py",
+      "signal_engine/strategy_library/intraday/breaking-trade/experiments/2026-10-ib-reference-levels/features.py",
+      "signal_engine/strategy_library/intraday/breaking-trade/experiments/2026-10-ib-reference-levels/inputs_frames.py",
+      "signal_engine/strategy_library/intraday/breaking-trade/experiments/2026-10-ib-reference-levels/inputs_trades.py",
+      "signal_engine/strategy_library/intraday/breaking-trade/experiments/2026-10-ib-reference-levels/sample_a.py",
+      "signal_engine/strategy_library/intraday/breaking-trade/experiments/2026-10-ib-reference-levels/sample_b.py",
+      "signal_engine/strategy_library/intraday/breaking-trade/experiments/2026-10-param-tuning/analyze.py",
+      "signal_engine/strategy_library/intraday/breaking-trade/experiments/2026-10-param-tuning/tune.py"
+    ],
+    "engine_version": "1.5"
+  },
+  "environment": {
+    "packages": {
+      "duckdb": "1.5.5",
+      "numpy": "2.4.4",
+      "pandas": "2.3.3",
+      "pyarrow": "23.0.1",
+      "pyyaml": "6.0.3"
+    },
+    "python": "3.12.3"
+  },
+  "exclusions": [
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 19,
+        "price_invalid": 5,
+        "volume_invalid": 3
+      },
+      "sessions": 27,
+      "symbol": "360ONE",
+      "years": {
+        "2023": 22,
+        "2024": 3,
+        "2025": 1,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 171,
+        "price_invalid": 9,
+        "volume_invalid": 9
+      },
+      "sessions": 189,
+      "symbol": "ABB",
+      "years": {
+        "2017": 54,
+        "2018": 44,
+        "2019": 57,
+        "2020": 25,
+        "2021": 4,
+        "2024": 3,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 12,
+        "volume_invalid": 9
+      },
+      "sessions": 28,
+      "symbol": "ABCAPITAL",
+      "years": {
+        "2017": 3,
+        "2018": 6,
+        "2019": 6,
+        "2020": 6,
+        "2021": 3,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 1,
+        "price_invalid": 5
+      },
+      "sessions": 6,
+      "symbol": "ADANIENSOL",
+      "years": {
+        "2023": 1,
+        "2024": 4,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 10,
+        "volume_invalid": 11
+      },
+      "sessions": 27,
+      "symbol": "ADANIENT",
+      "years": {
+        "2017": 1,
+        "2018": 8,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2023": 1,
+        "2024": 2,
+        "2025": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 66,
+        "price_invalid": 9,
+        "volume_invalid": 9
+      },
+      "sessions": 84,
+      "symbol": "ADANIGREEN",
+      "years": {
+        "2018": 40,
+        "2019": 29,
+        "2020": 5,
+        "2021": 3,
+        "2023": 4,
+        "2024": 2,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 11,
+        "volume_invalid": 15
+      },
+      "sessions": 32,
+      "symbol": "ADANIPORTS",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 4,
+        "2023": 1,
+        "2024": 3,
+        "2025": 2,
+        "2026": 6
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 10,
+        "volume_invalid": 15
+      },
+      "sessions": 31,
+      "symbol": "ADANIPOWER",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 5,
+        "2022": 1,
+        "2023": 2,
+        "2024": 3,
+        "2025": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 349,
+        "price_invalid": 8,
+        "volume_invalid": 11
+      },
+      "sessions": 368,
+      "symbol": "ALKEM",
+      "years": {
+        "2017": 86,
+        "2018": 112,
+        "2019": 137,
+        "2020": 5,
+        "2021": 3,
+        "2022": 12,
+        "2023": 8,
+        "2024": 3,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 397,
+        "price_invalid": 11,
+        "volume_invalid": 7
+      },
+      "sessions": 415,
+      "symbol": "AMBER",
+      "years": {
+        "2018": 167,
+        "2019": 212,
+        "2020": 12,
+        "2021": 6,
+        "2022": 6,
+        "2023": 6,
+        "2024": 6
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 9,
+        "volume_invalid": 12
+      },
+      "sessions": 26,
+      "symbol": "AMBUJACEM",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 4,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 2,
+        "price_invalid": 4
+      },
+      "sessions": 6,
+      "symbol": "ANGELONE",
+      "years": {
+        "2022": 1,
+        "2023": 1,
+        "2024": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 642,
+        "price_invalid": 17,
+        "volume_invalid": 7
+      },
+      "sessions": 666,
+      "symbol": "APLAPOLLO",
+      "years": {
+        "2017": 207,
+        "2018": 179,
+        "2019": 223,
+        "2020": 47,
+        "2021": 2,
+        "2023": 4,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 8,
+        "price_invalid": 7,
+        "volume_invalid": 11
+      },
+      "sessions": 26,
+      "symbol": "APOLLOHOSP",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 4,
+        "2022": 1,
+        "2024": 2,
+        "2025": 1,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 7,
+        "volume_invalid": 10
+      },
+      "sessions": 23,
+      "symbol": "ASHOKLEY",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 3,
+        "2022": 1,
+        "2024": 2,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 7,
+        "volume_invalid": 15
+      },
+      "sessions": 27,
+      "symbol": "ASIANPAINT",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 4,
+        "2020": 2,
+        "2021": 4,
+        "2024": 3,
+        "2025": 1,
+        "2026": 6
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 444,
+        "price_invalid": 7,
+        "volume_invalid": 12
+      },
+      "sessions": 463,
+      "symbol": "ASTRAL",
+      "years": {
+        "2017": 194,
+        "2018": 151,
+        "2019": 101,
+        "2020": 7,
+        "2021": 3,
+        "2024": 4,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "price_invalid": 4
+      },
+      "sessions": 4,
+      "symbol": "ATHERENERG",
+      "years": {
+        "2025": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 87,
+        "price_invalid": 4,
+        "volume_invalid": 4
+      },
+      "sessions": 95,
+      "symbol": "AUBANK",
+      "years": {
+        "2017": 4,
+        "2018": 50,
+        "2019": 28,
+        "2020": 3,
+        "2021": 3,
+        "2022": 1,
+        "2023": 1,
+        "2024": 3,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 7,
+        "volume_invalid": 12
+      },
+      "sessions": 25,
+      "symbol": "AUROPHARMA",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 4,
+        "2024": 3,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 10,
+        "volume_invalid": 11
+      },
+      "sessions": 27,
+      "symbol": "AXISBANK",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 4,
+        "2023": 2,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 10,
+        "volume_invalid": 12
+      },
+      "sessions": 28,
+      "symbol": "BAJAJ-AUTO",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 5,
+        "2021": 3,
+        "2023": 2,
+        "2024": 2,
+        "2025": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 8,
+        "price_invalid": 6,
+        "volume_invalid": 13
+      },
+      "sessions": 27,
+      "symbol": "BAJAJFINSV",
+      "years": {
+        "2017": 4,
+        "2018": 6,
+        "2019": 5,
+        "2020": 2,
+        "2021": 3,
+        "2023": 1,
+        "2024": 2,
+        "2025": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 596,
+        "price_invalid": 17,
+        "volume_invalid": 12
+      },
+      "sessions": 625,
+      "symbol": "BAJAJHLDNG",
+      "years": {
+        "2017": 186,
+        "2018": 185,
+        "2019": 128,
+        "2020": 29,
+        "2021": 38,
+        "2022": 21,
+        "2023": 22,
+        "2024": 7,
+        "2025": 1,
+        "2026": 8
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 4,
+        "price_invalid": 10,
+        "volume_invalid": 13
+      },
+      "sessions": 27,
+      "symbol": "BAJFINANCE",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 4,
+        "2023": 1,
+        "2024": 2,
+        "2025": 3,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 10,
+        "volume_invalid": 8
+      },
+      "sessions": 24,
+      "symbol": "BANDHANBNK",
+      "years": {
+        "2018": 5,
+        "2019": 6,
+        "2020": 5,
+        "2021": 3,
+        "2023": 3,
+        "2024": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 11,
+        "volume_invalid": 10
+      },
+      "sessions": 26,
+      "symbol": "BANKBARODA",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 5,
+        "2021": 4,
+        "2023": 2,
+        "2024": 2,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 11,
+        "volume_invalid": 11
+      },
+      "sessions": 28,
+      "symbol": "BANKINDIA",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 4,
+        "2020": 4,
+        "2021": 4,
+        "2023": 3,
+        "2024": 3,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "price_invalid": 1023,
+        "usable_range_removed:price": 1092,
+        "volume_invalid": 1
+      },
+      "sessions": 2116,
+      "symbol": "BDL",
+      "years": {
+        "2018": 189,
+        "2019": 244,
+        "2020": 251,
+        "2021": 247,
+        "2022": 247,
+        "2023": 245,
+        "2024": 248,
+        "2025": 248,
+        "2026": 197
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 7,
+        "volume_invalid": 12
+      },
+      "sessions": 25,
+      "symbol": "BEL",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 2,
+        "2021": 3,
+        "2022": 2,
+        "2024": 2,
+        "2025": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 9,
+        "volume_invalid": 9
+      },
+      "sessions": 25,
+      "symbol": "BHARATFORG",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2022": 1,
+        "2023": 2,
+        "2024": 2,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 10,
+        "volume_invalid": 15
+      },
+      "sessions": 32,
+      "symbol": "BHARTIARTL",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 3,
+        "2022": 2,
+        "2024": 2,
+        "2025": 2,
+        "2026": 6
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 8,
+        "volume_invalid": 10
+      },
+      "sessions": 24,
+      "symbol": "BHEL",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2023": 1,
+        "2024": 3,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 6,
+        "volume_invalid": 11
+      },
+      "sessions": 23,
+      "symbol": "BIOCON",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 4,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 540,
+        "price_invalid": 7,
+        "volume_invalid": 12
+      },
+      "sessions": 559,
+      "symbol": "BLUESTARCO",
+      "years": {
+        "2017": 164,
+        "2018": 169,
+        "2019": 116,
+        "2020": 42,
+        "2021": 27,
+        "2022": 27,
+        "2023": 10,
+        "2024": 3,
+        "2025": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 73,
+        "price_invalid": 8,
+        "volume_invalid": 11
+      },
+      "sessions": 92,
+      "symbol": "BOSCHLTD",
+      "years": {
+        "2017": 16,
+        "2018": 24,
+        "2019": 25,
+        "2020": 3,
+        "2021": 3,
+        "2022": 2,
+        "2023": 12,
+        "2024": 3,
+        "2025": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 10,
+        "volume_invalid": 11
+      },
+      "sessions": 27,
+      "symbol": "BPCL",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 4,
+        "2024": 3,
+        "2026": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 5,
+        "volume_invalid": 13
+      },
+      "sessions": 25,
+      "symbol": "BRITANNIA",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2022": 1,
+        "2023": 1,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "price_invalid": 4,
+        "usable_range_removed:volume": 1344,
+        "volume_invalid": 1048
+      },
+      "sessions": 2396,
+      "symbol": "BSE",
+      "years": {
+        "2017": 224,
+        "2018": 245,
+        "2019": 244,
+        "2020": 251,
+        "2021": 247,
+        "2022": 247,
+        "2023": 245,
+        "2024": 248,
+        "2025": 248,
+        "2026": 197
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 4,
+        "price_invalid": 3
+      },
+      "sessions": 7,
+      "symbol": "CAMS",
+      "years": {
+        "2020": 2,
+        "2021": 3,
+        "2024": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 6,
+        "volume_invalid": 12
+      },
+      "sessions": 24,
+      "symbol": "CANBK",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2024": 3,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 51,
+        "price_invalid": 11,
+        "volume_invalid": 11
+      },
+      "sessions": 73,
+      "symbol": "CDSL",
+      "years": {
+        "2017": 2,
+        "2018": 12,
+        "2019": 45,
+        "2020": 3,
+        "2021": 5,
+        "2023": 3,
+        "2024": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 96,
+        "price_invalid": 10,
+        "volume_invalid": 13
+      },
+      "sessions": 119,
+      "symbol": "CGPOWER",
+      "years": {
+        "2017": 3,
+        "2018": 10,
+        "2019": 28,
+        "2020": 66,
+        "2021": 3,
+        "2023": 1,
+        "2024": 5,
+        "2025": 1,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 44,
+        "price_invalid": 7,
+        "volume_invalid": 12
+      },
+      "sessions": 63,
+      "symbol": "CHOLAFIN",
+      "years": {
+        "2017": 38,
+        "2018": 8,
+        "2019": 5,
+        "2020": 4,
+        "2021": 3,
+        "2024": 3,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 8,
+        "volume_invalid": 12
+      },
+      "sessions": 26,
+      "symbol": "CIPLA",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2023": 1,
+        "2024": 2,
+        "2026": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 6,
+        "volume_invalid": 12
+      },
+      "sessions": 24,
+      "symbol": "COALINDIA",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2022": 1,
+        "2024": 3,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 123,
+        "price_invalid": 6,
+        "volume_invalid": 9
+      },
+      "sessions": 138,
+      "symbol": "COCHINSHIP",
+      "years": {
+        "2017": 1,
+        "2018": 21,
+        "2019": 86,
+        "2020": 13,
+        "2021": 6,
+        "2022": 8,
+        "2024": 2,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 4,
+        "price_invalid": 4,
+        "volume_invalid": 1
+      },
+      "sessions": 9,
+      "symbol": "COFORGE",
+      "years": {
+        "2020": 1,
+        "2021": 3,
+        "2024": 2,
+        "2025": 2,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 11,
+        "price_invalid": 8,
+        "volume_invalid": 12
+      },
+      "sessions": 31,
+      "symbol": "COLPAL",
+      "years": {
+        "2017": 5,
+        "2018": 8,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2024": 2,
+        "2026": 5
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 13,
+        "price_invalid": 7,
+        "volume_invalid": 10
+      },
+      "sessions": 30,
+      "symbol": "CONCOR",
+      "years": {
+        "2017": 6,
+        "2018": 9,
+        "2019": 6,
+        "2020": 3,
+        "2021": 3,
+        "2024": 2,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 26,
+        "price_invalid": 8,
+        "volume_invalid": 10
+      },
+      "sessions": 44,
+      "symbol": "CROMPTON",
+      "years": {
+        "2017": 7,
+        "2018": 10,
+        "2019": 15,
+        "2020": 4,
+        "2021": 3,
+        "2023": 1,
+        "2024": 3,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 31,
+        "price_invalid": 7,
+        "volume_invalid": 12
+      },
+      "sessions": 50,
+      "symbol": "CUMMINSIND",
+      "years": {
+        "2017": 10,
+        "2018": 19,
+        "2019": 8,
+        "2020": 4,
+        "2021": 4,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 6,
+        "volume_invalid": 12
+      },
+      "sessions": 24,
+      "symbol": "DABUR",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2022": 1,
+        "2024": 3,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 1,
+        "price_invalid": 6,
+        "volume_invalid": 2
+      },
+      "sessions": 9,
+      "symbol": "DELHIVERY",
+      "years": {
+        "2022": 2,
+        "2023": 2,
+        "2024": 4,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 7,
+        "volume_invalid": 9
+      },
+      "sessions": 22,
+      "symbol": "DIVISLAB",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 3,
+        "2024": 2,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 325,
+        "price_invalid": 11,
+        "volume_invalid": 7
+      },
+      "sessions": 343,
+      "symbol": "DIXON",
+      "years": {
+        "2017": 11,
+        "2018": 144,
+        "2019": 178,
+        "2020": 2,
+        "2021": 2,
+        "2022": 1,
+        "2023": 1,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 11,
+        "volume_invalid": 10
+      },
+      "sessions": 26,
+      "symbol": "DLF",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 5,
+        "2020": 5,
+        "2021": 3,
+        "2023": 1,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 10,
+        "volume_invalid": 12
+      },
+      "sessions": 29,
+      "symbol": "DMART",
+      "years": {
+        "2017": 3,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 4,
+        "2022": 1,
+        "2024": 4,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 5,
+        "volume_invalid": 13
+      },
+      "sessions": 23,
+      "symbol": "DRREDDY",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 4,
+        "2020": 2,
+        "2021": 2,
+        "2022": 1,
+        "2023": 1,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 10,
+        "volume_invalid": 12
+      },
+      "sessions": 29,
+      "symbol": "EICHERMOT",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 6,
+        "2021": 3,
+        "2022": 1,
+        "2023": 1,
+        "2024": 2,
+        "2025": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "volume_invalid": 3
+      },
+      "sessions": 3,
+      "symbol": "ETERNAL",
+      "years": {
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 8,
+        "volume_invalid": 9
+      },
+      "sessions": 24,
+      "symbol": "FEDERALBNK",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 4,
+        "2022": 1,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 407,
+        "price_invalid": 8,
+        "volume_invalid": 3
+      },
+      "sessions": 418,
+      "symbol": "FORCEMOT",
+      "years": {
+        "2019": 55,
+        "2020": 89,
+        "2021": 67,
+        "2022": 129,
+        "2023": 66,
+        "2024": 6,
+        "2025": 6
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 74,
+        "price_invalid": 10,
+        "volume_invalid": 11
+      },
+      "sessions": 95,
+      "symbol": "FORTIS",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 70,
+        "2020": 4,
+        "2021": 3,
+        "2022": 2,
+        "2024": 6,
+        "2025": 1,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 5,
+        "volume_invalid": 14
+      },
+      "sessions": 25,
+      "symbol": "GAIL",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 4,
+        "2020": 2,
+        "2021": 3,
+        "2022": 1,
+        "2024": 2,
+        "2026": 6
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 7,
+        "volume_invalid": 10
+      },
+      "sessions": 23,
+      "symbol": "GLENMARK",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2023": 2,
+        "2024": 2,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "price_invalid": 2,
+        "volume_invalid": 3
+      },
+      "sessions": 5,
+      "symbol": "GMRAIRPORT",
+      "years": {
+        "2026": 5
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 464,
+        "price_invalid": 11,
+        "volume_invalid": 10
+      },
+      "sessions": 485,
+      "symbol": "GODFRYPHLP",
+      "years": {
+        "2017": 85,
+        "2018": 89,
+        "2019": 52,
+        "2020": 54,
+        "2021": 85,
+        "2022": 104,
+        "2023": 12,
+        "2024": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 8,
+        "price_invalid": 10,
+        "volume_invalid": 12
+      },
+      "sessions": 30,
+      "symbol": "GODREJCP",
+      "years": {
+        "2017": 4,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 3,
+        "2023": 1,
+        "2024": 3,
+        "2025": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 114,
+        "price_invalid": 9,
+        "volume_invalid": 11
+      },
+      "sessions": 134,
+      "symbol": "GODREJPROP",
+      "years": {
+        "2017": 55,
+        "2018": 53,
+        "2019": 12,
+        "2020": 5,
+        "2021": 4,
+        "2023": 2,
+        "2024": 2,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 7,
+        "volume_invalid": 12
+      },
+      "sessions": 25,
+      "symbol": "GRASIM",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2024": 2,
+        "2026": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "price_invalid": 1,
+        "volume_invalid": 6
+      },
+      "sessions": 7,
+      "symbol": "GVT&D",
+      "years": {
+        "2024": 1,
+        "2025": 4,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 321,
+        "price_invalid": 8,
+        "volume_invalid": 9
+      },
+      "sessions": 338,
+      "symbol": "HAL",
+      "years": {
+        "2018": 88,
+        "2019": 205,
+        "2020": 36,
+        "2021": 3,
+        "2023": 1,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 8,
+        "volume_invalid": 10
+      },
+      "sessions": 23,
+      "symbol": "HAVELLS",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 4,
+        "2020": 2,
+        "2021": 4,
+        "2024": 3,
+        "2025": 1,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 7,
+        "volume_invalid": 13
+      },
+      "sessions": 25,
+      "symbol": "HCLTECH",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 4,
+        "2024": 2,
+        "2026": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 9,
+        "volume_invalid": 9
+      },
+      "sessions": 24,
+      "symbol": "HDFCAMC",
+      "years": {
+        "2018": 5,
+        "2019": 5,
+        "2020": 3,
+        "2021": 4,
+        "2023": 2,
+        "2024": 3,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 8,
+        "volume_invalid": 12
+      },
+      "sessions": 26,
+      "symbol": "HDFCBANK",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 4,
+        "2024": 2,
+        "2025": 1,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 6,
+        "volume_invalid": 12
+      },
+      "sessions": 23,
+      "symbol": "HDFCLIFE",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 8,
+        "volume_invalid": 11
+      },
+      "sessions": 25,
+      "symbol": "HEROMOTOCO",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 3,
+        "2023": 1,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 9,
+        "volume_invalid": 11
+      },
+      "sessions": 26,
+      "symbol": "HINDALCO",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 4,
+        "2022": 2,
+        "2023": 1,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 8,
+        "volume_invalid": 11
+      },
+      "sessions": 25,
+      "symbol": "HINDPETRO",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 4,
+        "2023": 2,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 6,
+        "volume_invalid": 12
+      },
+      "sessions": 23,
+      "symbol": "HINDUNILVR",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 4,
+        "2020": 3,
+        "2021": 3,
+        "2024": 2,
+        "2025": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 6,
+        "volume_invalid": 10
+      },
+      "sessions": 23,
+      "symbol": "HINDZINC",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 6,
+        "2020": 4,
+        "2021": 3,
+        "2024": 2,
+        "2025": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "price_invalid": 2,
+        "volume_invalid": 1
+      },
+      "sessions": 3,
+      "symbol": "HYUNDAI",
+      "years": {
+        "2024": 1,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 7,
+        "volume_invalid": 11
+      },
+      "sessions": 24,
+      "symbol": "ICICIBANK",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 5,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 14,
+        "price_invalid": 7,
+        "volume_invalid": 14
+      },
+      "sessions": 35,
+      "symbol": "ICICIGI",
+      "years": {
+        "2017": 1,
+        "2018": 13,
+        "2019": 6,
+        "2020": 5,
+        "2021": 3,
+        "2024": 4,
+        "2025": 1,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 8,
+        "volume_invalid": 11
+      },
+      "sessions": 25,
+      "symbol": "ICICIPRULI",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 4,
+        "2024": 4,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 13,
+        "volume_invalid": 14
+      },
+      "sessions": 34,
+      "symbol": "IDEA",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 3,
+        "2022": 1,
+        "2023": 1,
+        "2024": 9,
+        "2025": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 10,
+        "volume_invalid": 5
+      },
+      "sessions": 21,
+      "symbol": "IDFCFIRSTB",
+      "years": {
+        "2019": 5,
+        "2020": 5,
+        "2021": 3,
+        "2022": 1,
+        "2023": 2,
+        "2024": 2,
+        "2025": 1,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 388,
+        "price_invalid": 10,
+        "volume_invalid": 6
+      },
+      "sessions": 404,
+      "symbol": "IEX",
+      "years": {
+        "2017": 13,
+        "2018": 189,
+        "2019": 178,
+        "2020": 16,
+        "2021": 3,
+        "2022": 1,
+        "2024": 3,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 63,
+        "price_invalid": 11,
+        "volume_invalid": 13
+      },
+      "sessions": 87,
+      "symbol": "INDHOTEL",
+      "years": {
+        "2017": 43,
+        "2018": 18,
+        "2019": 10,
+        "2020": 5,
+        "2021": 4,
+        "2023": 1,
+        "2024": 3,
+        "2025": 1,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 9,
+        "volume_invalid": 11
+      },
+      "sessions": 26,
+      "symbol": "INDIANB",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2022": 1,
+        "2023": 2,
+        "2024": 3,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 13,
+        "price_invalid": 9,
+        "volume_invalid": 14
+      },
+      "sessions": 36,
+      "symbol": "INDIGO",
+      "years": {
+        "2017": 8,
+        "2018": 6,
+        "2019": 5,
+        "2020": 5,
+        "2021": 3,
+        "2024": 2,
+        "2025": 3,
+        "2026": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 11,
+        "volume_invalid": 11
+      },
+      "sessions": 28,
+      "symbol": "INDUSINDBK",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 6,
+        "2020": 3,
+        "2021": 3,
+        "2022": 1,
+        "2023": 2,
+        "2024": 3,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 4,
+        "price_invalid": 3,
+        "volume_invalid": 2
+      },
+      "sessions": 9,
+      "symbol": "INDUSTOWER",
+      "years": {
+        "2021": 3,
+        "2023": 2,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 5,
+        "volume_invalid": 11
+      },
+      "sessions": 22,
+      "symbol": "INFY",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 4,
+        "2020": 2,
+        "2021": 3,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 818,
+        "price_invalid": 9,
+        "volume_invalid": 12
+      },
+      "sessions": 839,
+      "symbol": "INOXWIND",
+      "years": {
+        "2017": 27,
+        "2018": 185,
+        "2019": 215,
+        "2020": 202,
+        "2021": 81,
+        "2022": 54,
+        "2023": 69,
+        "2024": 4,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 5,
+        "volume_invalid": 14
+      },
+      "sessions": 25,
+      "symbol": "IOC",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 4,
+        "2020": 2,
+        "2021": 2,
+        "2022": 1,
+        "2023": 1,
+        "2024": 2,
+        "2026": 6
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 2,
+        "price_invalid": 3,
+        "volume_invalid": 8
+      },
+      "sessions": 13,
+      "symbol": "IREDA",
+      "years": {
+        "2023": 1,
+        "2024": 11,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 4,
+        "price_invalid": 4
+      },
+      "sessions": 8,
+      "symbol": "IRFC",
+      "years": {
+        "2021": 2,
+        "2022": 2,
+        "2023": 1,
+        "2024": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 12,
+        "volume_invalid": 12
+      },
+      "sessions": 29,
+      "symbol": "ITC",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 6,
+        "2020": 5,
+        "2021": 4,
+        "2024": 2,
+        "2025": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 7,
+        "volume_invalid": 11
+      },
+      "sessions": 23,
+      "symbol": "JINDALSTEL",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 2,
+        "price_invalid": 4,
+        "volume_invalid": 3
+      },
+      "sessions": 9,
+      "symbol": "JIOFIN",
+      "years": {
+        "2023": 3,
+        "2024": 4,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 75,
+        "price_invalid": 11,
+        "volume_invalid": 11
+      },
+      "sessions": 97,
+      "symbol": "JSWENERGY",
+      "years": {
+        "2017": 1,
+        "2018": 10,
+        "2019": 59,
+        "2020": 14,
+        "2021": 4,
+        "2024": 5,
+        "2025": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 6,
+        "volume_invalid": 12
+      },
+      "sessions": 23,
+      "symbol": "JSWSTEEL",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 4,
+        "2020": 2,
+        "2021": 3,
+        "2023": 1,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 4,
+        "volume_invalid": 14
+      },
+      "sessions": 23,
+      "symbol": "JUBLFOOD",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 4,
+        "2020": 2,
+        "2021": 2,
+        "2023": 2,
+        "2024": 3,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 2,
+        "price_invalid": 5,
+        "volume_invalid": 2
+      },
+      "sessions": 9,
+      "symbol": "KALYANKJIL",
+      "years": {
+        "2021": 2,
+        "2023": 3,
+        "2024": 3,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 10,
+        "price_invalid": 7,
+        "volume_invalid": 1
+      },
+      "sessions": 18,
+      "symbol": "KAYNES",
+      "years": {
+        "2022": 2,
+        "2023": 13,
+        "2024": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 104,
+        "price_invalid": 13,
+        "volume_invalid": 9
+      },
+      "sessions": 126,
+      "symbol": "KEI",
+      "years": {
+        "2017": 47,
+        "2018": 28,
+        "2019": 32,
+        "2020": 9,
+        "2021": 5,
+        "2023": 1,
+        "2024": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 12,
+        "price_invalid": 8,
+        "volume_invalid": 4
+      },
+      "sessions": 24,
+      "symbol": "KFINTECH",
+      "years": {
+        "2022": 1,
+        "2023": 17,
+        "2024": 4,
+        "2025": 1,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 8,
+        "volume_invalid": 14
+      },
+      "sessions": 29,
+      "symbol": "KOTAKBANK",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 3,
+        "2022": 1,
+        "2023": 2,
+        "2024": 2,
+        "2025": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 114,
+        "price_invalid": 9,
+        "volume_invalid": 1
+      },
+      "sessions": 124,
+      "symbol": "KPITTECH",
+      "years": {
+        "2019": 60,
+        "2020": 55,
+        "2021": 4,
+        "2023": 1,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 505,
+        "price_invalid": 13,
+        "volume_invalid": 7
+      },
+      "sessions": 525,
+      "symbol": "LAURUSLABS",
+      "years": {
+        "2017": 102,
+        "2018": 200,
+        "2019": 189,
+        "2020": 25,
+        "2021": 4,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 6,
+        "volume_invalid": 9
+      },
+      "sessions": 22,
+      "symbol": "LICHSGFIN",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2022": 1,
+        "2023": 1,
+        "2024": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 1,
+        "price_invalid": 5
+      },
+      "sessions": 6,
+      "symbol": "LICI",
+      "years": {
+        "2022": 1,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 12,
+        "price_invalid": 6,
+        "volume_invalid": 2
+      },
+      "sessions": 20,
+      "symbol": "LODHA",
+      "years": {
+        "2021": 5,
+        "2022": 4,
+        "2023": 5,
+        "2024": 3,
+        "2025": 1,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 4,
+        "price_invalid": 9,
+        "volume_invalid": 12
+      },
+      "sessions": 25,
+      "symbol": "LT",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 4,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 1,
+        "price_invalid": 1
+      },
+      "sessions": 2,
+      "symbol": "LTF",
+      "years": {
+        "2024": 1,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 7,
+        "volume_invalid": 11
+      },
+      "sessions": 24,
+      "symbol": "LUPIN",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 4,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 6,
+        "volume_invalid": 14
+      },
+      "sessions": 27,
+      "symbol": "M&M",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 3,
+        "2022": 1,
+        "2023": 1,
+        "2024": 3,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 414,
+        "price_invalid": 8,
+        "volume_invalid": 9
+      },
+      "sessions": 431,
+      "symbol": "MAHABANK",
+      "years": {
+        "2017": 184,
+        "2018": 103,
+        "2019": 107,
+        "2020": 29,
+        "2021": 3,
+        "2023": 2,
+        "2024": 2,
+        "2025": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 4,
+        "price_invalid": 8,
+        "volume_invalid": 10
+      },
+      "sessions": 22,
+      "symbol": "MANAPPURAM",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 4,
+        "2020": 3,
+        "2021": 3,
+        "2022": 1,
+        "2023": 1,
+        "2024": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 2,
+        "price_invalid": 1,
+        "volume_invalid": 5
+      },
+      "sessions": 8,
+      "symbol": "MANKIND",
+      "years": {
+        "2023": 2,
+        "2024": 4,
+        "2025": 1,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 8,
+        "volume_invalid": 11
+      },
+      "sessions": 24,
+      "symbol": "MARICO",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 6,
+        "volume_invalid": 11
+      },
+      "sessions": 23,
+      "symbol": "MARUTI",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 4,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 16,
+        "price_invalid": 6,
+        "volume_invalid": 4
+      },
+      "sessions": 26,
+      "symbol": "MAXHEALTH",
+      "years": {
+        "2020": 14,
+        "2021": 3,
+        "2023": 3,
+        "2024": 3,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 10,
+        "price_invalid": 6
+      },
+      "sessions": 16,
+      "symbol": "MAZDOCK",
+      "years": {
+        "2020": 2,
+        "2021": 4,
+        "2022": 6,
+        "2023": 2,
+        "2024": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 11,
+        "price_invalid": 11,
+        "volume_invalid": 10
+      },
+      "sessions": 32,
+      "symbol": "MCX",
+      "years": {
+        "2017": 4,
+        "2018": 6,
+        "2019": 7,
+        "2020": 5,
+        "2021": 3,
+        "2022": 1,
+        "2023": 3,
+        "2024": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 20,
+        "price_invalid": 10,
+        "volume_invalid": 12
+      },
+      "sessions": 42,
+      "symbol": "MFSL",
+      "years": {
+        "2017": 8,
+        "2018": 8,
+        "2019": 9,
+        "2020": 3,
+        "2021": 4,
+        "2023": 4,
+        "2024": 4,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 2,
+        "price_invalid": 3,
+        "volume_invalid": 80
+      },
+      "sessions": 85,
+      "symbol": "MOTHERSON",
+      "years": {
+        "2022": 79,
+        "2023": 1,
+        "2024": 2,
+        "2025": 1,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 301,
+        "price_invalid": 11,
+        "volume_invalid": 13
+      },
+      "sessions": 325,
+      "symbol": "MOTILALOFS",
+      "years": {
+        "2017": 51,
+        "2018": 41,
+        "2019": 116,
+        "2020": 72,
+        "2021": 8,
+        "2022": 22,
+        "2023": 11,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 140,
+        "price_invalid": 14,
+        "volume_invalid": 11
+      },
+      "sessions": 165,
+      "symbol": "MPHASIS",
+      "years": {
+        "2017": 104,
+        "2018": 11,
+        "2019": 28,
+        "2020": 8,
+        "2021": 4,
+        "2022": 1,
+        "2023": 2,
+        "2024": 5,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 10,
+        "volume_invalid": 12
+      },
+      "sessions": 29,
+      "symbol": "MUTHOOTFIN",
+      "years": {
+        "2017": 3,
+        "2018": 6,
+        "2019": 5,
+        "2020": 5,
+        "2021": 4,
+        "2024": 5,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 9,
+        "volume_invalid": 1
+      },
+      "sessions": 16,
+      "symbol": "NAM-INDIA",
+      "years": {
+        "2020": 3,
+        "2021": 3,
+        "2023": 6,
+        "2024": 3,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 14,
+        "volume_invalid": 10
+      },
+      "sessions": 29,
+      "symbol": "NATIONALUM",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 4,
+        "2022": 1,
+        "2023": 2,
+        "2024": 3,
+        "2025": 1,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 268,
+        "price_invalid": 10,
+        "volume_invalid": 11
+      },
+      "sessions": 289,
+      "symbol": "NAUKRI",
+      "years": {
+        "2017": 175,
+        "2018": 91,
+        "2019": 10,
+        "2020": 4,
+        "2021": 3,
+        "2022": 1,
+        "2023": 1,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 7,
+        "volume_invalid": 10
+      },
+      "sessions": 22,
+      "symbol": "NBCC",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2023": 1,
+        "2024": 2,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 47,
+        "price_invalid": 6,
+        "volume_invalid": 12
+      },
+      "sessions": 65,
+      "symbol": "NESTLEIND",
+      "years": {
+        "2017": 35,
+        "2018": 14,
+        "2019": 4,
+        "2020": 2,
+        "2021": 3,
+        "2024": 2,
+        "2025": 1,
+        "2026": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 10,
+        "volume_invalid": 11
+      },
+      "sessions": 28,
+      "symbol": "NHPC",
+      "years": {
+        "2017": 1,
+        "2018": 7,
+        "2019": 6,
+        "2020": 4,
+        "2021": 3,
+        "2023": 1,
+        "2024": 2,
+        "2026": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "price_invalid": 9,
+        "usable_range_removed:volume": 1413,
+        "volume_invalid": 997
+      },
+      "sessions": 2419,
+      "symbol": "NMDC",
+      "years": {
+        "2017": 247,
+        "2018": 245,
+        "2019": 244,
+        "2020": 251,
+        "2021": 247,
+        "2022": 247,
+        "2023": 245,
+        "2024": 248,
+        "2025": 248,
+        "2026": 197
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 9,
+        "volume_invalid": 11
+      },
+      "sessions": 26,
+      "symbol": "NTPC",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 5,
+        "2021": 3,
+        "2022": 1,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 2,
+        "price_invalid": 6,
+        "volume_invalid": 2
+      },
+      "sessions": 10,
+      "symbol": "NYKAA",
+      "years": {
+        "2021": 1,
+        "2023": 1,
+        "2024": 5,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 120,
+        "price_invalid": 9,
+        "volume_invalid": 17
+      },
+      "sessions": 146,
+      "symbol": "OBEROIRLTY",
+      "years": {
+        "2017": 81,
+        "2018": 17,
+        "2019": 19,
+        "2020": 13,
+        "2021": 6,
+        "2023": 6,
+        "2024": 3,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 356,
+        "price_invalid": 10,
+        "volume_invalid": 12
+      },
+      "sessions": 378,
+      "symbol": "OFSS",
+      "years": {
+        "2017": 137,
+        "2018": 75,
+        "2019": 106,
+        "2020": 47,
+        "2021": 6,
+        "2023": 3,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 9,
+        "price_invalid": 9,
+        "volume_invalid": 11
+      },
+      "sessions": 29,
+      "symbol": "OIL",
+      "years": {
+        "2017": 3,
+        "2018": 7,
+        "2019": 6,
+        "2020": 4,
+        "2021": 3,
+        "2023": 2,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 3,
+        "price_invalid": 6,
+        "volume_invalid": 13
+      },
+      "sessions": 22,
+      "symbol": "ONGC",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 4,
+        "2020": 2,
+        "2021": 2,
+        "2024": 2,
+        "2025": 1,
+        "2026": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 100,
+        "price_invalid": 10,
+        "volume_invalid": 12
+      },
+      "sessions": 122,
+      "symbol": "PAGEIND",
+      "years": {
+        "2017": 82,
+        "2018": 15,
+        "2019": 8,
+        "2020": 5,
+        "2021": 4,
+        "2023": 1,
+        "2024": 3,
+        "2025": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 3,
+        "price_invalid": 149,
+        "volume_invalid": 5
+      },
+      "sessions": 157,
+      "symbol": "PATANJALI",
+      "years": {
+        "2023": 148,
+        "2024": 6,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 2,
+        "price_invalid": 3,
+        "volume_invalid": 11
+      },
+      "sessions": 16,
+      "symbol": "PAYTM",
+      "years": {
+        "2021": 1,
+        "2023": 1,
+        "2024": 12,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 161,
+        "price_invalid": 7,
+        "volume_invalid": 10
+      },
+      "sessions": 178,
+      "symbol": "PERSISTENT",
+      "years": {
+        "2017": 71,
+        "2018": 14,
+        "2019": 60,
+        "2020": 27,
+        "2021": 3,
+        "2024": 2,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 6,
+        "volume_invalid": 10
+      },
+      "sessions": 21,
+      "symbol": "PETRONET",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 4,
+        "2020": 2,
+        "2021": 2,
+        "2024": 2,
+        "2025": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 9,
+        "volume_invalid": 10
+      },
+      "sessions": 25,
+      "symbol": "PFC",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 3,
+        "2022": 1,
+        "2024": 3,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 1389,
+        "price_invalid": 64,
+        "volume_invalid": 9
+      },
+      "sessions": 1462,
+      "symbol": "PGEL",
+      "years": {
+        "2017": 222,
+        "2018": 230,
+        "2019": 222,
+        "2020": 251,
+        "2021": 203,
+        "2022": 183,
+        "2023": 126,
+        "2024": 24,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 544,
+        "price_invalid": 13,
+        "volume_invalid": 13
+      },
+      "sessions": 570,
+      "symbol": "PHOENIXLTD",
+      "years": {
+        "2017": 193,
+        "2018": 123,
+        "2019": 160,
+        "2020": 60,
+        "2021": 21,
+        "2022": 3,
+        "2023": 5,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 4,
+        "price_invalid": 6,
+        "volume_invalid": 12
+      },
+      "sessions": 22,
+      "symbol": "PIDILITIND",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 4,
+        "2020": 2,
+        "2021": 2,
+        "2022": 1,
+        "2024": 2,
+        "2026": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 218,
+        "price_invalid": 9,
+        "volume_invalid": 12
+      },
+      "sessions": 239,
+      "symbol": "PIIND",
+      "years": {
+        "2017": 53,
+        "2018": 115,
+        "2019": 54,
+        "2020": 6,
+        "2021": 3,
+        "2023": 2,
+        "2024": 3,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 9,
+        "volume_invalid": 11
+      },
+      "sessions": 25,
+      "symbol": "PNB",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2022": 1,
+        "2023": 2,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 101,
+        "price_invalid": 8,
+        "volume_invalid": 13
+      },
+      "sessions": 122,
+      "symbol": "PNBHOUSING",
+      "years": {
+        "2017": 13,
+        "2018": 27,
+        "2019": 27,
+        "2020": 6,
+        "2021": 22,
+        "2022": 18,
+        "2023": 3,
+        "2024": 6
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 2,
+        "price_invalid": 5,
+        "volume_invalid": 2
+      },
+      "sessions": 9,
+      "symbol": "POLICYBZR",
+      "years": {
+        "2021": 1,
+        "2023": 2,
+        "2024": 5,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 16,
+        "price_invalid": 14,
+        "volume_invalid": 6
+      },
+      "sessions": 36,
+      "symbol": "POLYCAB",
+      "years": {
+        "2019": 15,
+        "2020": 5,
+        "2021": 3,
+        "2023": 2,
+        "2024": 5,
+        "2025": 2,
+        "2026": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 4,
+        "price_invalid": 5,
+        "volume_invalid": 12
+      },
+      "sessions": 21,
+      "symbol": "POWERGRID",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 4,
+        "2020": 2,
+        "2021": 2,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 347,
+        "price_invalid": 9,
+        "volume_invalid": 8
+      },
+      "sessions": 364,
+      "symbol": "POWERINDIA",
+      "years": {
+        "2020": 155,
+        "2021": 88,
+        "2022": 20,
+        "2023": 86,
+        "2024": 13,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "price_invalid": 2,
+        "volume_invalid": 2
+      },
+      "sessions": 4,
+      "symbol": "PREMIERENE",
+      "years": {
+        "2024": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 254,
+        "price_invalid": 11,
+        "volume_invalid": 10
+      },
+      "sessions": 275,
+      "symbol": "PRESTIGE",
+      "years": {
+        "2017": 69,
+        "2018": 107,
+        "2019": 73,
+        "2020": 7,
+        "2021": 4,
+        "2022": 6,
+        "2023": 4,
+        "2024": 3,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 54,
+        "price_invalid": 10,
+        "volume_invalid": 10
+      },
+      "sessions": 74,
+      "symbol": "RADICO",
+      "years": {
+        "2017": 47,
+        "2018": 7,
+        "2019": 5,
+        "2020": 4,
+        "2021": 5,
+        "2023": 2,
+        "2024": 3,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 8,
+        "volume_invalid": 10
+      },
+      "sessions": 24,
+      "symbol": "RBLBANK",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 4,
+        "2023": 1,
+        "2024": 2,
+        "2025": 1,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 56,
+        "volume_invalid": 13
+      },
+      "sessions": 74,
+      "symbol": "RECLTD",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 16,
+        "2021": 24,
+        "2022": 10,
+        "2023": 5,
+        "2024": 2,
+        "2025": 1,
+        "2026": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 10,
+        "volume_invalid": 12
+      },
+      "sessions": 29,
+      "symbol": "RELIANCE",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 4,
+        "2022": 2,
+        "2023": 1,
+        "2024": 2,
+        "2025": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 8,
+        "volume_invalid": 1
+      },
+      "sessions": 14,
+      "symbol": "RVNL",
+      "years": {
+        "2019": 3,
+        "2020": 4,
+        "2021": 3,
+        "2023": 2,
+        "2024": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "price_invalid": 1,
+        "volume_invalid": 4
+      },
+      "sessions": 5,
+      "symbol": "SAGILITY",
+      "years": {
+        "2024": 1,
+        "2025": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 10,
+        "volume_invalid": 11
+      },
+      "sessions": 27,
+      "symbol": "SAIL",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 4,
+        "2022": 2,
+        "2023": 1,
+        "2024": 3,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 7,
+        "volume_invalid": 3
+      },
+      "sessions": 15,
+      "symbol": "SBICARD",
+      "years": {
+        "2020": 3,
+        "2021": 4,
+        "2022": 1,
+        "2024": 3,
+        "2025": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 14,
+        "price_invalid": 9,
+        "volume_invalid": 13
+      },
+      "sessions": 36,
+      "symbol": "SBILIFE",
+      "years": {
+        "2017": 1,
+        "2018": 9,
+        "2019": 10,
+        "2020": 3,
+        "2021": 3,
+        "2022": 1,
+        "2023": 3,
+        "2024": 2,
+        "2026": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 10,
+        "volume_invalid": 9
+      },
+      "sessions": 25,
+      "symbol": "SBIN",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2023": 2,
+        "2024": 2,
+        "2025": 1,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 105,
+        "price_invalid": 12,
+        "volume_invalid": 11
+      },
+      "sessions": 128,
+      "symbol": "SHREECEM",
+      "years": {
+        "2017": 55,
+        "2018": 25,
+        "2019": 20,
+        "2020": 6,
+        "2021": 4,
+        "2022": 2,
+        "2023": 5,
+        "2024": 4,
+        "2025": 2,
+        "2026": 5
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 2,
+        "price_invalid": 3,
+        "volume_invalid": 2
+      },
+      "sessions": 7,
+      "symbol": "SHRIRAMFIN",
+      "years": {
+        "2023": 2,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 10,
+        "volume_invalid": 11
+      },
+      "sessions": 28,
+      "symbol": "SIEMENS",
+      "years": {
+        "2017": 2,
+        "2018": 7,
+        "2019": 5,
+        "2020": 5,
+        "2021": 3,
+        "2024": 3,
+        "2025": 1,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 1047,
+        "price_invalid": 26,
+        "volume_invalid": 2
+      },
+      "sessions": 1075,
+      "symbol": "SOLARINDS",
+      "years": {
+        "2017": 229,
+        "2018": 239,
+        "2019": 242,
+        "2020": 220,
+        "2021": 102,
+        "2022": 34,
+        "2023": 5,
+        "2024": 3,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 2,
+        "price_invalid": 5,
+        "volume_invalid": 3
+      },
+      "sessions": 10,
+      "symbol": "SONACOMS",
+      "years": {
+        "2021": 2,
+        "2022": 1,
+        "2023": 1,
+        "2024": 4,
+        "2025": 1,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 40,
+        "price_invalid": 3,
+        "volume_invalid": 11
+      },
+      "sessions": 54,
+      "symbol": "SRF",
+      "years": {
+        "2017": 24,
+        "2018": 16,
+        "2019": 4,
+        "2020": 2,
+        "2021": 3,
+        "2022": 1,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 10,
+        "volume_invalid": 11
+      },
+      "sessions": 26,
+      "symbol": "SUNPHARMA",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2022": 1,
+        "2023": 1,
+        "2024": 2,
+        "2026": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 476,
+        "price_invalid": 11,
+        "volume_invalid": 10
+      },
+      "sessions": 497,
+      "symbol": "SUPREMEIND",
+      "years": {
+        "2017": 111,
+        "2018": 152,
+        "2019": 157,
+        "2020": 49,
+        "2021": 5,
+        "2022": 14,
+        "2023": 4,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 8,
+        "volume_invalid": 11
+      },
+      "sessions": 26,
+      "symbol": "SUZLON",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 4,
+        "2020": 4,
+        "2021": 3,
+        "2022": 1,
+        "2023": 2,
+        "2024": 3,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "price_invalid": 3,
+        "volume_invalid": 1
+      },
+      "sessions": 4,
+      "symbol": "SWIGGY",
+      "years": {
+        "2024": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 3,
+        "volume_invalid": 4
+      },
+      "sessions": 13,
+      "symbol": "TATACONSUM",
+      "years": {
+        "2020": 4,
+        "2021": 3,
+        "2022": 1,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 11,
+        "volume_invalid": 10
+      },
+      "sessions": 28,
+      "symbol": "TATAELXSI",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 5,
+        "2021": 3,
+        "2022": 1,
+        "2023": 1,
+        "2024": 3,
+        "2025": 1,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 9,
+        "volume_invalid": 9
+      },
+      "sessions": 24,
+      "symbol": "TATAPOWER",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2022": 2,
+        "2023": 1,
+        "2024": 2,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 58,
+        "volume_invalid": 12
+      },
+      "sessions": 75,
+      "symbol": "TATASTEEL",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 5,
+        "2020": 8,
+        "2021": 28,
+        "2022": 20,
+        "2023": 1,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 9,
+        "volume_invalid": 12
+      },
+      "sessions": 28,
+      "symbol": "TCS",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2022": 1,
+        "2023": 2,
+        "2024": 3,
+        "2026": 4
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 7,
+        "volume_invalid": 11
+      },
+      "sessions": 25,
+      "symbol": "TECHM",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 3,
+        "2022": 1,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 529,
+        "price_invalid": 18,
+        "volume_invalid": 12
+      },
+      "sessions": 559,
+      "symbol": "TIINDIA",
+      "years": {
+        "2017": 35,
+        "2018": 221,
+        "2019": 183,
+        "2020": 86,
+        "2021": 17,
+        "2022": 6,
+        "2023": 1,
+        "2024": 5,
+        "2025": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 6,
+        "volume_invalid": 14
+      },
+      "sessions": 27,
+      "symbol": "TITAN",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 3,
+        "2022": 1,
+        "2024": 3,
+        "2025": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "price_invalid": 1
+      },
+      "sessions": 1,
+      "symbol": "TMPV",
+      "years": {
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 53,
+        "price_invalid": 5,
+        "volume_invalid": 5
+      },
+      "sessions": 63,
+      "symbol": "TORNTPHARM",
+      "years": {
+        "2017": 19,
+        "2018": 23,
+        "2019": 4,
+        "2020": 4,
+        "2021": 3,
+        "2022": 1,
+        "2023": 3,
+        "2024": 3,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 358,
+        "price_invalid": 6,
+        "volume_invalid": 11
+      },
+      "sessions": 375,
+      "symbol": "TRENT",
+      "years": {
+        "2017": 119,
+        "2018": 159,
+        "2019": 86,
+        "2020": 4,
+        "2021": 3,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 6,
+        "volume_invalid": 12
+      },
+      "sessions": 23,
+      "symbol": "TVSMOTOR",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 4,
+        "price_invalid": 11,
+        "volume_invalid": 11
+      },
+      "sessions": 26,
+      "symbol": "ULTRACEMCO",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 4,
+        "2023": 2,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 10,
+        "volume_invalid": 10
+      },
+      "sessions": 26,
+      "symbol": "UNIONBANK",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 4,
+        "2023": 1,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "price_invalid": 1,
+        "volume_invalid": 2
+      },
+      "sessions": 3,
+      "symbol": "UNITDSPR",
+      "years": {
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 2,
+        "price_invalid": 2,
+        "volume_invalid": 1
+      },
+      "sessions": 5,
+      "symbol": "UNOMINDA",
+      "years": {
+        "2023": 2,
+        "2024": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 5,
+        "price_invalid": 22,
+        "volume_invalid": 10
+      },
+      "sessions": 37,
+      "symbol": "UPL",
+      "years": {
+        "2017": 9,
+        "2018": 10,
+        "2019": 6,
+        "2020": 3,
+        "2021": 3,
+        "2022": 1,
+        "2023": 1,
+        "2024": 2,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "price_invalid": 41,
+        "usable_range_removed:volume": 1613,
+        "volume_invalid": 765
+      },
+      "sessions": 2419,
+      "symbol": "VBL",
+      "years": {
+        "2017": 247,
+        "2018": 245,
+        "2019": 244,
+        "2020": 251,
+        "2021": 247,
+        "2022": 247,
+        "2023": 245,
+        "2024": 248,
+        "2025": 248,
+        "2026": 197
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 7,
+        "volume_invalid": 10
+      },
+      "sessions": 24,
+      "symbol": "VEDL",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 3,
+        "2022": 1,
+        "2024": 2,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "price_invalid": 2,
+        "volume_invalid": 1
+      },
+      "sessions": 3,
+      "symbol": "VMM",
+      "years": {
+        "2024": 1,
+        "2025": 1,
+        "2026": 1
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 7,
+        "volume_invalid": 11
+      },
+      "sessions": 25,
+      "symbol": "VOLTAS",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 3,
+        "2021": 4,
+        "2022": 1,
+        "2024": 3,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "price_invalid": 2,
+        "volume_invalid": 1
+      },
+      "sessions": 3,
+      "symbol": "WAAREEENER",
+      "years": {
+        "2024": 1,
+        "2026": 2
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 7,
+        "price_invalid": 10,
+        "volume_invalid": 11
+      },
+      "sessions": 28,
+      "symbol": "WIPRO",
+      "years": {
+        "2017": 2,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 4,
+        "2022": 1,
+        "2024": 3,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 6,
+        "price_invalid": 9,
+        "volume_invalid": 13
+      },
+      "sessions": 28,
+      "symbol": "YESBANK",
+      "years": {
+        "2017": 1,
+        "2018": 6,
+        "2019": 5,
+        "2020": 4,
+        "2021": 3,
+        "2022": 1,
+        "2024": 4,
+        "2025": 1,
+        "2026": 3
+      }
+    },
+    {
+      "class": "session",
+      "reasons": {
+        "DATA-MISSING-BIN": 1,
+        "price_invalid": 1,
+        "volume_invalid": 3
+      },
+      "sessions": 5,
+      "symbol": "ZYDUSLIFE",
+      "years": {
+        "2023": 1,
+        "2024": 3,
+        "2026": 1
+      }
+    }
+  ],
+  "fingerprints": {
+    "cost": "f19f715662d153cff54038e272a0b11cde4df4cf8c8dbe7acfeb308997742cb2",
+    "dataset": "d1642641de1169b00008f2c4c95cf8a756167a36953457ac02dae07cba36c0ef",
+    "execution": "2ea945e4de93c38e38d3f47603e1d5f305a4f4d4e2f2d1fb678b38b2455ba6fc",
+    "params": "7be96713926d0b3e474f526879be414ba7ed9b242597c2a9f9822543f276ecca",
+    "profile": "82ea4452cf52cddd33a3d10ce8ef137b92be7be1a4e7df554074b9e4525a835b",
+    "rules": "d37a38808ab2c103fecc5a5e67174a5b4604167197e237b163d1fff6c51bc0e5",
+    "strategy": "95a55a16f78ff5c37ebb292e0b37ec52b5fb6c05caa530764f8fee13bbf92346",
+    "universe": "92e0e37b54ea87560e3aa2c50584fd895f0a069461bfa37003e5b2e13c7646d4"
+  },
+  "idea_id": "IDEA-034",
+  "invalid_reason": [],
+  "missing_capabilities": [
+    "Point-in-time universe membership and per-date eligibility",
+    "random.monte_carlo not captured until engine step 5"
+  ],
+  "parent_run_id": "2026-10-28-multi-day-balance-breakout-v1",
+  "period": {
+    "end": "2026-10-19",
+    "start": "2017-01-02"
+  },
+  "preflight": {
+    "calendar_check": {
+      "bars_outside_covered": [],
+      "calendar_only": [],
+      "compatible": true,
+      "current_version": "b421112497193bce867b4c32633aa1f79b1a5cd5ae3d72ef863368b3d138468b",
+      "dataset_only": [],
+      "out_of_scope_sessions": [
+        "2016-10-30",
+        "2017-10-19",
+        "2018-11-07",
+        "2019-10-27",
+        "2020-11-14",
+        "2021-11-04",
+        "2022-10-24",
+        "2023-11-12",
+        "2024-11-01",
+        "2025-10-21",
+        "2026-11-08"
+      ],
+      "range": [
+        "2017-01-01",
+        "2026-10-19"
+      ],
+      "sessions_without_valid_bars": [
+        "2017-07-10"
+      ]
+    },
+    "contract": {
+      "complete_bins": [
+        "09:15",
+        "15:10"
+      ],
+      "field_families": [
+        "price",
+        "volume"
+      ],
+      "frequency": "5m",
+      "history_requirements": {
+        "execution.eligibility_min_prior_sessions": 60,
+        "execution.warmup_bars": 14,
+        "indicators.ATR.period": 14,
+        "parameters.min_session_bars": 60
+      },
+      "history_sessions": 60,
+      "loader_min_sessions": 0,
+      "min_n_minutes": 1,
+      "notes": [],
+      "session_exclusion_allowed": true,
+      "universe_name": "nse_fno_current",
+      "universe_source": "signal_engine.backtest.data.NSE_FNO: today's NSE F&O list (survivorship bias; not point-in-time membership)",
+      "universe_symbols": [
+        "360ONE",
+        "ABB",
+        "ABCAPITAL",
+        "ADANIENSOL",
+        "ADANIENT",
+        "ADANIGREEN",
+        "ADANIPORTS",
+        "ADANIPOWER",
+        "ALKEM",
+        "AMBER",
+        "AMBUJACEM",
+        "ANGELONE",
+        "APLAPOLLO",
+        "APOLLOHOSP",
+        "ASHOKLEY",
+        "ASIANPAINT",
+        "ASTRAL",
+        "ATHERENERG",
+        "AUBANK",
+        "AUROPHARMA",
+        "AXISBANK",
+        "BAJAJ-AUTO",
+        "BAJAJFINSV",
+        "BAJAJHLDNG",
+        "BAJFINANCE",
+        "BANDHANBNK",
+        "BANKBARODA",
+        "BANKINDIA",
+        "BDL",
+        "BEL",
+        "BHARATFORG",
+        "BHARTIARTL",
+        "BHEL",
+        "BIOCON",
+        "BLUESTARCO",
+        "BOSCHLTD",
+        "BPCL",
+        "BRITANNIA",
+        "BSE",
+        "CAMS",
+        "CANBK",
+        "CDSL",
+        "CGPOWER",
+        "CHOLAFIN",
+        "CIPLA",
+        "COALINDIA",
+        "COCHINSHIP",
+        "COFORGE",
+        "COLPAL",
+        "CONCOR",
+        "CROMPTON",
+        "CUMMINSIND",
+        "DABUR",
+        "DELHIVERY",
+        "DIVISLAB",
+        "DIXON",
+        "DLF",
+        "DMART",
+        "DRREDDY",
+        "EICHERMOT",
+        "ETERNAL",
+        "FEDERALBNK",
+        "FORCEMOT",
+        "FORTIS",
+        "GAIL",
+        "GLENMARK",
+        "GMRAIRPORT",
+        "GODFRYPHLP",
+        "GODREJCP",
+        "GODREJPROP",
+        "GRASIM",
+        "GVT&D",
+        "HAL",
+        "HAVELLS",
+        "HCLTECH",
+        "HDFCAMC",
+        "HDFCBANK",
+        "HDFCLIFE",
+        "HEROMOTOCO",
+        "HINDALCO",
+        "HINDPETRO",
+        "HINDUNILVR",
+        "HINDZINC",
+        "HYUNDAI",
+        "ICICIBANK",
+        "ICICIGI",
+        "ICICIPRULI",
+        "IDEA",
+        "IDFCFIRSTB",
+        "IEX",
+        "INDHOTEL",
+        "INDIANB",
+        "INDIGO",
+        "INDUSINDBK",
+        "INDUSTOWER",
+        "INFY",
+        "INOXWIND",
+        "IOC",
+        "IREDA",
+        "IRFC",
+        "ITC",
+        "JINDALSTEL",
+        "JIOFIN",
+        "JSWENERGY",
+        "JSWSTEEL",
+        "JUBLFOOD",
+        "KALYANKJIL",
+        "KAYNES",
+        "KEI",
+        "KFINTECH",
+        "KOTAKBANK",
+        "KPITTECH",
+        "LAURUSLABS",
+        "LICHSGFIN",
+        "LICI",
+        "LODHA",
+        "LT",
+        "LTF",
+        "LTM",
+        "LUPIN",
+        "M&M",
+        "MAHABANK",
+        "MANAPPURAM",
+        "MANKIND",
+        "MARICO",
+        "MARUTI",
+        "MAXHEALTH",
+        "MAZDOCK",
+        "MCX",
+        "MFSL",
+        "MOTHERSON",
+        "MOTILALOFS",
+        "MPHASIS",
+        "MUTHOOTFIN",
+        "NAM-INDIA",
+        "NATIONALUM",
+        "NAUKRI",
+        "NBCC",
+        "NESTLEIND",
+        "NHPC",
+        "NIFTYFPI",
+        "NMDC",
+        "NTPC",
+        "NYKAA",
+        "OBEROIRLTY",
+        "OFSS",
+        "OIL",
+        "ONGC",
+        "PAGEIND",
+        "PATANJALI",
+        "PAYTM",
+        "PERSISTENT",
+        "PETRONET",
+        "PFC",
+        "PGEL",
+        "PHOENIXLTD",
+        "PIDILITIND",
+        "PIIND",
+        "PNB",
+        "PNBHOUSING",
+        "POLICYBZR",
+        "POLYCAB",
+        "POWERGRID",
+        "POWERINDIA",
+        "PREMIERENE",
+        "PRESTIGE",
+        "RADICO",
+        "RBLBANK",
+        "RECLTD",
+        "RELIANCE",
+        "RVNL",
+        "SAGILITY",
+        "SAIL",
+        "SBICARD",
+        "SBILIFE",
+        "SBIN",
+        "SHREECEM",
+        "SHRIRAMFIN",
+        "SIEMENS",
+        "SOLARINDS",
+        "SONACOMS",
+        "SRF",
+        "SUNPHARMA",
+        "SUPREMEIND",
+        "SUZLON",
+        "SWIGGY",
+        "TATACONSUM",
+        "TATAELXSI",
+        "TATAPOWER",
+        "TATASTEEL",
+        "TCS",
+        "TECHM",
+        "TIINDIA",
+        "TITAN",
+        "TMPV",
+        "TORNTPHARM",
+        "TRENT",
+        "TVSMOTOR",
+        "ULTRACEMCO",
+        "UNIONBANK",
+        "UNITDSPR",
+        "UNOMINDA",
+        "UPL",
+        "VBL",
+        "VEDL",
+        "VMM",
+        "VOLTAS",
+        "WAAREEENER",
+        "WIPRO",
+        "YESBANK",
+        "ZYDUSLIFE"
+      ],
+      "universe_version": "f70299a79332b00b7e920adf0a6428bcef75ed8fed3b4cf3735fd5eb9c7c8d1f"
+    },
+    "end": "2026-10-19",
+    "reasons": [],
+    "sha256": "2b46e0e7d6eb9e258508090b618d027b4bb340c5a8644e34a98d7319eeedc7b8",
+    "state": "READY_WITH_WARNINGS",
+    "universe": {
+      "eligible": [
+        "360ONE",
+        "ABB",
+        "ABCAPITAL",
+        "ADANIENSOL",
+        "ADANIENT",
+        "ADANIGREEN",
+        "ADANIPORTS",
+        "ADANIPOWER",
+        "ALKEM",
+        "AMBER",
+        "AMBUJACEM",
+        "ANGELONE",
+        "APLAPOLLO",
+        "APOLLOHOSP",
+        "ASHOKLEY",
+        "ASIANPAINT",
+        "ASTRAL",
+        "ATHERENERG",
+        "AUBANK",
+        "AUROPHARMA",
+        "AXISBANK",
+        "BAJAJ-AUTO",
+        "BAJAJFINSV",
+        "BAJAJHLDNG",
+        "BAJFINANCE",
+        "BANDHANBNK",
+        "BANKBARODA",
+        "BANKINDIA",
+        "BEL",
+        "BHARATFORG",
+        "BHARTIARTL",
+        "BHEL",
+        "BIOCON",
+        "BLUESTARCO",
+        "BOSCHLTD",
+        "BPCL",
+        "BRITANNIA",
+        "CAMS",
+        "CANBK",
+        "CDSL",
+        "CGPOWER",
+        "CHOLAFIN",
+        "CIPLA",
+        "COALINDIA",
+        "COCHINSHIP",
+        "COFORGE",
+        "COLPAL",
+        "CONCOR",
+        "CROMPTON",
+        "CUMMINSIND",
+        "DABUR",
+        "DELHIVERY",
+        "DIVISLAB",
+        "DIXON",
+        "DLF",
+        "DMART",
+        "DRREDDY",
+        "EICHERMOT",
+        "ETERNAL",
+        "FEDERALBNK",
+        "FORCEMOT",
+        "FORTIS",
+        "GAIL",
+        "GLENMARK",
+        "GMRAIRPORT",
+        "GODFRYPHLP",
+        "GODREJCP",
+        "GODREJPROP",
+        "GRASIM",
+        "GVT&D",
+        "HAL",
+        "HAVELLS",
+        "HCLTECH",
+        "HDFCAMC",
+        "HDFCBANK",
+        "HDFCLIFE",
+        "HEROMOTOCO",
+        "HINDALCO",
+        "HINDPETRO",
+        "HINDUNILVR",
+        "HINDZINC",
+        "HYUNDAI",
+        "ICICIBANK",
+        "ICICIGI",
+        "ICICIPRULI",
+        "IDEA",
+        "IDFCFIRSTB",
+        "IEX",
+        "INDHOTEL",
+        "INDIANB",
+        "INDIGO",
+        "INDUSINDBK",
+        "INDUSTOWER",
+        "INFY",
+        "INOXWIND",
+        "IOC",
+        "IREDA",
+        "IRFC",
+        "ITC",
+        "JINDALSTEL",
+        "JIOFIN",
+        "JSWENERGY",
+        "JSWSTEEL",
+        "JUBLFOOD",
+        "KALYANKJIL",
+        "KAYNES",
+        "KEI",
+        "KFINTECH",
+        "KOTAKBANK",
+        "KPITTECH",
+        "LAURUSLABS",
+        "LICHSGFIN",
+        "LICI",
+        "LODHA",
+        "LT",
+        "LTF",
+        "LTM",
+        "LUPIN",
+        "M&M",
+        "MAHABANK",
+        "MANAPPURAM",
+        "MANKIND",
+        "MARICO",
+        "MARUTI",
+        "MAXHEALTH",
+        "MAZDOCK",
+        "MCX",
+        "MFSL",
+        "MOTHERSON",
+        "MOTILALOFS",
+        "MPHASIS",
+        "MUTHOOTFIN",
+        "NAM-INDIA",
+        "NATIONALUM",
+        "NAUKRI",
+        "NBCC",
+        "NESTLEIND",
+        "NHPC",
+        "NTPC",
+        "NYKAA",
+        "OBEROIRLTY",
+        "OFSS",
+        "OIL",
+        "ONGC",
+        "PAGEIND",
+        "PATANJALI",
+        "PAYTM",
+        "PERSISTENT",
+        "PETRONET",
+        "PFC",
+        "PGEL",
+        "PHOENIXLTD",
+        "PIDILITIND",
+        "PIIND",
+        "PNB",
+        "PNBHOUSING",
+        "POLICYBZR",
+        "POLYCAB",
+        "POWERGRID",
+        "POWERINDIA",
+        "PREMIERENE",
+        "PRESTIGE",
+        "RADICO",
+        "RBLBANK",
+        "RECLTD",
+        "RELIANCE",
+        "RVNL",
+        "SAGILITY",
+        "SAIL",
+        "SBICARD",
+        "SBILIFE",
+        "SBIN",
+        "SHREECEM",
+        "SHRIRAMFIN",
+        "SIEMENS",
+        "SOLARINDS",
+        "SONACOMS",
+        "SRF",
+        "SUNPHARMA",
+        "SUPREMEIND",
+        "SUZLON",
+        "SWIGGY",
+        "TATACONSUM",
+        "TATAELXSI",
+        "TATAPOWER",
+        "TATASTEEL",
+        "TCS",
+        "TECHM",
+        "TIINDIA",
+        "TITAN",
+        "TMPV",
+        "TORNTPHARM",
+        "TRENT",
+        "TVSMOTOR",
+        "ULTRACEMCO",
+        "UNIONBANK",
+        "UNITDSPR",
+        "UNOMINDA",
+        "UPL",
+        "VEDL",
+        "VMM",
+        "VOLTAS",
+        "WAAREEENER",
+        "WIPRO",
+        "YESBANK",
+        "ZYDUSLIFE"
+      ],
+      "field_families": [
+        "price",
+        "volume"
+      ],
+      "name": "nse_fno_current",
+      "requested": [
+        "360ONE",
+        "ABB",
+        "ABCAPITAL",
+        "ADANIENSOL",
+        "ADANIENT",
+        "ADANIGREEN",
+        "ADANIPORTS",
+        "ADANIPOWER",
+        "ALKEM",
+        "AMBER",
+        "AMBUJACEM",
+        "ANGELONE",
+        "APLAPOLLO",
+        "APOLLOHOSP",
+        "ASHOKLEY",
+        "ASIANPAINT",
+        "ASTRAL",
+        "ATHERENERG",
+        "AUBANK",
+        "AUROPHARMA",
+        "AXISBANK",
+        "BAJAJ-AUTO",
+        "BAJAJFINSV",
+        "BAJAJHLDNG",
+        "BAJFINANCE",
+        "BANDHANBNK",
+        "BANKBARODA",
+        "BANKINDIA",
+        "BDL",
+        "BEL",
+        "BHARATFORG",
+        "BHARTIARTL",
+        "BHEL",
+        "BIOCON",
+        "BLUESTARCO",
+        "BOSCHLTD",
+        "BPCL",
+        "BRITANNIA",
+        "BSE",
+        "CAMS",
+        "CANBK",
+        "CDSL",
+        "CGPOWER",
+        "CHOLAFIN",
+        "CIPLA",
+        "COALINDIA",
+        "COCHINSHIP",
+        "COFORGE",
+        "COLPAL",
+        "CONCOR",
+        "CROMPTON",
+        "CUMMINSIND",
+        "DABUR",
+        "DELHIVERY",
+        "DIVISLAB",
+        "DIXON",
+        "DLF",
+        "DMART",
+        "DRREDDY",
+        "EICHERMOT",
+        "ETERNAL",
+        "FEDERALBNK",
+        "FORCEMOT",
+        "FORTIS",
+        "GAIL",
+        "GLENMARK",
+        "GMRAIRPORT",
+        "GODFRYPHLP",
+        "GODREJCP",
+        "GODREJPROP",
+        "GRASIM",
+        "GVT&D",
+        "HAL",
+        "HAVELLS",
+        "HCLTECH",
+        "HDFCAMC",
+        "HDFCBANK",
+        "HDFCLIFE",
+        "HEROMOTOCO",
+        "HINDALCO",
+        "HINDPETRO",
+        "HINDUNILVR",
+        "HINDZINC",
+        "HYUNDAI",
+        "ICICIBANK",
+        "ICICIGI",
+        "ICICIPRULI",
+        "IDEA",
+        "IDFCFIRSTB",
+        "IEX",
+        "INDHOTEL",
+        "INDIANB",
+        "INDIGO",
+        "INDUSINDBK",
+        "INDUSTOWER",
+        "INFY",
+        "INOXWIND",
+        "IOC",
+        "IREDA",
+        "IRFC",
+        "ITC",
+        "JINDALSTEL",
+        "JIOFIN",
+        "JSWENERGY",
+        "JSWSTEEL",
+        "JUBLFOOD",
+        "KALYANKJIL",
+        "KAYNES",
+        "KEI",
+        "KFINTECH",
+        "KOTAKBANK",
+        "KPITTECH",
+        "LAURUSLABS",
+        "LICHSGFIN",
+        "LICI",
+        "LODHA",
+        "LT",
+        "LTF",
+        "LTM",
+        "LUPIN",
+        "M&M",
+        "MAHABANK",
+        "MANAPPURAM",
+        "MANKIND",
+        "MARICO",
+        "MARUTI",
+        "MAXHEALTH",
+        "MAZDOCK",
+        "MCX",
+        "MFSL",
+        "MOTHERSON",
+        "MOTILALOFS",
+        "MPHASIS",
+        "MUTHOOTFIN",
+        "NAM-INDIA",
+        "NATIONALUM",
+        "NAUKRI",
+        "NBCC",
+        "NESTLEIND",
+        "NHPC",
+        "NMDC",
+        "NTPC",
+        "NYKAA",
+        "OBEROIRLTY",
+        "OFSS",
+        "OIL",
+        "ONGC",
+        "PAGEIND",
+        "PATANJALI",
+        "PAYTM",
+        "PERSISTENT",
+        "PETRONET",
+        "PFC",
+        "PGEL",
+        "PHOENIXLTD",
+        "PIDILITIND",
+        "PIIND",
+        "PNB",
+        "PNBHOUSING",
+        "POLICYBZR",
+        "POLYCAB",
+        "POWERGRID",
+        "POWERINDIA",
+        "PREMIERENE",
+        "PRESTIGE",
+        "RADICO",
+        "RBLBANK",
+        "RECLTD",
+        "RELIANCE",
+        "RVNL",
+        "SAGILITY",
+        "SAIL",
+        "SBICARD",
+        "SBILIFE",
+        "SBIN",
+        "SHREECEM",
+        "SHRIRAMFIN",
+        "SIEMENS",
+        "SOLARINDS",
+        "SONACOMS",
+        "SRF",
+        "SUNPHARMA",
+        "SUPREMEIND",
+        "SUZLON",
+        "SWIGGY",
+        "TATACONSUM",
+        "TATAELXSI",
+        "TATAPOWER",
+        "TATASTEEL",
+        "TCS",
+        "TECHM",
+        "TIINDIA",
+        "TITAN",
+        "TMPV",
+        "TORNTPHARM",
+        "TRENT",
+        "TVSMOTOR",
+        "ULTRACEMCO",
+        "UNIONBANK",
+        "UNITDSPR",
+        "UNOMINDA",
+        "UPL",
+        "VBL",
+        "VEDL",
+        "VMM",
+        "VOLTAS",
+        "WAAREEENER",
+        "WIPRO",
+        "YESBANK",
+        "ZYDUSLIFE"
+      ],
+      "session_exclusions_by_year": {
+        "2017": {
+          "DATA-MISSING-BIN": 3431,
+          "price_invalid": 201,
+          "usable_range_removed:volume": 706,
+          "volume_invalid": 19
+        },
+        "2018": {
+          "DATA-MISSING-BIN": 3755,
+          "price_invalid": 396,
+          "usable_range_removed:volume": 234,
+          "volume_invalid": 1241
+        },
+        "2019": {
+          "DATA-MISSING-BIN": 4031,
+          "price_invalid": 428,
+          "volume_invalid": 1333
+        },
+        "2020": {
+          "DATA-MISSING-BIN": 1981,
+          "price_invalid": 548,
+          "volume_invalid": 759
+        },
+        "2021": {
+          "DATA-MISSING-BIN": 1027,
+          "price_invalid": 566,
+          "usable_range_removed:volume": 140,
+          "volume_invalid": 610
+        },
+        "2022": {
+          "DATA-MISSING-BIN": 721,
+          "price_invalid": 154,
+          "usable_range_removed:price": 155,
+          "usable_range_removed:volume": 488,
+          "volume_invalid": 332
+        },
+        "2023": {
+          "DATA-MISSING-BIN": 456,
+          "price_invalid": 353,
+          "usable_range_removed:price": 245,
+          "usable_range_removed:volume": 733,
+          "volume_invalid": 29
+        },
+        "2024": {
+          "DATA-MISSING-BIN": 378,
+          "price_invalid": 125,
+          "usable_range_removed:price": 247,
+          "usable_range_removed:volume": 742,
+          "volume_invalid": 89
+        },
+        "2025": {
+          "DATA-MISSING-BIN": 8,
+          "price_invalid": 32,
+          "usable_range_removed:price": 248,
+          "usable_range_removed:volume": 743,
+          "volume_invalid": 46
+        },
+        "2026": {
+          "DATA-MISSING-BIN": 4,
+          "price_invalid": 172,
+          "usable_range_removed:price": 197,
+          "usable_range_removed:volume": 584,
+          "volume_invalid": 285
+        }
+      },
+      "source": "signal_engine.backtest.data.NSE_FNO: today's NSE F&O list (survivorship bias; not point-in-time membership)",
+      "strategy_universe_count": 211,
+      "unavailable": [
+        "NIFTYFPI"
+      ],
+      "version": "f70299a79332b00b7e920adf0a6428bcef75ed8fed3b4cf3735fd5eb9c7c8d1f"
+    },
+    "warnings": [
+      "COV-UNAVAILABLE",
+      "alert price:symbol:BDL rate 0.48346",
+      "alert price:symbol:PATANJALI rate 0.14137",
+      "alert volume:year:2018 rate 0.04192",
+      "alert volume:year:2019 rate 0.04376",
+      "alert volume:year:2020 rate 0.03034",
+      "alert volume:month:2019-02 rate 0.16982",
+      "alert volume:symbol:BDL rate 0.48393",
+      "alert volume:symbol:BSE rate 0.43907",
+      "alert volume:symbol:MOTHERSON rate 0.07699",
+      "alert volume:symbol:NMDC rate 0.41587",
+      "alert volume:symbol:PATANJALI rate 0.14611",
+      "alert volume:symbol:VBL rate 0.3332",
+      "alert final_bar:overall rate 0.03914",
+      "alert final_bar:year:2023 rate 0.04838",
+      "alert final_bar:year:2026 rate 0.25539",
+      "alert final_bar:month:2024-02 rate 0.11223",
+      "alert final_bar:month:2024-03 rate 0.11584",
+      "alert final_bar:month:2026-08 rate 0.98726",
+      "alert final_bar:month:2026-09 rate 0.91035",
+      "alert final_bar:month:2026-10 rate 0.86737",
+      "alert final_bar:symbol:360ONE rate 0.09642",
+      "alert final_bar:symbol:ADANIENSOL rate 0.08858",
+      "alert final_bar:symbol:ANGELONE rate 0.05897",
+      "alert final_bar:symbol:ATHERENERG rate 0.14365",
+      "alert final_bar:symbol:BDL rate 0.50851",
+      "alert final_bar:symbol:DELHIVERY rate 0.08165",
+      "alert final_bar:symbol:ETERNAL rate 0.13793",
+      "alert final_bar:symbol:GMRAIRPORT rate 0.11111",
+      "alert final_bar:symbol:GVT&D rate 0.1118",
+      "alert final_bar:symbol:HYUNDAI rate 0.10569",
+      "alert final_bar:symbol:INDUSTOWER rate 0.0576",
+      "alert final_bar:symbol:IREDA rate 0.08112",
+      "alert final_bar:symbol:IRFC rate 0.05237",
+      "alert final_bar:symbol:JIOFIN rate 0.07545",
+      "alert final_bar:symbol:KALYANKJIL rate 0.06769",
+      "alert final_bar:symbol:KAYNES rate 0.09307",
+      "alert final_bar:symbol:KFINTECH rate 0.09255",
+      "alert final_bar:symbol:LICI rate 0.05479",
+      "alert final_bar:symbol:LODHA rate 0.06098",
+      "alert final_bar:symbol:LTF rate 0.0859",
+      "alert final_bar:symbol:LTM rate 0.30573",
+      "alert final_bar:symbol:MANKIND rate 0.09485",
+      "alert final_bar:symbol:MAXHEALTH rate 0.07026",
+      "alert final_bar:symbol:MOTHERSON rate 0.06679",
+      "alert final_bar:symbol:NAM-INDIA rate 0.05759",
+      "alert final_bar:symbol:NYKAA rate 0.06874",
+      "alert final_bar:symbol:PATANJALI rate 0.20209",
+      "alert final_bar:symbol:PAYTM rate 0.05674",
+      "alert final_bar:symbol:PGEL rate 0.08723",
+      "alert final_bar:symbol:POLICYBZR rate 0.07875",
+      "alert final_bar:symbol:POWERINDIA rate 0.0549",
+      "alert final_bar:symbol:PREMIERENE rate 0.09125",
+      "alert final_bar:symbol:RECLTD rate 0.05994",
+      "alert final_bar:symbol:SAGILITY rate 0.10879",
+      "alert final_bar:symbol:SHRIRAMFIN rate 0.07286",
+      "alert final_bar:symbol:SONACOMS rate 0.06768",
+      "alert final_bar:symbol:SWIGGY rate 0.11321",
+      "alert final_bar:symbol:TATASTEEL rate 0.05829",
+      "alert final_bar:symbol:TMPV rate 0.20902",
+      "alert final_bar:symbol:UNITDSPR rate 0.08718",
+      "alert final_bar:symbol:UNOMINDA rate 0.07232",
+      "alert final_bar:symbol:VBL rate 0.05002",
+      "alert final_bar:symbol:VMM rate 0.10793",
+      "alert final_bar:symbol:WAAREEENER rate 0.10861",
+      "alert final_bar:symbol:ZYDUSLIFE rate 0.06042"
+    ]
+  },
+  "random": {
+    "monte_carlo": null,
+    "seed": 0
+  },
+  "reproducibility": {
+    "code_commit": true,
+    "dataset_fingerprint": true,
+    "deployment_profile": true,
+    "engine_version": true,
+    "execution_config": true,
+    "resolved_assumptions": true,
+    "strategy_fingerprint": true,
+    "strategy_version": true
+  },
+  "reproducible": false,
+  "run_diagnostics": {
+    "data_contract_exclusions_by_year": {
+      "2017": {
+        "DATA-MISSING-BIN": 3431,
+        "price_invalid": 201,
+        "usable_range_removed:volume": 706,
+        "volume_invalid": 19
+      },
+      "2018": {
+        "DATA-MISSING-BIN": 3755,
+        "price_invalid": 396,
+        "usable_range_removed:volume": 234,
+        "volume_invalid": 1241
+      },
+      "2019": {
+        "DATA-MISSING-BIN": 4031,
+        "price_invalid": 428,
+        "volume_invalid": 1333
+      },
+      "2020": {
+        "DATA-MISSING-BIN": 1981,
+        "price_invalid": 548,
+        "volume_invalid": 759
+      },
+      "2021": {
+        "DATA-MISSING-BIN": 1027,
+        "price_invalid": 566,
+        "usable_range_removed:volume": 140,
+        "volume_invalid": 610
+      },
+      "2022": {
+        "DATA-MISSING-BIN": 721,
+        "price_invalid": 154,
+        "usable_range_removed:price": 155,
+        "usable_range_removed:volume": 488,
+        "volume_invalid": 332
+      },
+      "2023": {
+        "DATA-MISSING-BIN": 456,
+        "price_invalid": 353,
+        "usable_range_removed:price": 245,
+        "usable_range_removed:volume": 733,
+        "volume_invalid": 29
+      },
+      "2024": {
+        "DATA-MISSING-BIN": 378,
+        "price_invalid": 125,
+        "usable_range_removed:price": 247,
+        "usable_range_removed:volume": 742,
+        "volume_invalid": 89
+      },
+      "2025": {
+        "DATA-MISSING-BIN": 8,
+        "price_invalid": 32,
+        "usable_range_removed:price": 248,
+        "usable_range_removed:volume": 743,
+        "volume_invalid": 46
+      },
+      "2026": {
+        "DATA-MISSING-BIN": 4,
+        "price_invalid": 172,
+        "usable_range_removed:price": 197,
+        "usable_range_removed:volume": 584,
+        "volume_invalid": 285
+      }
+    },
+    "n_minutes_distribution": {
+      "bars": 30466871,
+      "by_year": {
+        "2017": {
+          "1": 4810,
+          "2": 15551,
+          "3": 38652,
+          "4": 93604,
+          "5": 2234408
+        },
+        "2018": {
+          "1": 5044,
+          "2": 15800,
+          "3": 38217,
+          "4": 88831,
+          "5": 2335958
+        },
+        "2019": {
+          "1": 5633,
+          "2": 17980,
+          "3": 41651,
+          "4": 92824,
+          "5": 2397912
+        },
+        "2020": {
+          "1": 3059,
+          "2": 10883,
+          "3": 29893,
+          "4": 80332,
+          "5": 2807133
+        },
+        "2021": {
+          "1": 1759,
+          "2": 6303,
+          "3": 18586,
+          "4": 54244,
+          "5": 3031308
+        },
+        "2022": {
+          "1": 1944,
+          "2": 7258,
+          "3": 21892,
+          "4": 64433,
+          "5": 3205373
+        },
+        "2023": {
+          "1": 1398,
+          "2": 5509,
+          "3": 17410,
+          "4": 54251,
+          "5": 3335656
+        },
+        "2024": {
+          "1": 291,
+          "2": 1318,
+          "3": 4628,
+          "4": 18322,
+          "5": 3531641
+        },
+        "2025": {
+          "1": 73,
+          "2": 396,
+          "3": 2109,
+          "4": 10700,
+          "5": 3751872
+        },
+        "2026": {
+          "1": 835,
+          "2": 284,
+          "3": 1323,
+          "4": 6263,
+          "5": 2951317
+        }
+      },
+      "overall": {
+        "1": 24846,
+        "2": 81282,
+        "3": 214361,
+        "4": 563804,
+        "5": 29582578
+      }
+    }
+  },
+  "run_id": "2026-10-28-multi-day-balance-breakout-v2",
+  "run_status": "VALID",
+  "schema": 4,
+  "session": {
+    "broker_cutoff": "14:55",
+    "exchange": "NSE cash 09:15-15:30 (official NSE calendar)",
+    "force_flat": "15:00",
+    "strategy_window": {
+      "entry": "10:15-13:00"
+    }
+  },
+  "spec_source": {
+    "commit": null,
+    "modified_since_commit": true,
+    "path": "spec.yaml",
+    "sha256": "3b8469313ac425ff0ba6820c21df52154f96739c3b950b062f09a64f68a931f7"
+  },
+  "strategy": {
+    "branch_label": null,
+    "parent_version": "v1",
+    "version": "v2"
+  },
+  "symbol_counts": {
+    "eligible": 206,
+    "loaded": 206,
+    "requested": 210,
+    "sessions_in_range": 2419,
+    "strategy_universe": 211,
+    "symbol_sessions": 436361,
+    "symbol_sessions_available": 407389
+  },
+  "trial_counted": true,
+  "universe": {
+    "definition": "nse_fno_current-206-eligible-symbols",
+    "membership_source": "current_symbol_master",
+    "price_floor": {
+      "applied": true,
+      "basis": "nse_raw_last_bar_close",
+      "eligibility_policy_version": 3,
+      "min_price": 10.0,
+      "source": {
+        "daily_root_hash": "319a1774021ced2b174b879a0fc9d266fd69cf901056f15442b4007ba69b0fc6",
+        "daily_version": "nse-daily-20261019-001",
+        "field": "price_factor",
+        "formula": "last-bar close / price_factor"
+      }
+    },
+    "survivorship_bias": true,
+    "symbols_sha256": "e7e23d4ec7d45dee62826e644ed86f2adb77e9584f57d241025ef3bd51b1dd39",
+    "version": "eligibility-f780a80a"
+  }
+}

@@ -2868,16 +2868,21 @@
       "id": "IDEA-034",
       "last_reviewed": "2026-10-28",
       "lineage": {
-        "delta_vs_parent": null,
-        "edge_bar": 2.657,
+        "delta_vs_parent": {
+          "net_bps": 0.9174,
+          "parent_run_id": "2026-10-28-multi-day-balance-breakout-v1",
+          "t_stat": 0.518,
+          "trades": -305
+        },
+        "edge_bar": 2.796,
         "edge_status": "below_bar",
-        "latest_run_id": "2026-10-28-multi-day-balance-breakout-v1",
-        "runs": 1,
-        "trend": "insufficient",
-        "trials_sum": 6
+        "latest_run_id": "2026-10-28-multi-day-balance-breakout-v2",
+        "runs": 2,
+        "trend": "stagnant",
+        "trials_sum": 15
       },
       "research_state": "weak_evidence",
-      "result": "Gross +8.6 bps (t 3.2) beats both placebos but not the 11.55 bps cost; net -3.0 bps, fails G1.2 in and out of sample.",
+      "result": "Gross +8.6 bps (t 3.2) beats both placebos but not the 11.55 bps cost; net -3.0 bps, fails G1.2. v2 wider balance (H >= 1.5 percent) net -2.1 bps, IS and OOS negative, fails too.",
       "revisit_when": "A cheaper execution path than 11.55 bps round trip exists, or a point-in-time universe or 1m data allows a materially different balance definition; the pre-registered grid is exhausted.",
       "runs": [
         {
@@ -3294,6 +3299,423 @@
           "validation": [
             "unit tests: signal_engine/tests/test_balance_breakout.py"
           ]
+        },
+        {
+          "artifact_dir": "2026-10-28-multi-day-balance-breakout-v2/",
+          "baseline": {
+            "draws_per_trade": 20,
+            "excess_net_bps": 8.037,
+            "excess_t_stat": 2.778,
+            "gross_bps": 1.4473,
+            "method": "same-symbol random entry, same holding period in bars, same direction, same session, open of the entry bar to close of the exit bar, the matched trade's own round-trip cost deducted",
+            "net_bps": -10.1009,
+            "population_trades": 1352,
+            "sampled": false,
+            "seed": 0,
+            "skipped": 0,
+            "trade_net_bps": -2.0639,
+            "trades": 1352
+          },
+          "change_classes": [
+            "STRATEGY_CHANGE",
+            "PARAMETER_CHANGE",
+            "ENGINE_CHANGE"
+          ],
+          "change_note": "v2 wider balance: min_height_pct 1.5 (H at least 1.5 percent of the broken edge), pre-registered primary; hold-out already seen by v1",
+          "code_dirty": true,
+          "code_version": "3d6424063-dirty",
+          "cost_model": {
+            "broker": {
+              "assumed": false,
+              "key": "flattrade",
+              "label": "Flattrade",
+              "source": "https://flattrade.in/charges/",
+              "verified_on": "2026-10-01"
+            },
+            "capital": 100000.0,
+            "cost_model_version": 1,
+            "exchange": "NSE",
+            "flat_bps": 16.0,
+            "leverage": 5.0,
+            "mean_statutory_bps": 3.548,
+            "mean_total_bps": 11.548,
+            "model": "statutory-per-trade",
+            "modelled_net_pnl_rs": -16400.18,
+            "modelled_total_cost_rs": 164978.74,
+            "net_r": -0.0121,
+            "net_r_slip_2x": -0.0967,
+            "notional_basis": "risk",
+            "pnl_basis": "modelled: each trade is sized independently to capital x risk per trade / stop fraction, capped at capital x leverage, with no limit on concurrent positions or total capital; net is after the modelled statutory charges and slippage",
+            "product": "MIS",
+            "rate_table": {
+              "charges": {
+                "brokerage": {
+                  "basis": "order",
+                  "cap": 0.0,
+                  "flat": 0.0,
+                  "rate": 0.0,
+                  "taxed": true
+                },
+                "exchange_txn": {
+                  "basis": "turnover",
+                  "cap": 0.0,
+                  "flat": 0.0,
+                  "rate": 3.07e-05,
+                  "taxed": true
+                },
+                "sebi": {
+                  "basis": "turnover",
+                  "cap": 0.0,
+                  "flat": 0.0,
+                  "rate": 1e-06,
+                  "taxed": true
+                },
+                "stamp_duty": {
+                  "basis": "buy",
+                  "cap": 0.0,
+                  "flat": 0.0,
+                  "rate": 3e-05,
+                  "taxed": false
+                },
+                "stt": {
+                  "basis": "sell",
+                  "cap": 0.0,
+                  "flat": 0.0,
+                  "rate": 0.00025,
+                  "taxed": false
+                }
+              },
+              "schedule": "India intraday (NSE) - Flattrade",
+              "tax_label": "GST",
+              "tax_rate": 0.18
+            },
+            "rate_table_sha256": "5afe5a29f6763958db4b8274681e2f887b0b53948213d5cad6f4801d94d87707",
+            "risk_per_trade": 0.01,
+            "scenarios": [
+              {
+                "definition": {
+                  "broker": "flattrade",
+                  "kind": "statutory",
+                  "rate_table_sha256": "5afe5a29f6763958db4b8274681e2f887b0b53948213d5cad6f4801d94d87707",
+                  "slippage_bps_per_side": 4.0
+                },
+                "id": "primary",
+                "mean_round_trip_bps": 11.548,
+                "net_bps": -2.0639,
+                "net_r": -0.0121,
+                "net_rs": -16400.18,
+                "slippage_stress": {
+                  "1.5": {
+                    "mean_round_trip_bps": 15.548,
+                    "net_bps": -6.0639,
+                    "net_r": -0.0544
+                  },
+                  "2.0": {
+                    "mean_round_trip_bps": 19.548,
+                    "net_bps": -10.0639,
+                    "net_r": -0.0967
+                  }
+                },
+                "t_stat": -0.472,
+                "win_rate": 0.4593
+              },
+              {
+                "definition": {
+                  "broker": "default",
+                  "kind": "statutory",
+                  "rate_table_sha256": "872e7f65a616e67e0bb7dc9fdf1ede30823c353e6481d23738faf81cb13ff08e",
+                  "slippage_bps_per_side": 4.0
+                },
+                "id": "generic_discount_broker",
+                "mean_round_trip_bps": 16.399,
+                "net_bps": -6.9151,
+                "net_r": -0.0577,
+                "net_rs": -77965.47,
+                "slippage_stress": {
+                  "1.5": {
+                    "mean_round_trip_bps": 20.399,
+                    "net_bps": -10.9151,
+                    "net_r": -0.0999
+                  },
+                  "2.0": {
+                    "mean_round_trip_bps": 24.399,
+                    "net_bps": -14.9151,
+                    "net_r": -0.1422
+                  }
+                },
+                "t_stat": -2.005,
+                "win_rate": 0.4386
+              },
+              {
+                "definition": {
+                  "kind": "flat",
+                  "round_trip_bps": 16.0
+                },
+                "id": "legacy_flat",
+                "mean_round_trip_bps": 16.0,
+                "net_bps": -6.5158,
+                "net_r": -0.0592,
+                "net_rs": -80000.62,
+                "t_stat": -1.888,
+                "win_rate": 0.4423
+              }
+            ],
+            "scenarios_sha256": "8b6ee5a0ede8e84ae56d12d1720e72136eba434fe7be4cd8ef20ec6dc08547cf",
+            "slippage_bps_per_side": 4.0,
+            "stress_levels": [
+              1.0,
+              1.5,
+              2.0
+            ],
+            "total_bps_at": {
+              "1.0": 11.548,
+              "1.5": 15.548,
+              "2.0": 19.548
+            },
+            "trades": 1352
+          },
+          "cost_sensitivity": [
+            {
+              "net_bps": 9.4843,
+              "round_trip_bps": 0
+            },
+            {
+              "net_bps": 4.4843,
+              "round_trip_bps": 5
+            },
+            {
+              "net_bps": -0.5157,
+              "round_trip_bps": 10
+            },
+            {
+              "net_bps": -2.0637,
+              "round_trip_bps": 11.548
+            },
+            {
+              "net_bps": -6.5157,
+              "round_trip_bps": 16.0
+            },
+            {
+              "net_bps": -10.5157,
+              "round_trip_bps": 20
+            }
+          ],
+          "costs": {
+            "broker": {
+              "assumed": false,
+              "key": "flattrade",
+              "label": "Flattrade",
+              "source": "https://flattrade.in/charges/",
+              "verified_on": "2026-10-01"
+            },
+            "cost_model_version": 1,
+            "flat_round_trip_bps": 16.0,
+            "model": "statutory-per-trade",
+            "rate_table_sha256": "5afe5a29f6763958db4b8274681e2f887b0b53948213d5cad6f4801d94d87707",
+            "reference_round_trip_bps": [],
+            "round_trip_bps": 11.548
+          },
+          "data": {
+            "as_of": "2026-10-19",
+            "bar_size": "5m",
+            "source": "published:nse-intraday-5m-20261021-002",
+            "universe": "nse_fno_current-206-eligible-symbols"
+          },
+          "dataset_version": "nse-intraday-5m-20261021-002",
+          "date": "2026-10-28",
+          "evaluation_summary": {
+            "counts": {
+              "fail": 11,
+              "not_applicable": 0,
+              "not_evaluated": 30,
+              "pass": 12,
+              "report": 16
+            },
+            "hard_failed": [
+              "G1.2",
+              "G4.5",
+              "G1.3",
+              "G4.4",
+              "G2.2"
+            ]
+          },
+          "exit_views": {
+            "data_gap": {
+              "closes": [],
+              "net_r_total": 0.0,
+              "trades": 0
+            },
+            "economic": {
+              "gross_r_mean": 0.109895,
+              "net_r_mean": -0.01213,
+              "net_r_total": -16.400181,
+              "trades": 1352
+            },
+            "protection": {
+              "TIME_EXIT": {
+                "net_r_mean": 0.221626,
+                "net_r_total": 187.717083,
+                "trades": 847
+              }
+            },
+            "strategy": {
+              "avg_r_gross": -0.28146,
+              "avg_r_net": -0.404193,
+              "decided_trades": 505,
+              "win_rate_net": 0.261386
+            }
+          },
+          "in_sample": {
+            "gross_bps": 10.3206,
+            "net_bps": -1.2276,
+            "sharpe": -0.198,
+            "t_stat": -0.812,
+            "trades": 919,
+            "win_rate": 0.4559
+          },
+          "manifest_sha256": "9470d94f2908b457e86576a078a7382cf8ca66c57df11986b28058f29975dad5",
+          "metrics": {
+            "breakeven_cost_bps": 9.4843,
+            "days": 977,
+            "expectancy_r": -0.0121,
+            "gross_bps": 9.4843,
+            "hurdle_t": 2.796,
+            "max_dd_r": 53.5947,
+            "median_concurrent": 1.0,
+            "net_bps": -2.0639,
+            "payoff": 1.142,
+            "peak_concurrent": 7,
+            "profit_factor": 0.97,
+            "sharpe": -0.332,
+            "t_stat": -0.472,
+            "total_cost_r": 164.9787,
+            "trades": 1352,
+            "win_rate": 0.4593
+          },
+          "missing_capabilities": [
+            "Point-in-time universe membership and per-date eligibility",
+            "random.monte_carlo not captured until engine step 5"
+          ],
+          "n_trials": 9,
+          "next_action": {
+            "action": "Check the session window and square-off times",
+            "gate": "G6.1",
+            "reason": "Positions must close before the broker does it; also commit the working tree and re-run from a clean state"
+          },
+          "notes": "Shipped default configuration on nse_fno_current-206-eligible-symbols. n_trials=9 from trials.yaml: 2 material configuration(s) and 7 external. Regime analysis not available: no independent NIFTY series was loaded; the stock basket is never used as a stand-in and the verdict is unaffected. (not requested: pass --regimes).",
+          "out_of_sample": {
+            "gross_bps": 7.7094,
+            "net_bps": -3.8388,
+            "sharpe": -0.618,
+            "t_stat": 0.428,
+            "trades": 433,
+            "win_rate": 0.4665
+          },
+          "params": {
+            "engine": "intraday",
+            "entry_caps": {
+              "max_entries_per_direction": null,
+              "max_trades_per_day": 1,
+              "rule": "re-entry not allowed: one entry per symbol per session"
+            },
+            "run": {
+              "allow_longs": true,
+              "allow_shorts": true,
+              "cost_bps": 16.0,
+              "custom_exit_fill": "bar_close",
+              "entry_cutoff_min": 780,
+              "exit_plan": null,
+              "max_entries_per_direction": null,
+              "max_entry_slippage_r": 0.0,
+              "max_trades_per_day": 1,
+              "min_sl_pct": 0.002,
+              "mis_squareoff_min": 900,
+              "one_trade_per_direction": false,
+              "skip_fill_beyond_levels": true,
+              "skip_open_minutes": 0,
+              "squareoff_margin_min": 5,
+              "tick_grid": "safe_tick",
+              "time_exit_at_open": false,
+              "time_exit_min": 885,
+              "warmup_bars": 14
+            },
+            "strategy": {
+              "atr_len": 14,
+              "atr_max_multiple": 1.5,
+              "balance_days": 5,
+              "bin_pct_of_price": 0.05,
+              "min_height_pct": 1.5,
+              "min_session_bars": 60,
+              "min_va_overlap": 0.5,
+              "placebo": "none",
+              "stop_buffer_atr": 0.25,
+              "stop_mode": "edge",
+              "trigger": "p30",
+              "value_area_pct": 70.0
+            },
+            "strategy_class": "BalanceBreakout"
+          },
+          "parent_run_id": "2026-10-28-multi-day-balance-breakout-v1",
+          "period": {
+            "end": "2026-10-19",
+            "start": "2017-01-02"
+          },
+          "position_caps": [
+            {
+              "gross_bps": 9.2347,
+              "max_positions": 3,
+              "net_bps": -2.3135,
+              "sharpe": -0.382,
+              "t_stat": -0.397,
+              "taken_pct": 98.2,
+              "trades": 1327,
+              "win_rate": 0.4559
+            },
+            {
+              "gross_bps": 9.2071,
+              "max_positions": 5,
+              "net_bps": -2.341,
+              "sharpe": -0.383,
+              "t_stat": -0.462,
+              "taken_pct": 99.7,
+              "trades": 1348,
+              "win_rate": 0.4577
+            },
+            {
+              "gross_bps": 9.4843,
+              "max_positions": 10,
+              "net_bps": -2.0639,
+              "sharpe": -0.332,
+              "t_stat": -0.472,
+              "taken_pct": 100.0,
+              "trades": 1352,
+              "win_rate": 0.4593
+            }
+          ],
+          "promoted": false,
+          "promotion_decision": "NOT_READY",
+          "promotion_eligible": false,
+          "reproducible": false,
+          "run_id": "2026-10-28-multi-day-balance-breakout-v2",
+          "run_status": "VALID",
+          "run_verdict": "INCONCLUSIVE",
+          "schema": 4,
+          "split": {
+            "embargo_sessions": 1,
+            "embargoed_oos": 0,
+            "oos_start": "2023-11-08",
+            "purged_in_sample": 0,
+            "type": "oos"
+          },
+          "strategy_fingerprint": "95a55a16f78ff5c37ebb292e0b37ec52b5fb6c05caa530764f8fee13bbf92346",
+          "strategy_version": "v2",
+          "trial_counted": true,
+          "trials": {
+            "external": 7,
+            "material": 2,
+            "source": "trials.yaml",
+            "total": 9
+          }
         }
       ],
       "source": {
@@ -3344,6 +3766,6 @@
     "ideas_with_runs": 4,
     "last_reviewed": "2026-10-28",
     "total": 8,
-    "total_runs": 9
+    "total_runs": 10
   }
 }

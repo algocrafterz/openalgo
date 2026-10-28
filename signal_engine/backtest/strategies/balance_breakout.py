@@ -64,6 +64,7 @@ class BalanceParams:
     trigger: str = "p30"  # p30 | two5
     stop_mode: str = "edge"  # edge | mid
     placebo: str = "none"  # none | non_balance | random_entry
+    min_height_pct: float = 1.5  # v2: H as percent of the broken edge; 0.0 reproduces v1
 
 
 def value_area(
@@ -279,6 +280,10 @@ class BalanceBreakout(Strategy):
         else:
             long_, short_ = _raw_triggers(d, p)
             long_, short_ = long_ & gate, short_ & gate
+        if p.min_height_pct > 0:
+            h = d["bal_h"] * 100.0
+            long_ &= (h / d["bal_hi"]) >= p.min_height_pct
+            short_ &= (h / d["bal_lo"]) >= p.min_height_pct
         any_sig = long_ | short_
         first = any_sig & (any_sig.astype(int).groupby(d["day"]).cumsum() == 1)
         long_, short_ = long_ & first, short_ & first

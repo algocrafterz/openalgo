@@ -17,6 +17,7 @@ entry:
   - "Balance on trade day t from the last 5 completed sessions only: adjacent 70 percent value areas overlap by at least 0.5 of the narrower one, and composite height H = max(VAH) - min(VAL) is at most 1.5 x daily ATR14"
   - "Long: a 30-minute period close (periods anchored 09:15, closing 10:15 through 12:45) above the composite high while the previous 30-minute close was at or below it; short mirrors below the composite low"
   - "First such breakout of the day only, one trade per stock per day; the order fills at the next 5m candle open"
+  - "v2 wider balance: take the trade only if H / broken composite edge x 100 is at least min_height_pct (1.5), from the same 5 completed sessions"
 exit:
   - "Measured-move target: composite high + H for a long, composite low - H for a short"
   - "Time exit at 14:45"
@@ -39,6 +40,7 @@ parameters:
   trigger: p30
   stop_mode: edge
   placebo: none
+  min_height_pct: 1.5
 filters: none
 session_window: {entry: "10:15-13:00"}
 re_entry:
@@ -55,7 +57,7 @@ portfolio:
   selection: chronological
   conflict: skip_if_symbol_open
 disclosure:
-  prior_variants: 0
+  prior_variants: 6
   chart_peeking: false
   destination: python
 rationale: A multi-day overlapping value area is agreed value; price accepted outside it moves to new value, and the level is known before the move.

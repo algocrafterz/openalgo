@@ -3,3 +3,9 @@
   parent: null
   created_ist: '2026-10-28T12:51:40+05:30'
   note: primary pre-registered configuration N5 k1.5 p30 edge
+- version: v2
+  strategy_fingerprint: 95a55a16f78ff5c37ebb292e0b37ec52b5fb6c05caa530764f8fee13bbf92346
+  parent: v1
+  created_ist: '2026-10-28T15:00:47+05:30'
+  note: 'v2 wider balance: min_height_pct 1.5 (H at least 1.5 percent of the broken
+    edge), pre-registered primary; hold-out already seen by v1'

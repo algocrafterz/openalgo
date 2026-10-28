@@ -1,0 +1,6427 @@
+{
+  "assessment": {
+    "gates": {
+      "counts": {
+        "BLOCKED": 30,
+        "FAIL": 11,
+        "INCONCLUSIVE": 0,
+        "NOT_APPLICABLE": 0,
+        "PASS": 12,
+        "REPORT": 16
+      },
+      "open": [
+        {
+          "cause": "attestation",
+          "class": "integrity",
+          "gate": "G0.1",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "backtest",
+          "title": "Same logic in every mode"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G0.7",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "backtest",
+          "title": "Test quality"
+        },
+        {
+          "class": "strategy_quality",
+          "gate": "G1.2",
+          "hard": true,
+          "outcome": "FAIL",
+          "stage": "backtest",
+          "title": "Net expectancy at 1.0x cost"
+        },
+        {
+          "class": "strategy_quality",
+          "gate": "G1.3",
+          "hard": true,
+          "outcome": "FAIL",
+          "stage": "backtest",
+          "title": "Slippage stress"
+        },
+        {
+          "class": "strategy_quality",
+          "gate": "G2.2",
+          "hard": true,
+          "outcome": "FAIL",
+          "stage": "backtest",
+          "title": "Day-clustered t-statistic"
+        },
+        {
+          "class": "strategy_quality",
+          "gate": "G2.3",
+          "hard": false,
+          "outcome": "FAIL",
+          "stage": "backtest",
+          "title": "Deflated Sharpe"
+        },
+        {
+          "cause": "structural",
+          "class": "strategy_quality",
+          "gate": "G2.4",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "backtest",
+          "title": "Probability of backtest overfitting"
+        },
+        {
+          "class": "strategy_quality",
+          "gate": "G3.2",
+          "hard": false,
+          "outcome": "FAIL",
+          "stage": "backtest",
+          "title": "Out-of-sample result"
+        },
+        {
+          "class": "strategy_quality",
+          "gate": "G3.3",
+          "hard": false,
+          "outcome": "FAIL",
+          "stage": "backtest",
+          "title": "Walk-forward"
+        },
+        {
+          "class": "strategy_quality",
+          "gate": "G3.4",
+          "hard": false,
+          "outcome": "FAIL",
+          "stage": "backtest",
+          "title": "Symbol hold-out"
+        },
+        {
+          "cause": "stage_not_run",
+          "class": "strategy_quality",
+          "gate": "G4.1",
+          "hard": true,
+          "outcome": "BLOCKED",
+          "stage": "backtest",
+          "title": "Parameter perturbation"
+        },
+        {
+          "cause": "stage_not_run",
+          "class": "strategy_quality",
+          "gate": "G4.2",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "backtest",
+          "title": "Latency"
+        },
+        {
+          "class": "strategy_quality",
+          "gate": "G4.4",
+          "hard": true,
+          "outcome": "FAIL",
+          "stage": "backtest",
+          "title": "Sub-periods"
+        },
+        {
+          "class": "strategy_quality",
+          "gate": "G4.5",
+          "hard": true,
+          "outcome": "FAIL",
+          "stage": "backtest",
+          "title": "Dispersion"
+        },
+        {
+          "cause": "structural",
+          "class": "strategy_quality",
+          "gate": "G4.8",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "paper",
+          "title": "Event days"
+        },
+        {
+          "cause": "stage_not_run",
+          "class": "risk_constraint",
+          "gate": "G5.1",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "backtest",
+          "title": "Monte Carlo"
+        },
+        {
+          "cause": "stage_not_run",
+          "class": "risk_constraint",
+          "gate": "G5.2",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "backtest",
+          "title": "Live caps applied"
+        },
+        {
+          "class": "risk_constraint",
+          "gate": "G5.3",
+          "hard": false,
+          "outcome": "FAIL",
+          "stage": "backtest",
+          "title": "Sizing"
+        },
+        {
+          "cause": "stage_not_run",
+          "class": "risk_constraint",
+          "gate": "G5.4",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "backtest",
+          "title": "Capacity"
+        },
+        {
+          "cause": "stage_not_run",
+          "class": "risk_constraint",
+          "gate": "G5.5",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "backtest",
+          "title": "Margin"
+        },
+        {
+          "class": "integrity",
+          "gate": "G6.1",
+          "hard": false,
+          "outcome": "FAIL",
+          "stage": "backtest",
+          "title": "Session and square-off"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G6.6",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "paper",
+          "title": "SEBI retail algo framework"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G7.1",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "paper",
+          "title": "Paper incubation duration"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G7.2",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "paper",
+          "title": "Signal parity"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G7.3",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "paper",
+          "title": "Execution quality"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G7.4",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "paper",
+          "title": "Paper tracking"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G7.5",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "paper",
+          "title": "Capital ramp"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G8.1",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "paper",
+          "title": "Kill switch"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G8.2",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "paper",
+          "title": "Pre-trade controls"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G8.3",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "paper",
+          "title": "Recovery"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G8.4",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "paper",
+          "title": "Clock"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G8.5",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "paper",
+          "title": "Broker sessions"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G8.6",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "paper",
+          "title": "Audit trail"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G8.7",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "paper",
+          "title": "Change control"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G8.8",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "paper",
+          "title": "Alert escalation"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G9.1",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "live",
+          "title": "Decay watch"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G9.2",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "live",
+          "title": "Drawdown watch"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G9.3",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "live",
+          "title": "Re-validation"
+        },
+        {
+          "cause": "structural",
+          "class": "promotion_operational",
+          "gate": "G9.4",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": "live",
+          "title": "Retirement"
+        },
+        {
+          "cause": "data_prerequisite",
+          "class": "strategy_quality",
+          "gate": "X.2",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": null,
+          "title": "Regime dispersion"
+        },
+        {
+          "cause": "data_prerequisite",
+          "class": "strategy_quality",
+          "gate": "X.3",
+          "hard": false,
+          "outcome": "BLOCKED",
+          "stage": null,
+          "title": "Regime activation hypothesis"
+        }
+      ]
+    },
+    "promotion_readiness": {
+      "backtest": "NOT_READY",
+      "live": "BLOCKED",
+      "next_stage": null,
+      "paper": "BLOCKED"
+    },
+    "research_validity": {
+      "limitations": [
+        "Point-in-time universe membership and per-date eligibility"
+      ],
+      "reasons": [
+        "integrity gate G6.1 failed"
+      ],
+      "status": "FAIL"
+    },
+    "strategy_evidence": {
+      "reasons": [
+        "Research integrity failed: Session and square-off (G6.1). No performance result can be trusted.",
+        "Required before the paper stage, does not decide this verdict: Event days (G4.8) was not run; event-day analysis has not been performed: it needs an event calendar (results dates, monthly expiry, index rebalance, budget and election days) that is not held, so how much of the result depends on event days is unknown until it is evaluated.",
+        "Required before the paper stage, does not decide this verdict: SEBI retail algo framework (G6.6) was not run; operational authorization (broker-registered API, static IP, 2FA, order tagging), not the validity of a backtest."
+      ],
+      "status": "INCONCLUSIVE"
+    }
+  },
+  "baseline": {
+    "draws_per_trade": 20,
+    "excess_net_bps": 8.037,
+    "excess_t_stat": 2.778,
+    "gross_bps": 1.4473,
+    "method": "same-symbol random entry, same holding period in bars, same direction, same session, open of the entry bar to close of the exit bar, the matched trade's own round-trip cost deducted",
+    "net_bps": -10.1009,
+    "population_trades": 1352,
+    "sampled": false,
+    "seed": 0,
+    "skipped": 0,
+    "trade_net_bps": -2.0639,
+    "trades": 1352
+  },
+  "cost_model": {
+    "broker": {
+      "assumed": false,
+      "key": "flattrade",
+      "label": "Flattrade",
+      "source": "https://flattrade.in/charges/",
+      "verified_on": "2026-10-01"
+    },
+    "capital": 100000.0,
+    "cost_model_version": 1,
+    "exchange": "NSE",
+    "flat_bps": 16.0,
+    "leverage": 5.0,
+    "mean_statutory_bps": 3.548,
+    "mean_total_bps": 11.548,
+    "model": "statutory-per-trade",
+    "modelled_net_pnl_rs": -16400.18,
+    "modelled_total_cost_rs": 164978.74,
+    "net_r": -0.0121,
+    "net_r_slip_2x": -0.0967,
+    "notional_basis": "risk",
+    "pnl_basis": "modelled: each trade is sized independently to capital x risk per trade / stop fraction, capped at capital x leverage, with no limit on concurrent positions or total capital; net is after the modelled statutory charges and slippage",
+    "product": "MIS",
+    "rate_table": {
+      "charges": {
+        "brokerage": {
+          "basis": "order",
+          "cap": 0.0,
+          "flat": 0.0,
+          "rate": 0.0,
+          "taxed": true
+        },
+        "exchange_txn": {
+          "basis": "turnover",
+          "cap": 0.0,
+          "flat": 0.0,
+          "rate": 3.07e-05,
+          "taxed": true
+        },
+        "sebi": {
+          "basis": "turnover",
+          "cap": 0.0,
+          "flat": 0.0,
+          "rate": 1e-06,
+          "taxed": true
+        },
+        "stamp_duty": {
+          "basis": "buy",
+          "cap": 0.0,
+          "flat": 0.0,
+          "rate": 3e-05,
+          "taxed": false
+        },
+        "stt": {
+          "basis": "sell",
+          "cap": 0.0,
+          "flat": 0.0,
+          "rate": 0.00025,
+          "taxed": false
+        }
+      },
+      "schedule": "India intraday (NSE) - Flattrade",
+      "tax_label": "GST",
+      "tax_rate": 0.18
+    },
+    "rate_table_sha256": "5afe5a29f6763958db4b8274681e2f887b0b53948213d5cad6f4801d94d87707",
+    "risk_per_trade": 0.01,
+    "scenarios": [
+      {
+        "definition": {
+          "broker": "flattrade",
+          "kind": "statutory",
+          "rate_table_sha256": "5afe5a29f6763958db4b8274681e2f887b0b53948213d5cad6f4801d94d87707",
+          "slippage_bps_per_side": 4.0
+        },
+        "id": "primary",
+        "mean_round_trip_bps": 11.548,
+        "net_bps": -2.0639,
+        "net_r": -0.0121,
+        "net_rs": -16400.18,
+        "slippage_stress": {
+          "1.5": {
+            "mean_round_trip_bps": 15.548,
+            "net_bps": -6.0639,
+            "net_r": -0.0544
+          },
+          "2.0": {
+            "mean_round_trip_bps": 19.548,
+            "net_bps": -10.0639,
+            "net_r": -0.0967
+          }
+        },
+        "t_stat": -0.472,
+        "win_rate": 0.4593
+      },
+      {
+        "definition": {
+          "broker": "default",
+          "kind": "statutory",
+          "rate_table_sha256": "872e7f65a616e67e0bb7dc9fdf1ede30823c353e6481d23738faf81cb13ff08e",
+          "slippage_bps_per_side": 4.0
+        },
+        "id": "generic_discount_broker",
+        "mean_round_trip_bps": 16.399,
+        "net_bps": -6.9151,
+        "net_r": -0.0577,
+        "net_rs": -77965.47,
+        "slippage_stress": {
+          "1.5": {
+            "mean_round_trip_bps": 20.399,
+            "net_bps": -10.9151,
+            "net_r": -0.0999
+          },
+          "2.0": {
+            "mean_round_trip_bps": 24.399,
+            "net_bps": -14.9151,
+            "net_r": -0.1422
+          }
+        },
+        "t_stat": -2.005,
+        "win_rate": 0.4386
+      },
+      {
+        "definition": {
+          "kind": "flat",
+          "round_trip_bps": 16.0
+        },
+        "id": "legacy_flat",
+        "mean_round_trip_bps": 16.0,
+        "net_bps": -6.5158,
+        "net_r": -0.0592,
+        "net_rs": -80000.62,
+        "t_stat": -1.888,
+        "win_rate": 0.4423
+      }
+    ],
+    "scenarios_sha256": "8b6ee5a0ede8e84ae56d12d1720e72136eba434fe7be4cd8ef20ec6dc08547cf",
+    "slippage_bps_per_side": 4.0,
+    "stress_levels": [
+      1.0,
+      1.5,
+      2.0
+    ],
+    "total_bps_at": {
+      "1.0": 11.548,
+      "1.5": 15.548,
+      "2.0": 19.548
+    },
+    "trades": 1352
+  },
+  "cost_sensitivity": [
+    {
+      "net_bps": 9.4843,
+      "round_trip_bps": 0
+    },
+    {
+      "net_bps": 4.4843,
+      "round_trip_bps": 5
+    },
+    {
+      "net_bps": -0.5157,
+      "round_trip_bps": 10
+    },
+    {
+      "net_bps": -2.0637,
+      "round_trip_bps": 11.548
+    },
+    {
+      "net_bps": -6.5157,
+      "round_trip_bps": 16.0
+    },
+    {
+      "net_bps": -10.5157,
+      "round_trip_bps": 20
+    }
+  ],
+  "costs": {
+    "broker": {
+      "assumed": false,
+      "key": "flattrade",
+      "label": "Flattrade",
+      "source": "https://flattrade.in/charges/",
+      "verified_on": "2026-10-01"
+    },
+    "cost_model_version": 1,
+    "flat_round_trip_bps": 16.0,
+    "model": "statutory-per-trade",
+    "rate_table_sha256": "5afe5a29f6763958db4b8274681e2f887b0b53948213d5cad6f4801d94d87707",
+    "reference_round_trip_bps": [],
+    "round_trip_bps": 11.548
+  },
+  "data_quality": {
+    "affects_validity": false,
+    "items": [],
+    "status": "PASS"
+  },
+  "evaluation": {
+    "criteria": "docs/STRATEGY-ACCEPTANCE-CRITERIA.md",
+    "dimensions": [
+      {
+        "name": "edge",
+        "rows": [
+          {
+            "evidence": "net expectancy -0.012R over 1352 trades (statutory-per-trade, broker flattrade, mean 11.55 bps)",
+            "gate": "G1.2",
+            "hard": true,
+            "status": "fail",
+            "threshold": ">= +0.05R per trade",
+            "title": "Net expectancy at 1.0x cost",
+            "value": -0.0121
+          },
+          {
+            "evidence": "gross 9.48 bps against 11.548 bps round trip: thin (primary mean, statutory-per-trade, broker flattrade, mean 11.55 bps); legacy flat 16 bps would give 0.59, secondary",
+            "gate": "G1.4",
+            "hard": false,
+            "status": "report",
+            "threshold": "gross / cost >= 1.5 is comfortable",
+            "title": "Gross edge vs cost",
+            "value": 0.8213
+          },
+          {
+            "evidence": "strategy net -2.0639 bps against random entry -10.1009 bps over 1352 matched trades: excess 8.0 bps, t 2.8; the signal adds value beyond random entry",
+            "gate": "X.4",
+            "hard": false,
+            "status": "report",
+            "threshold": "report: paired excess net bps over the matched random-entry baseline",
+            "title": "Edge over matched random entry",
+            "value": 8.0
+          }
+        ]
+      },
+      {
+        "name": "robustness",
+        "rows": [
+          {
+            "evidence": "no latency stage was run for this run (opt-in)",
+            "gate": "G4.2",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "report: entry delayed by one 5-minute bar; flag if the sign flips (alert lag is seconds, so one bar is a severe case)",
+            "title": "Latency",
+            "value": null
+          },
+          {
+            "evidence": "The intraday engine takes the stop before the target when one bar spans both, and fills a bar that opens beyond the stop at the open (STOP FIRST, pinned by engine tests). That is the pessimistic same-bar reading, so for this run the two readings are the same rule, the result is identical and the sign cannot flip. By construction, not by a second run. It covers the original stop and target only; a plan that raises the stop from the next bar is outside it and is not evaluated",
+            "gate": "G4.3",
+            "hard": false,
+            "status": "report",
+            "threshold": "report: stop-first against the pessimistic same-bar reading of exits; flag if the sign flips",
+            "title": "Bar resolution",
+            "value": "stop_first"
+          },
+          {
+            "evidence": "net profit -16.4R is not positive; 46% of 199 symbols net positive",
+            "gate": "G4.5",
+            "hard": true,
+            "status": "fail",
+            "threshold": "top 10 symbols <= 40% of net profit, >= 50% of symbols net positive",
+            "title": "Dispersion",
+            "value": null
+          },
+          {
+            "evidence": "618 long / 734 short trades; net -0.050R long, +0.020R short",
+            "gate": "G4.6",
+            "hard": false,
+            "status": "report",
+            "threshold": "longs and shorts reported separately; a one-sided strategy is declared",
+            "title": "Direction",
+            "value": 734
+          },
+          {
+            "evidence": "membership source current_symbol_master; survivorship bias True. The universe is today's symbol master applied to the past, not point-in-time membership: names that later left F&O or were delisted are absent and cannot be listed here because no historical membership source exists. Results are biased toward survivors",
+            "gate": "G4.7",
+            "hard": false,
+            "status": "report",
+            "threshold": "report: the universe uses today's list, which is survivor-biased; test on symbols as they existed and list names that later left",
+            "title": "Survivorship",
+            "value": true
+          },
+          {
+            "evidence": "needs an event calendar",
+            "gate": "G4.8",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Event days",
+            "value": null
+          }
+        ]
+      },
+      {
+        "name": "risk",
+        "rows": [
+          {
+            "evidence": "no Monte Carlo stage was run for this run (opt-in)",
+            "gate": "G5.1",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "at least 5,000 bootstrap paths, day-block and trade-level, at the deployed risk per trade: 95th percentile max drawdown at most 25% of capital and probability of ruin below 5%",
+            "title": "Monte Carlo",
+            "value": null
+          },
+          {
+            "evidence": "no run with the live caps was recorded; only a generic first-come-first-served slot sweep of the recorded trades exists (3 slots: net -2.31 bps; 5 slots: net -2.34 bps; 10 slots: net -2.06 bps), which applies no live limit. Information only, not evidence for this gate",
+            "gate": "G5.2",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "the live caps applied while the strategy runs; capped net expectancy >= +0.05R per trade and >= 200 trades (the G1.2 and G2.1 bars)",
+            "title": "Live caps applied",
+            "value": null
+          },
+          {
+            "evidence": "risk per trade 1.00% of capital against the 1% cap; estimated Kelly 0.00% per trade and 0.00% per session, the smaller (0.00%) used; 50% of it is 0.00%: the book has no positive edge to size (over). Kelly is a point estimate from 1352 recorded trades over 977 sessions (log-optimal on net R, grouped by IST entry date, uncapped trade list), so it is only as reliable as that sample. This is not proof that live sizing is safe: the risk is the nominal fraction the cost model sizes on, not a re-derivation of live sizing, and no portfolio cap, margin or capacity is applied",
+            "gate": "G5.3",
+            "hard": false,
+            "status": "fail",
+            "threshold": "risk per trade at most 1% of capital and never above 50% of the estimated Kelly fraction",
+            "title": "Sizing",
+            "value": null
+          },
+          {
+            "evidence": "no capacity stage was run for this run (opt-in)",
+            "gate": "G5.4",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "every entry order at most 10% of the median 5-minute volume at its entry time",
+            "title": "Capacity",
+            "value": null
+          },
+          {
+            "evidence": "the margin comes from the capped replay and no run with the live caps was recorded (opt-in --live-caps)",
+            "gate": "G5.5",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "worst-case simultaneous MIS margin at most 90% of capital",
+            "title": "Margin",
+            "value": null
+          }
+        ]
+      },
+      {
+        "name": "stability",
+        "rows": [
+          {
+            "evidence": "31.0% of trade days held out from 2023-11-08; whether it stayed untouched until the candidate was frozen is not recorded",
+            "gate": "G3.1",
+            "hard": false,
+            "status": "report",
+            "threshold": "last 30% to 40% of sessions",
+            "title": "Chronological hold-out",
+            "value": 0.3101
+          },
+          {
+            "evidence": "OOS -0.016R (433 trades) vs in-sample -0.010R (919 trades)",
+            "gate": "G3.2",
+            "hard": false,
+            "status": "fail",
+            "threshold": "OOS net > 0 and >= 40% of in-sample",
+            "title": "Out-of-sample result",
+            "value": -0.016
+          },
+          {
+            "evidence": "11 of 19 windows net positive (0 empty); shipped parameters held fixed in every window, so this is rolling stability, not a re-fit per window",
+            "gate": "G3.3",
+            "hard": false,
+            "status": "fail",
+            "threshold": "at least 4 rolling windows of 6 months; net above 0 in at least 60%",
+            "title": "Walk-forward",
+            "value": 0.5789
+          },
+          {
+            "evidence": "half A -0.007R (638 trades), half B -0.017R (714 trades)",
+            "gate": "G3.4",
+            "hard": false,
+            "status": "fail",
+            "threshold": "both symbol halves net > 0, weaker >= 40% of stronger",
+            "title": "Symbol hold-out",
+            "value": -0.0169
+          },
+          {
+            "evidence": "0 trades straddled the cut and were purged from in-sample; embargo 1 session(s) removed 0 out-of-sample trades",
+            "gate": "G3.5",
+            "hard": false,
+            "status": "pass",
+            "threshold": "no trade straddles the split; embargo of at least 1 session",
+            "title": "Leakage and embargo",
+            "value": 0
+          }
+        ]
+      },
+      {
+        "name": "cost_sensitivity",
+        "rows": [
+          {
+            "evidence": "statutory schedule (MIS, NSE) priced per trade at the deployed notional (capital 100,000, risk 1.00% per trade, leverage 5x) plus 4 bps slippage per side: mean 11.55 bps against the legacy flat 16 bps",
+            "gate": "G1.1",
+            "hard": false,
+            "status": "pass",
+            "threshold": "statutory charges at deployed notional plus slippage",
+            "title": "Cost model",
+            "value": 11.548
+          },
+          {
+            "evidence": "net -0.097R at 2.0x slippage (1.0x -0.012R); total cost 11.55 bps at 1.0x, 15.55 bps at 1.5x, 19.55 bps at 2.0x; other scenarios, report only: generic_discount_broker net -6.92 bps, legacy_flat net -6.52 bps",
+            "gate": "G1.3",
+            "hard": true,
+            "status": "fail",
+            "threshold": "net expectancy above 0 with slippage doubled (8 bps per side)",
+            "title": "Slippage stress",
+            "value": -0.0967
+          },
+          {
+            "evidence": "median cost 0.117R per trade (statutory-per-trade, broker flattrade, mean 11.55 bps)",
+            "gate": "G1.5",
+            "hard": true,
+            "status": "pass",
+            "threshold": "median cost <= 0.40R",
+            "title": "Cost per trade in R",
+            "value": 0.1167
+          },
+          {
+            "evidence": "stop width, 1360 accepted signals: <0.20%: 0 (0%); 0.20-0.30%: 0 (0%); 0.30-0.50%: 28 (2%); 0.50-0.75%: 280 (21%); 0.75-1.00%: 387 (28%); >=1.00%: 665 (49%)",
+            "gate": "G1.6",
+            "hard": false,
+            "status": "report",
+            "threshold": "report: if a fixed floor sets most stops (more than 50% at one width), show results at other floors",
+            "title": "Stop floor",
+            "value": 0.0169
+          }
+        ]
+      },
+      {
+        "name": "regime_robustness",
+        "rows": [
+          {
+            "evidence": "5 of 10 years net positive; worst 2021 at -0.140R; market regimes are scored by X.2",
+            "gate": "G4.4",
+            "hard": true,
+            "status": "fail",
+            "threshold": ">= 60% of calendar years net positive, worst year >= -0.25R",
+            "title": "Sub-periods",
+            "value": 0.5
+          },
+          {
+            "evidence": "no regime block supplied for this run",
+            "gate": "X.2",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "heuristic (calibrated): net positive in every sampled regime of each judged dimension",
+            "title": "Regime dispersion",
+            "value": null
+          },
+          {
+            "evidence": "no regime block supplied for this run",
+            "gate": "X.3",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "hypothesis only; validate the filtered strategy out-of-sample",
+            "title": "Regime activation hypothesis",
+            "value": null
+          }
+        ]
+      },
+      {
+        "name": "parameter_sensitivity",
+        "rows": [
+          {
+            "evidence": "the perturbation stage was not run for this run",
+            "gate": "G4.1",
+            "hard": true,
+            "status": "not_evaluated",
+            "threshold": "at least 7 in 10 of the +-20% one-at-a-time neighbours net positive, and none keeping less than 40% of the base net R per trade",
+            "title": "Parameter perturbation",
+            "value": null
+          }
+        ]
+      },
+      {
+        "name": "statistical_confidence",
+        "rows": [
+          {
+            "evidence": "1352 trades",
+            "gate": "G2.1",
+            "hard": false,
+            "status": "pass",
+            "threshold": ">= 200 net trades",
+            "title": "Trade count",
+            "value": 1352
+          },
+          {
+            "evidence": "day-clustered t -0.47, against the larger of the criteria level 2.50 and the record's Sidak hurdle 2.77 (976 degrees of freedom)",
+            "gate": "G2.2",
+            "hard": true,
+            "status": "fail",
+            "threshold": ">= 2.77 at 9 trials",
+            "title": "Day-clustered t-statistic",
+            "value": -0.472
+          },
+          {
+            "evidence": "DSR 0.029 over 2404 sessions at 9 trials (daily Sharpe -0.008 against a deflation threshold of 0.031); series: each trade booked on its entry session, idle sessions zero-filled (calendar sessions); assumption: trial Sharpe variance is assumed to be the no-edge sampling variance, because only the trial count is recorded",
+            "gate": "G2.3",
+            "hard": false,
+            "status": "fail",
+            "threshold": "DSR >= 0.90 at the true trial count",
+            "title": "Deflated Sharpe",
+            "value": 0.0285
+          },
+          {
+            "evidence": "9 trials were tried; PBO needs the daily P&L of each variant on a common grid and is not computed yet (stats.pbo_cscv exists)",
+            "gate": "G2.4",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "PBO (CSCV) at most 0.30 across the variants tried",
+            "title": "Probability of backtest overfitting",
+            "value": null
+          },
+          {
+            "evidence": "n_trials 9 from trials.yaml: 2 material and 7 external",
+            "gate": "G2.5",
+            "hard": false,
+            "status": "pass",
+            "threshold": "every variant tried is counted in trials.yaml; DSR and the t-hurdle use that count",
+            "title": "Trials ledger",
+            "value": 9
+          },
+          {
+            "evidence": "Newey-West t -0.42 over 2404 sessions (plain daily t -0.41; series: each trade booked on its entry session, idle sessions zero-filled (calendar sessions)); compare with the G2.2 bar, which the trade-clustered t already has to clear",
+            "gate": "G2.6",
+            "hard": false,
+            "status": "report",
+            "threshold": "t on daily aggregated P&L with a Newey-West autocorrelation adjustment",
+            "title": "Dependence (Newey-West)",
+            "value": -0.42
+          },
+          {
+            "evidence": "2404 sessions observed; the observed Sharpe is not above zero, so no track length would be enough (series: each trade booked on its entry session, idle sessions zero-filled (calendar sessions))",
+            "gate": "G2.7",
+            "hard": false,
+            "status": "report",
+            "threshold": "sample length against the Minimum Track Record Length at 95 percent",
+            "title": "Track length",
+            "value": null
+          }
+        ]
+      },
+      {
+        "name": "complexity",
+        "rows": [
+          {
+            "evidence": "12 strategy parameters",
+            "gate": "X.1",
+            "hard": false,
+            "status": "report",
+            "threshold": "fewer assumptions are better",
+            "title": "Strategy parameter count",
+            "value": 12
+          }
+        ]
+      },
+      {
+        "name": "integrity",
+        "rows": [
+          {
+            "evidence": "no valid attestation (missing): no G0.1 attestation covers strategy 'BalanceBreakout'. G0.1 needs a code review that a program cannot supply; see attestations/ledger.ndjson",
+            "gate": "G0.1",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "an attestation of the code review and adapter checks, at a commit that is an ancestor of the run's, with nothing under its covered paths changed since",
+            "title": "Same logic in every mode",
+            "value": null
+          },
+          {
+            "evidence": "3 symbol(s) re-run at 10 cut(s): no earlier signal or trade changed",
+            "gate": "G0.2",
+            "hard": false,
+            "status": "pass",
+            "threshold": "a run on data cut at earlier sessions reproduces every earlier signal and trade",
+            "title": "Causality of every input",
+            "value": 3
+          },
+          {
+            "evidence": "stored as epoch seconds, converted to IST at load; all 5 ledger time columns are IST. open-time stamping is a property of each loader and is covered by its unit test, not re-proved per run",
+            "gate": "G0.3",
+            "hard": false,
+            "status": "pass",
+            "threshold": "all external times converted to IST at the boundary; bar timestamps are open-time",
+            "title": "Timestamps in IST",
+            "value": 0
+          },
+          {
+            "evidence": "60 of 206 symbols audited (an evenly spaced sample); no gap in the sample, the remaining symbols are not checked, so the criterion cannot be passed. audit floor is 98% of expected bars against 98.7% in the criterion; the auction-era exemption from 2026-08-03 is not modelled. Short or irregular sessions in the calendar: 2026-08-03, 2026-08-04, 2026-08-05, 2026-08-06, 2026-08-07, 2026-08-10, 2026-08-11, 2026-08-12, 2026-08-13, 2026-08-14, 2026-08-17, 2026-08-18, 2026-08-19, 2026-08-20, 2026-08-21, 2026-08-24, 2026-08-25, 2026-08-26, 2026-08-27, 2026-08-28, 2026-08-31, 2026-09-01, 2026-09-02, 2026-09-03, 2026-09-04, 2026-09-07, 2026-09-08, 2026-09-09, 2026-09-10, 2026-09-11, 2026-09-15, 2026-09-16, 2026-09-17, 2026-09-18, 2026-09-21, 2026-09-22, 2026-09-23, 2026-09-24, 2026-09-25, 2026-09-28, 2026-09-29, 2026-09-30, 2026-10-01, 2026-10-05, 2026-10-06, 2026-10-07, 2026-10-08, 2026-10-09, 2026-10-12, 2026-10-13, 2026-10-14, 2026-10-15, 2026-10-16, 2026-10-19.",
+            "gate": "G0.4",
+            "hard": false,
+            "status": "report",
+            "threshold": "every symbol-session used has at least 370 one-minute bars (98.7% of a 375-bar session); gaps listed by name",
+            "title": "Data coverage",
+            "value": null
+          },
+          {
+            "evidence": "ledgers reconcile; exclusions by reason code: ENTRY_CUTOFF=11529258, ENTRY_SKIPPED_BEYOND_LEVEL=8, MAX_TRADES_DAY=23100, NOT_ELIGIBLE=6654, NO_NEXT_BAR=399988, POSITION_OPEN=45422, WARMUP=2884",
+            "gate": "G0.5",
+            "hard": false,
+            "status": "pass",
+            "threshold": "ledgers reconcile exactly; every exclusion carries a known reason code",
+            "title": "No silent exclusion",
+            "value": 0
+          },
+          {
+            "evidence": "data layer: only the 09:15-15:29 continuous session is kept; bars outside it, including any closing-auction prints, are dropped by the loader. Whether a feature or strategy reads bars from 15:15 onward is a property of its code (features/session.py), not checked per run",
+            "gate": "G0.6",
+            "hard": false,
+            "status": "report",
+            "threshold": "report: intraday level profiles use continuous-market bars only, stamped before 15:15",
+            "title": "Closing auction handled",
+            "value": null
+          },
+          {
+            "evidence": "no valid attestation (stale) (latest record G0.7-001): 11 covered file(s) changed since the attested commit, e.g. signal_engine/features/session.py. G0.7 needs recorded coverage figures; see attestations/ledger.ndjson",
+            "gate": "G0.7",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "an attestation with at least 80% statement coverage on features and strategy_core, at a commit that is an ancestor of the run's, with nothing under its covered paths changed since; tests written before code",
+            "title": "Test quality",
+            "value": null
+          },
+          {
+            "evidence": "policy: intraday: sessions whose open versus previous close ratio lies outside 0.75 to 1.33 are excluded as probable splits; daily: back-adjusted for detected splits; dividends, bonuses and rights issues are NOT detected. This run excluded 0 symbol-sessions across 0 symbols as probable splits. Limits: the 0.75 to 1.33 test cannot see dividends, bonuses or rights, and ex-date handling is not verified, so this gate does not pass",
+            "gate": "G0.8",
+            "hard": false,
+            "status": "report",
+            "threshold": "report: split and bonus sessions excluded or adjusted; ex-date handling verified",
+            "title": "Corporate actions",
+            "value": 0
+          }
+        ]
+      },
+      {
+        "name": "deployment",
+        "rows": [
+          {
+            "evidence": "first offender: F|O|ABB|2020-07-22T10:10:00+05:30|1|entry1 entry from a signal bar at 10:10 is outside the entry window (365 offending fills)",
+            "gate": "G6.1",
+            "hard": false,
+            "status": "fail",
+            "threshold": "entries from signal bars inside the strategy window; every exit bar closes by square-off - margin",
+            "title": "Session and square-off",
+            "value": 365
+          },
+          {
+            "evidence": "data-driven eligibility policy (min_prior_sessions=60, min_volume=1.0, min_price=10.0 on NSE raw last-bar close (factors from nse-daily-20261019-001)); 6654 symbol-sessions NOT_ELIGIBLE (LISTING_AGE=4320, PRICE_FLOOR=2334), each logged by symbol and date in exclusions.parquet. ASM, GSM, T2T and broker MIS block lists are not modelled",
+            "gate": "G6.2",
+            "hard": false,
+            "status": "report",
+            "threshold": "report: skip names under ASM, GSM or T2T, names the broker blocks for MIS, and names without a valid tick; log each by name",
+            "title": "Daily eligibility",
+            "value": 6654
+          },
+          {
+            "evidence": "809 of 1352 entries (59.8%) have a stop or target beyond 2% of the signal price and 2 (0.1%) beyond 10%; the furthest level is 11.71%. This is a bound, not a check against the actual daily bands (not held), and the signal price stands in for the previous close",
+            "gate": "G6.3",
+            "hard": false,
+            "status": "report",
+            "threshold": "report: entries whose stop or target lies beyond the day's price band; bounds 2% (tightest fixed band) and 10% (F&O dynamic range)",
+            "title": "Circuits",
+            "value": 0.5984
+          },
+          {
+            "evidence": "all 1352 stop triggers are on the exchange tick grid of their own date (dated reference v1, partial verification, sha256 a0714114834f). Broker acceptance of a trigger is a pre-live check, not part of this gate.",
+            "gate": "G6.4",
+            "hard": false,
+            "status": "pass",
+            "threshold": "every modelled stop trigger a multiple of the exchange tick in force on its own date (dated reference)",
+            "title": "Tick size",
+            "value": 1352
+          },
+          {
+            "evidence": "3 of 1352 trades (0.2%) exited by SL_GAP or SL_GAP_ENTRY; mean loss beyond the stop 0.006R. The live stop type (SL-M versus SL) is not tested here",
+            "gate": "G6.5",
+            "hard": false,
+            "status": "report",
+            "threshold": "report: share of trades stopped by a gap, and the mean loss beyond the stop",
+            "title": "Gap-through stops",
+            "value": 0.0022
+          },
+          {
+            "evidence": "operational",
+            "gate": "G6.6",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "SEBI retail algo framework",
+            "value": null
+          },
+          {
+            "evidence": "broker flattrade, verified 2026-10-01 (27 days before the run date 2026-10-28), source https://flattrade.in/charges/. The date is the one recorded with the schedule; it is not re-checked against the broker here",
+            "gate": "G6.7",
+            "hard": false,
+            "status": "pass",
+            "threshold": "fee schedule verified within the 92 days up to and including the run date",
+            "title": "Charges current",
+            "value": 27.0
+          },
+          {
+            "evidence": "no trade is open at the auction; latest exit completes 14:50; the standing time exit is 14:55",
+            "gate": "G6.8",
+            "hard": false,
+            "status": "pass",
+            "threshold": "flat before the closing auction (15:15 IST): every exit completes by then and the standing time exit sits before it",
+            "title": "Closing auction awareness",
+            "value": "14:50"
+          },
+          {
+            "evidence": "latest exit at 14:45",
+            "gate": "G6.9",
+            "hard": true,
+            "status": "pass",
+            "threshold": "no trade open at or after 15:00 IST",
+            "title": "Backtest respects the square-off",
+            "value": "14:45"
+          },
+          {
+            "evidence": "needs paper data",
+            "gate": "G7.1",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Paper incubation duration",
+            "value": null
+          },
+          {
+            "evidence": "needs paper data",
+            "gate": "G7.2",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Signal parity",
+            "value": null
+          },
+          {
+            "evidence": "needs paper data",
+            "gate": "G7.3",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Execution quality",
+            "value": null
+          },
+          {
+            "evidence": "needs paper data",
+            "gate": "G7.4",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Paper tracking",
+            "value": null
+          },
+          {
+            "evidence": "needs live data",
+            "gate": "G7.5",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Capital ramp",
+            "value": null
+          },
+          {
+            "evidence": "operational",
+            "gate": "G8.1",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Kill switch",
+            "value": null
+          },
+          {
+            "evidence": "operational",
+            "gate": "G8.2",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Pre-trade controls",
+            "value": null
+          },
+          {
+            "evidence": "operational",
+            "gate": "G8.3",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Recovery",
+            "value": null
+          },
+          {
+            "evidence": "operational",
+            "gate": "G8.4",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Clock",
+            "value": null
+          },
+          {
+            "evidence": "operational",
+            "gate": "G8.5",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Broker sessions",
+            "value": null
+          },
+          {
+            "evidence": "operational",
+            "gate": "G8.6",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Audit trail",
+            "value": null
+          },
+          {
+            "evidence": "operational",
+            "gate": "G8.7",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Change control",
+            "value": null
+          },
+          {
+            "evidence": "operational",
+            "gate": "G8.8",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Alert escalation",
+            "value": null
+          },
+          {
+            "evidence": "needs live data",
+            "gate": "G9.1",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Decay watch",
+            "value": null
+          },
+          {
+            "evidence": "needs live data",
+            "gate": "G9.2",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Drawdown watch",
+            "value": null
+          },
+          {
+            "evidence": "needs live data",
+            "gate": "G9.3",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Re-validation",
+            "value": null
+          },
+          {
+            "evidence": "needs live data",
+            "gate": "G9.4",
+            "hard": false,
+            "status": "not_evaluated",
+            "threshold": "",
+            "title": "Retirement",
+            "value": null
+          }
+        ]
+      }
+    ],
+    "horizon": "intraday",
+    "summary": {
+      "counts": {
+        "fail": 11,
+        "not_applicable": 0,
+        "not_evaluated": 30,
+        "pass": 12,
+        "report": 16
+      },
+      "hard_failed": [
+        "G1.2",
+        "G4.5",
+        "G1.3",
+        "G4.4",
+        "G2.2"
+      ]
+    },
+    "version": 2
+  },
+  "exit_views": {
+    "data_gap": {
+      "closes": [],
+      "net_r_total": 0.0,
+      "trades": 0
+    },
+    "economic": {
+      "gross_r_mean": 0.109895,
+      "net_r_mean": -0.01213,
+      "net_r_total": -16.400181,
+      "trades": 1352
+    },
+    "protection": {
+      "TIME_EXIT": {
+        "net_r_mean": 0.221626,
+        "net_r_total": 187.717083,
+        "trades": 847
+      }
+    },
+    "strategy": {
+      "avg_r_gross": -0.28146,
+      "avg_r_net": -0.404193,
+      "decided_trades": 505,
+      "win_rate_net": 0.261386
+    }
+  },
+  "ledgers": {
+    "accepted": 1360,
+    "dropped": 8,
+    "excluded_by_reason": {
+      "ENTRY_CUTOFF": 11529258,
+      "ENTRY_SKIPPED_BEYOND_LEVEL": 8,
+      "MAX_TRADES_DAY": 23100,
+      "NOT_ELIGIBLE": 6654,
+      "NO_NEXT_BAR": 399988,
+      "POSITION_OPEN": 45422,
+      "WARMUP": 2884
+    },
+    "filled": 1352,
+    "fills": 2704,
+    "orders": 1360,
+    "problems": [],
+    "reconcile_problems": 0,
+    "signals": 1360,
+    "trades": 1352
+  },
+  "metrics": {
+    "breakeven_cost_bps": 9.4843,
+    "days": 977,
+    "expectancy_r": -0.0121,
+    "gross_bps": 9.4843,
+    "hurdle_t": 2.796,
+    "max_dd_r": 53.5947,
+    "median_concurrent": 1.0,
+    "net_bps": -2.0639,
+    "payoff": 1.142,
+    "peak_concurrent": 7,
+    "profit_factor": 0.97,
+    "sharpe": -0.332,
+    "t_stat": -0.472,
+    "total_cost_r": 164.9787,
+    "trades": 1352,
+    "win_rate": 0.4593
+  },
+  "n_trials": 9,
+  "next_action": {
+    "action": "Check the session window and square-off times",
+    "gate": "G6.1",
+    "reason": "Positions must close before the broker does it; also commit the working tree and re-run from a clean state"
+  },
+  "notes": "Shipped default configuration on nse_fno_current-206-eligible-symbols. n_trials=9 from trials.yaml: 2 material configuration(s) and 7 external. Regime analysis not available: no independent NIFTY series was loaded; the stock basket is never used as a stand-in and the verdict is unaffected. (not requested: pass --regimes).",
+  "position_caps": [
+    {
+      "gross_bps": 9.2347,
+      "max_positions": 3,
+      "net_bps": -2.3135,
+      "sharpe": -0.382,
+      "t_stat": -0.397,
+      "taken_pct": 98.2,
+      "trades": 1327,
+      "win_rate": 0.4559
+    },
+    {
+      "gross_bps": 9.2071,
+      "max_positions": 5,
+      "net_bps": -2.341,
+      "sharpe": -0.383,
+      "t_stat": -0.462,
+      "taken_pct": 99.7,
+      "trades": 1348,
+      "win_rate": 0.4577
+    },
+    {
+      "gross_bps": 9.4843,
+      "max_positions": 10,
+      "net_bps": -2.0639,
+      "sharpe": -0.332,
+      "t_stat": -0.472,
+      "taken_pct": 100.0,
+      "trades": 1352,
+      "win_rate": 0.4593
+    }
+  ],
+  "promotion": {
+    "critical": [],
+    "limitations": [
+      "Point-in-time universe membership and per-date eligibility"
+    ],
+    "next_stage": null,
+    "stages": {
+      "backtest": {
+        "decision": "NOT_READY",
+        "gates": [
+          {
+            "gate": "G0.1",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G0.2",
+            "status": "PASS"
+          },
+          {
+            "gate": "G0.3",
+            "status": "PASS"
+          },
+          {
+            "gate": "G0.4",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G0.5",
+            "status": "PASS"
+          },
+          {
+            "gate": "G0.6",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G0.8",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G1.1",
+            "status": "PASS"
+          },
+          {
+            "gate": "G1.2",
+            "status": "FAIL"
+          },
+          {
+            "gate": "G1.3",
+            "status": "FAIL"
+          },
+          {
+            "gate": "G1.4",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G1.5",
+            "status": "PASS"
+          },
+          {
+            "gate": "G1.6",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G2.1",
+            "status": "PASS"
+          },
+          {
+            "gate": "G2.2",
+            "status": "FAIL"
+          },
+          {
+            "gate": "G2.3",
+            "status": "FAIL"
+          },
+          {
+            "gate": "G2.5",
+            "status": "PASS"
+          },
+          {
+            "gate": "G2.6",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G2.7",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G3.1",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G3.2",
+            "status": "FAIL"
+          },
+          {
+            "gate": "G3.3",
+            "status": "FAIL"
+          },
+          {
+            "gate": "G3.4",
+            "status": "FAIL"
+          },
+          {
+            "gate": "G3.5",
+            "status": "PASS"
+          },
+          {
+            "gate": "G4.1",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G4.2",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G4.3",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G4.4",
+            "status": "FAIL"
+          },
+          {
+            "gate": "G4.5",
+            "status": "FAIL"
+          },
+          {
+            "gate": "G4.6",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G4.7",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G5.1",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G5.2",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G5.3",
+            "status": "FAIL"
+          },
+          {
+            "gate": "G5.4",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G5.5",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G6.1",
+            "status": "FAIL"
+          },
+          {
+            "gate": "G6.2",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G6.3",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G6.4",
+            "status": "PASS"
+          },
+          {
+            "gate": "G6.5",
+            "status": "REPORT"
+          },
+          {
+            "gate": "G6.7",
+            "status": "PASS"
+          },
+          {
+            "gate": "G6.8",
+            "status": "PASS"
+          },
+          {
+            "gate": "G6.9",
+            "status": "PASS"
+          },
+          {
+            "gate": "X.1",
+            "status": "REPORT"
+          },
+          {
+            "gate": "X.2",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "X.3",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "X.4",
+            "status": "REPORT"
+          }
+        ],
+        "reasons": [
+          "gate G0.1 has not been run",
+          "gate G1.2 failed",
+          "gate G1.3 failed",
+          "gate G2.2 failed",
+          "gate G2.3 failed",
+          "gate G3.2 failed",
+          "gate G3.3 failed",
+          "gate G3.4 failed",
+          "gate G4.1 has not been run",
+          "gate G4.2 has not been run",
+          "gate G4.4 failed",
+          "gate G4.5 failed",
+          "gate G5.1 has not been run",
+          "gate G5.2 has not been run",
+          "gate G5.3 failed",
+          "gate G5.4 has not been run",
+          "gate G5.5 has not been run",
+          "gate G6.1 failed",
+          "research verdict is INCONCLUSIVE",
+          "dirty working tree",
+          "not reproducible"
+        ]
+      },
+      "live": {
+        "decision": "BLOCKED",
+        "gates": [
+          {
+            "gate": "G0.7",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G2.4",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G9.1",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G9.2",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G9.3",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G9.4",
+            "status": "NOT_RUN"
+          }
+        ],
+        "reasons": [
+          "the backtest stage is not ready"
+        ]
+      },
+      "paper": {
+        "decision": "BLOCKED",
+        "gates": [
+          {
+            "gate": "G4.8",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G6.6",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G7.1",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G7.2",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G7.3",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G7.4",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G7.5",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G8.1",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G8.2",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G8.3",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G8.4",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G8.5",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G8.6",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G8.7",
+            "status": "NOT_RUN"
+          },
+          {
+            "gate": "G8.8",
+            "status": "NOT_RUN"
+          }
+        ],
+        "reasons": [
+          "the backtest stage is not ready"
+        ]
+      }
+    }
+  },
+  "run_status": "VALID",
+  "schema": 4,
+  "series": {
+    "drawdown_r": [
+      [
+        "2017-01-23",
+        -2.0238
+      ],
+      [
+        "2017-01-25",
+        -2.2406
+      ],
+      [
+        "2017-02-02",
+        -3.313
+      ],
+      [
+        "2017-02-08",
+        -2.3971
+      ],
+      [
+        "2017-02-09",
+        -3.4245
+      ],
+      [
+        "2017-02-15",
+        -3.3432
+      ],
+      [
+        "2017-02-27",
+        -4.1024
+      ],
+      [
+        "2017-02-28",
+        -6.0166
+      ],
+      [
+        "2017-03-08",
+        -4.5492
+      ],
+      [
+        "2017-03-10",
+        -3.3645
+      ],
+      [
+        "2017-03-31",
+        -3.6866
+      ],
+      [
+        "2017-04-19",
+        -0.3447
+      ],
+      [
+        "2017-05-02",
+        -1.901
+      ],
+      [
+        "2017-05-03",
+        -0.203
+      ],
+      [
+        "2017-05-09",
+        -1.2376
+      ],
+      [
+        "2017-05-12",
+        -1.3337
+      ],
+      [
+        "2017-05-25",
+        -0.7028
+      ],
+      [
+        "2017-06-14",
+        0.0
+      ],
+      [
+        "2017-06-23",
+        -1.4854
+      ],
+      [
+        "2017-06-30",
+        -1.6976
+      ],
+      [
+        "2017-07-11",
+        -1.5269
+      ],
+      [
+        "2017-07-21",
+        0.0
+      ],
+      [
+        "2017-08-07",
+        -1.7853
+      ],
+      [
+        "2017-08-08",
+        -2.7447
+      ],
+      [
+        "2017-08-29",
+        -0.0069
+      ],
+      [
+        "2017-09-01",
+        -0.4361
+      ],
+      [
+        "2017-09-12",
+        -1.0488
+      ],
+      [
+        "2017-09-21",
+        -3.087
+      ],
+      [
+        "2017-10-05",
+        -4.7966
+      ],
+      [
+        "2017-10-06",
+        -4.4109
+      ],
+      [
+        "2017-10-12",
+        -4.5035
+      ],
+      [
+        "2017-10-30",
+        -3.4907
+      ],
+      [
+        "2017-11-08",
+        -4.8141
+      ],
+      [
+        "2017-11-10",
+        -6.0148
+      ],
+      [
+        "2017-11-28",
+        -6.2673
+      ],
+      [
+        "2017-11-29",
+        -6.4882
+      ],
+      [
+        "2017-12-06",
+        -3.9627
+      ],
+      [
+        "2017-12-18",
+        -3.0358
+      ],
+      [
+        "2017-12-28",
+        -4.7078
+      ],
+      [
+        "2018-01-02",
+        -5.9565
+      ],
+      [
+        "2018-01-09",
+        -6.7104
+      ],
+      [
+        "2018-01-12",
+        -6.729
+      ],
+      [
+        "2018-01-17",
+        -1.1849
+      ],
+      [
+        "2018-01-24",
+        -2.8029
+      ],
+      [
+        "2018-01-25",
+        -0.9354
+      ],
+      [
+        "2018-02-01",
+        -1.0317
+      ],
+      [
+        "2018-02-05",
+        -1.07
+      ],
+      [
+        "2018-02-15",
+        -1.435
+      ],
+      [
+        "2018-02-27",
+        -3.7287
+      ],
+      [
+        "2018-03-06",
+        -1.2543
+      ],
+      [
+        "2018-03-19",
+        -1.5513
+      ],
+      [
+        "2018-03-22",
+        0.0
+      ],
+      [
+        "2018-03-27",
+        0.0
+      ],
+      [
+        "2018-04-09",
+        -1.2674
+      ],
+      [
+        "2018-04-16",
+        -1.1235
+      ],
+      [
+        "2018-04-20",
+        -2.0801
+      ],
+      [
+        "2018-05-03",
+        -1.0
+      ],
+      [
+        "2018-05-11",
+        -1.6113
+      ],
+      [
+        "2018-05-15",
+        -2.9728
+      ],
+      [
+        "2018-05-17",
+        -0.7337
+      ],
+      [
+        "2018-05-29",
+        -0.6913
+      ],
+      [
+        "2018-06-05",
+        -1.103
+      ],
+      [
+        "2018-06-13",
+        -2.1157
+      ],
+      [
+        "2018-06-22",
+        -2.6828
+      ],
+      [
+        "2018-06-28",
+        -4.1798
+      ],
+      [
+        "2018-07-02",
+        -5.2699
+      ],
+      [
+        "2018-07-06",
+        -3.7951
+      ],
+      [
+        "2018-07-10",
+        -4.9315
+      ],
+      [
+        "2018-07-27",
+        -2.9779
+      ],
+      [
+        "2018-08-06",
+        -3.2296
+      ],
+      [
+        "2018-08-08",
+        -2.7932
+      ],
+      [
+        "2018-08-29",
+        -2.1396
+      ],
+      [
+        "2018-08-31",
+        -2.352
+      ],
+      [
+        "2018-09-11",
+        -2.6315
+      ],
+      [
+        "2018-09-18",
+        -1.6095
+      ],
+      [
+        "2018-09-27",
+        -2.2159
+      ],
+      [
+        "2018-10-03",
+        -3.927
+      ],
+      [
+        "2018-10-12",
+        -5.2735
+      ],
+      [
+        "2018-10-25",
+        -6.7712
+      ],
+      [
+        "2018-10-26",
+        -5.4607
+      ],
+      [
+        "2018-11-06",
+        -5.8341
+      ],
+      [
+        "2018-11-16",
+        -5.6395
+      ],
+      [
+        "2018-11-26",
+        -5.1763
+      ],
+      [
+        "2018-11-28",
+        -3.199
+      ],
+      [
+        "2018-12-14",
+        -3.6264
+      ],
+      [
+        "2018-12-26",
+        -4.8619
+      ],
+      [
+        "2018-12-27",
+        -5.2699
+      ],
+      [
+        "2019-01-07",
+        -6.8853
+      ],
+      [
+        "2019-01-09",
+        -6.6896
+      ],
+      [
+        "2019-01-11",
+        -8.1984
+      ],
+      [
+        "2019-01-16",
+        -10.6369
+      ],
+      [
+        "2019-01-21",
+        -11.2146
+      ],
+      [
+        "2019-02-04",
+        -12.3109
+      ],
+      [
+        "2019-02-27",
+        -12.3369
+      ],
+      [
+        "2019-03-01",
+        -11.1588
+      ],
+      [
+        "2019-03-05",
+        -10.1064
+      ],
+      [
+        "2019-03-08",
+        -7.9468
+      ],
+      [
+        "2019-03-22",
+        -4.6177
+      ],
+      [
+        "2019-03-26",
+        -2.6255
+      ],
+      [
+        "2019-04-09",
+        -1.4419
+      ],
+      [
+        "2019-04-18",
+        -2.5129
+      ],
+      [
+        "2019-05-06",
+        -3.7484
+      ],
+      [
+        "2019-05-15",
+        -4.9021
+      ],
+      [
+        "2019-05-16",
+        -5.9766
+      ],
+      [
+        "2019-05-21",
+        -5.5579
+      ],
+      [
+        "2019-05-27",
+        -4.933
+      ],
+      [
+        "2019-05-29",
+        -5.3451
+      ],
+      [
+        "2019-06-06",
+        -3.4028
+      ],
+      [
+        "2019-06-12",
+        -3.1623
+      ],
+      [
+        "2019-06-17",
+        -2.86
+      ],
+      [
+        "2019-06-24",
+        -3.1885
+      ],
+      [
+        "2019-07-03",
+        -4.8128
+      ],
+      [
+        "2019-07-08",
+        -6.9902
+      ],
+      [
+        "2019-07-15",
+        -9.6647
+      ],
+      [
+        "2019-07-19",
+        -9.7478
+      ],
+      [
+        "2019-07-26",
+        -9.8678
+      ],
+      [
+        "2019-07-30",
+        -8.5596
+      ],
+      [
+        "2019-08-07",
+        -7.5938
+      ],
+      [
+        "2019-08-08",
+        -8.643
+      ],
+      [
+        "2019-09-06",
+        -9.1006
+      ],
+      [
+        "2019-09-16",
+        -9.6986
+      ],
+      [
+        "2019-09-19",
+        -9.7726
+      ],
+      [
+        "2019-10-03",
+        -8.8009
+      ],
+      [
+        "2019-10-10",
+        -9.6027
+      ],
+      [
+        "2019-10-15",
+        -11.3578
+      ],
+      [
+        "2019-10-16",
+        -11.4048
+      ],
+      [
+        "2019-10-29",
+        -10.9386
+      ],
+      [
+        "2019-10-31",
+        -10.9227
+      ],
+      [
+        "2019-11-07",
+        -10.1211
+      ],
+      [
+        "2019-11-08",
+        -10.1265
+      ],
+      [
+        "2019-11-14",
+        -8.7553
+      ],
+      [
+        "2019-11-18",
+        -5.7402
+      ],
+      [
+        "2019-11-21",
+        -4.8753
+      ],
+      [
+        "2019-12-03",
+        -4.2548
+      ],
+      [
+        "2019-12-05",
+        -5.3836
+      ],
+      [
+        "2019-12-11",
+        -6.6157
+      ],
+      [
+        "2019-12-23",
+        -8.1715
+      ],
+      [
+        "2019-12-30",
+        -8.3737
+      ],
+      [
+        "2020-01-16",
+        -6.5579
+      ],
+      [
+        "2020-01-23",
+        -7.7118
+      ],
+      [
+        "2020-02-05",
+        -8.7745
+      ],
+      [
+        "2020-02-11",
+        -9.4959
+      ],
+      [
+        "2020-02-12",
+        -9.845
+      ],
+      [
+        "2020-03-03",
+        -7.9348
+      ],
+      [
+        "2020-03-05",
+        -8.5758
+      ],
+      [
+        "2020-03-20",
+        -8.223
+      ],
+      [
+        "2020-04-07",
+        -4.7468
+      ],
+      [
+        "2020-04-17",
+        -3.1268
+      ],
+      [
+        "2020-05-13",
+        0.0
+      ],
+      [
+        "2020-06-10",
+        -2.0861
+      ],
+      [
+        "2020-06-15",
+        -5.4497
+      ],
+      [
+        "2020-06-17",
+        -7.7381
+      ],
+      [
+        "2020-06-18",
+        -5.4926
+      ],
+      [
+        "2020-06-29",
+        -2.1297
+      ],
+      [
+        "2020-06-30",
+        -1.1206
+      ],
+      [
+        "2020-07-09",
+        -2.307
+      ],
+      [
+        "2020-07-14",
+        -4.7282
+      ],
+      [
+        "2020-07-15",
+        -3.7423
+      ],
+      [
+        "2020-07-22",
+        -1.8077
+      ],
+      [
+        "2020-07-29",
+        -3.4648
+      ],
+      [
+        "2020-07-31",
+        -4.0974
+      ],
+      [
+        "2020-08-05",
+        -3.5015
+      ],
+      [
+        "2020-08-11",
+        -2.8963
+      ],
+      [
+        "2020-08-13",
+        -3.0318
+      ],
+      [
+        "2020-08-17",
+        -4.1391
+      ],
+      [
+        "2020-08-25",
+        -2.2936
+      ],
+      [
+        "2020-08-28",
+        -2.3272
+      ],
+      [
+        "2020-09-10",
+        -2.7933
+      ],
+      [
+        "2020-09-17",
+        -2.2822
+      ],
+      [
+        "2020-09-18",
+        -3.4286
+      ],
+      [
+        "2020-10-06",
+        -2.8055
+      ],
+      [
+        "2020-10-08",
+        -2.0438
+      ],
+      [
+        "2020-10-16",
+        -5.468
+      ],
+      [
+        "2020-10-19",
+        -6.0288
+      ],
+      [
+        "2020-10-21",
+        -2.9587
+      ],
+      [
+        "2020-10-30",
+        -3.856
+      ],
+      [
+        "2020-11-03",
+        -5.0085
+      ],
+      [
+        "2020-11-25",
+        -4.6022
+      ],
+      [
+        "2020-11-26",
+        -5.7539
+      ],
+      [
+        "2020-12-02",
+        -3.9643
+      ],
+      [
+        "2020-12-07",
+        -2.5004
+      ],
+      [
+        "2020-12-15",
+        -0.4273
+      ],
+      [
+        "2020-12-17",
+        -1.5305
+      ],
+      [
+        "2020-12-21",
+        -2.9651
+      ],
+      [
+        "2020-12-22",
+        -3.6693
+      ],
+      [
+        "2021-01-04",
+        -2.461
+      ],
+      [
+        "2021-01-07",
+        -1.876
+      ],
+      [
+        "2021-01-12",
+        -2.2772
+      ],
+      [
+        "2021-01-20",
+        -3.0157
+      ],
+      [
+        "2021-02-11",
+        -3.2435
+      ],
+      [
+        "2021-02-12",
+        -4.3806
+      ],
+      [
+        "2021-02-16",
+        -4.9862
+      ],
+      [
+        "2021-02-19",
+        -5.9674
+      ],
+      [
+        "2021-02-26",
+        -5.4253
+      ],
+      [
+        "2021-03-03",
+        -4.5916
+      ],
+      [
+        "2021-03-15",
+        -2.2654
+      ],
+      [
+        "2021-03-17",
+        -1.7469
+      ],
+      [
+        "2021-03-24",
+        -3.0354
+      ],
+      [
+        "2021-04-01",
+        -4.0593
+      ],
+      [
+        "2021-04-06",
+        -3.5833
+      ],
+      [
+        "2021-04-08",
+        -3.4702
+      ],
+      [
+        "2021-04-29",
+        -3.2433
+      ],
+      [
+        "2021-05-06",
+        -3.1243
+      ],
+      [
+        "2021-05-12",
+        -5.2344
+      ],
+      [
+        "2021-05-18",
+        -5.9967
+      ],
+      [
+        "2021-05-20",
+        -6.21
+      ],
+      [
+        "2021-05-28",
+        -4.1344
+      ],
+      [
+        "2021-06-01",
+        -3.864
+      ],
+      [
+        "2021-06-09",
+        -6.092
+      ],
+      [
+        "2021-06-11",
+        -6.1515
+      ],
+      [
+        "2021-06-15",
+        -8.6507
+      ],
+      [
+        "2021-06-16",
+        -10.5506
+      ],
+      [
+        "2021-06-24",
+        -13.3656
+      ],
+      [
+        "2021-06-30",
+        -15.5624
+      ],
+      [
+        "2021-07-02",
+        -15.8093
+      ],
+      [
+        "2021-07-12",
+        -17.096
+      ],
+      [
+        "2021-07-14",
+        -15.153
+      ],
+      [
+        "2021-07-20",
+        -15.3826
+      ],
+      [
+        "2021-07-30",
+        -15.5621
+      ],
+      [
+        "2021-08-09",
+        -14.9426
+      ],
+      [
+        "2021-08-13",
+        -14.4498
+      ],
+      [
+        "2021-08-20",
+        -13.5541
+      ],
+      [
+        "2021-09-01",
+        -15.0227
+      ],
+      [
+        "2021-09-06",
+        -17.1036
+      ],
+      [
+        "2021-09-09",
+        -17.6142
+      ],
+      [
+        "2021-09-13",
+        -18.076
+      ],
+      [
+        "2021-09-22",
+        -17.192
+      ],
+      [
+        "2021-10-07",
+        -16.9095
+      ],
+      [
+        "2021-10-12",
+        -22.2672
+      ],
+      [
+        "2021-10-13",
+        -23.7669
+      ],
+      [
+        "2021-10-20",
+        -23.2417
+      ],
+      [
+        "2021-11-08",
+        -24.0147
+      ],
+      [
+        "2021-11-12",
+        -22.6239
+      ],
+      [
+        "2021-12-03",
+        -23.7606
+      ],
+      [
+        "2021-12-09",
+        -22.7062
+      ],
+      [
+        "2021-12-16",
+        -24.3241
+      ],
+      [
+        "2021-12-28",
+        -25.1639
+      ],
+      [
+        "2022-01-14",
+        -25.5168
+      ],
+      [
+        "2022-01-17",
+        -24.1389
+      ],
+      [
+        "2022-01-20",
+        -22.7264
+      ],
+      [
+        "2022-02-03",
+        -21.758
+      ],
+      [
+        "2022-02-09",
+        -22.751
+      ],
+      [
+        "2022-02-17",
+        -22.9291
+      ],
+      [
+        "2022-03-22",
+        -23.4331
+      ],
+      [
+        "2022-03-24",
+        -23.6973
+      ],
+      [
+        "2022-03-30",
+        -24.0204
+      ],
+      [
+        "2022-03-31",
+        -26.3255
+      ],
+      [
+        "2022-04-06",
+        -23.8214
+      ],
+      [
+        "2022-04-12",
+        -22.929
+      ],
+      [
+        "2022-04-20",
+        -24.811
+      ],
+      [
+        "2022-04-22",
+        -25.8352
+      ],
+      [
+        "2022-05-02",
+        -27.1089
+      ],
+      [
+        "2022-05-10",
+        -25.6621
+      ],
+      [
+        "2022-05-13",
+        -26.7483
+      ],
+      [
+        "2022-06-01",
+        -26.3062
+      ],
+      [
+        "2022-06-07",
+        -26.3229
+      ],
+      [
+        "2022-06-10",
+        -26.0497
+      ],
+      [
+        "2022-06-15",
+        -26.3023
+      ],
+      [
+        "2022-06-28",
+        -28.3568
+      ],
+      [
+        "2022-06-30",
+        -28.7634
+      ],
+      [
+        "2022-07-06",
+        -31.1932
+      ],
+      [
+        "2022-07-07",
+        -31.9384
+      ],
+      [
+        "2022-07-20",
+        -28.4323
+      ],
+      [
+        "2022-07-25",
+        -28.6516
+      ],
+      [
+        "2022-07-27",
+        -29.7357
+      ],
+      [
+        "2022-07-29",
+        -28.0812
+      ],
+      [
+        "2022-08-08",
+        -28.8514
+      ],
+      [
+        "2022-08-29",
+        -26.7599
+      ],
+      [
+        "2022-08-30",
+        -27.9009
+      ],
+      [
+        "2022-09-07",
+        -27.9262
+      ],
+      [
+        "2022-09-09",
+        -29.2989
+      ],
+      [
+        "2022-09-14",
+        -31.1105
+      ],
+      [
+        "2022-09-15",
+        -31.57
+      ],
+      [
+        "2022-09-30",
+        -30.7721
+      ],
+      [
+        "2022-10-03",
+        -32.7861
+      ],
+      [
+        "2022-10-11",
+        -28.1552
+      ],
+      [
+        "2022-10-19",
+        -29.5799
+      ],
+      [
+        "2022-10-21",
+        -30.6821
+      ],
+      [
+        "2022-10-28",
+        -31.188
+      ],
+      [
+        "2022-11-01",
+        -30.9801
+      ],
+      [
+        "2022-11-07",
+        -31.2834
+      ],
+      [
+        "2022-11-14",
+        -29.9369
+      ],
+      [
+        "2022-11-18",
+        -29.8698
+      ],
+      [
+        "2022-11-22",
+        -32.5628
+      ],
+      [
+        "2022-11-23",
+        -31.4794
+      ],
+      [
+        "2022-12-02",
+        -32.2587
+      ],
+      [
+        "2022-12-06",
+        -32.787
+      ],
+      [
+        "2022-12-15",
+        -34.2529
+      ],
+      [
+        "2022-12-27",
+        -33.8024
+      ],
+      [
+        "2023-01-04",
+        -33.9928
+      ],
+      [
+        "2023-01-05",
+        -35.159
+      ],
+      [
+        "2023-01-11",
+        -34.4708
+      ],
+      [
+        "2023-01-17",
+        -33.5903
+      ],
+      [
+        "2023-01-23",
+        -35.231
+      ],
+      [
+        "2023-02-03",
+        -36.2513
+      ],
+      [
+        "2023-02-07",
+        -38.4045
+      ],
+      [
+        "2023-02-09",
+        -38.7202
+      ],
+      [
+        "2023-02-13",
+        -38.7789
+      ],
+      [
+        "2023-02-20",
+        -37.9658
+      ],
+      [
+        "2023-02-27",
+        -36.4402
+      ],
+      [
+        "2023-03-03",
+        -36.987
+      ],
+      [
+        "2023-03-09",
+        -38.141
+      ],
+      [
+        "2023-03-16",
+        -39.1989
+      ],
+      [
+        "2023-03-24",
+        -39.1726
+      ],
+      [
+        "2023-04-18",
+        -39.0477
+      ],
+      [
+        "2023-04-25",
+        -37.7278
+      ],
+      [
+        "2023-04-27",
+        -37.9888
+      ],
+      [
+        "2023-05-09",
+        -40.316
+      ],
+      [
+        "2023-05-15",
+        -37.7745
+      ],
+      [
+        "2023-05-26",
+        -39.7319
+      ],
+      [
+        "2023-05-29",
+        -39.3367
+      ],
+      [
+        "2023-06-05",
+        -37.9876
+      ],
+      [
+        "2023-06-12",
+        -39.3773
+      ],
+      [
+        "2023-06-13",
+        -38.0418
+      ],
+      [
+        "2023-06-16",
+        -38.2172
+      ],
+      [
+        "2023-06-21",
+        -39.339
+      ],
+      [
+        "2023-06-26",
+        -38.5952
+      ],
+      [
+        "2023-07-03",
+        -38.7618
+      ],
+      [
+        "2023-07-14",
+        -40.1461
+      ],
+      [
+        "2023-07-18",
+        -38.2883
+      ],
+      [
+        "2023-07-25",
+        -38.3748
+      ],
+      [
+        "2023-07-27",
+        -40.0066
+      ],
+      [
+        "2023-08-01",
+        -40.5672
+      ],
+      [
+        "2023-08-02",
+        -38.3711
+      ],
+      [
+        "2023-08-11",
+        -38.4346
+      ],
+      [
+        "2023-08-17",
+        -40.2791
+      ],
+      [
+        "2023-08-18",
+        -40.0788
+      ],
+      [
+        "2023-08-24",
+        -38.0387
+      ],
+      [
+        "2023-08-29",
+        -39.1621
+      ],
+      [
+        "2023-09-06",
+        -37.0461
+      ],
+      [
+        "2023-09-25",
+        -38.7323
+      ],
+      [
+        "2023-09-26",
+        -38.3031
+      ],
+      [
+        "2023-10-03",
+        -40.2078
+      ],
+      [
+        "2023-10-09",
+        -42.3683
+      ],
+      [
+        "2023-10-12",
+        -43.376
+      ],
+      [
+        "2023-10-20",
+        -40.1044
+      ],
+      [
+        "2023-11-02",
+        -40.4678
+      ],
+      [
+        "2023-11-03",
+        -39.5275
+      ],
+      [
+        "2023-11-20",
+        -37.4924
+      ],
+      [
+        "2023-11-28",
+        -34.6415
+      ],
+      [
+        "2023-12-06",
+        -34.9115
+      ],
+      [
+        "2023-12-07",
+        -32.0866
+      ],
+      [
+        "2023-12-14",
+        -30.2363
+      ],
+      [
+        "2023-12-21",
+        -29.3932
+      ],
+      [
+        "2023-12-27",
+        -31.2464
+      ],
+      [
+        "2023-12-28",
+        -31.3504
+      ],
+      [
+        "2024-01-02",
+        -30.597
+      ],
+      [
+        "2024-01-05",
+        -31.2839
+      ],
+      [
+        "2024-01-10",
+        -32.7216
+      ],
+      [
+        "2024-01-18",
+        -33.3439
+      ],
+      [
+        "2024-01-23",
+        -32.1049
+      ],
+      [
+        "2024-01-29",
+        -32.0131
+      ],
+      [
+        "2024-02-02",
+        -30.7018
+      ],
+      [
+        "2024-02-06",
+        -31.5365
+      ],
+      [
+        "2024-02-07",
+        -31.2389
+      ],
+      [
+        "2024-02-09",
+        -30.3386
+      ],
+      [
+        "2024-02-20",
+        -32.3992
+      ],
+      [
+        "2024-02-23",
+        -34.0333
+      ],
+      [
+        "2024-02-26",
+        -33.7983
+      ],
+      [
+        "2024-03-12",
+        -31.0482
+      ],
+      [
+        "2024-03-18",
+        -29.4773
+      ],
+      [
+        "2024-03-20",
+        -32.2413
+      ],
+      [
+        "2024-04-08",
+        -32.0878
+      ],
+      [
+        "2024-04-10",
+        -31.6367
+      ],
+      [
+        "2024-04-18",
+        -33.2218
+      ],
+      [
+        "2024-04-24",
+        -32.4072
+      ],
+      [
+        "2024-04-29",
+        -31.7097
+      ],
+      [
+        "2024-05-03",
+        -31.7297
+      ],
+      [
+        "2024-05-07",
+        -31.8603
+      ],
+      [
+        "2024-05-16",
+        -31.4087
+      ],
+      [
+        "2024-05-17",
+        -31.001
+      ],
+      [
+        "2024-05-30",
+        -31.4377
+      ],
+      [
+        "2024-05-31",
+        -29.9988
+      ],
+      [
+        "2024-06-05",
+        -28.2874
+      ],
+      [
+        "2024-06-14",
+        -28.3322
+      ],
+      [
+        "2024-06-27",
+        -28.898
+      ],
+      [
+        "2024-06-28",
+        -28.8164
+      ],
+      [
+        "2024-07-05",
+        -28.0097
+      ],
+      [
+        "2024-07-10",
+        -29.3194
+      ],
+      [
+        "2024-07-11",
+        -30.3789
+      ],
+      [
+        "2024-07-18",
+        -33.1316
+      ],
+      [
+        "2024-08-01",
+        -32.6699
+      ],
+      [
+        "2024-08-02",
+        -32.2652
+      ],
+      [
+        "2024-08-20",
+        -32.2333
+      ],
+      [
+        "2024-08-27",
+        -32.0018
+      ],
+      [
+        "2024-09-09",
+        -28.4091
+      ],
+      [
+        "2024-09-17",
+        -31.0929
+      ],
+      [
+        "2024-09-19",
+        -33.6484
+      ],
+      [
+        "2024-09-23",
+        -36.2089
+      ],
+      [
+        "2024-09-24",
+        -36.6906
+      ],
+      [
+        "2024-10-01",
+        -35.5203
+      ],
+      [
+        "2024-10-11",
+        -34.3406
+      ],
+      [
+        "2024-10-17",
+        -35.6696
+      ],
+      [
+        "2024-10-18",
+        -36.8294
+      ],
+      [
+        "2024-10-30",
+        -37.4988
+      ],
+      [
+        "2024-11-05",
+        -37.5856
+      ],
+      [
+        "2024-12-04",
+        -38.37
+      ],
+      [
+        "2024-12-10",
+        -41.2957
+      ],
+      [
+        "2024-12-13",
+        -42.4982
+      ],
+      [
+        "2024-12-16",
+        -42.7807
+      ],
+      [
+        "2024-12-26",
+        -43.1238
+      ],
+      [
+        "2024-12-27",
+        -42.8496
+      ],
+      [
+        "2025-01-03",
+        -43.7274
+      ],
+      [
+        "2025-01-06",
+        -31.2645
+      ],
+      [
+        "2025-01-16",
+        -28.8811
+      ],
+      [
+        "2025-01-30",
+        -29.1529
+      ],
+      [
+        "2025-01-31",
+        -28.0339
+      ],
+      [
+        "2025-02-05",
+        -26.9685
+      ],
+      [
+        "2025-02-11",
+        -28.7274
+      ],
+      [
+        "2025-02-14",
+        -30.042
+      ],
+      [
+        "2025-02-18",
+        -31.2868
+      ],
+      [
+        "2025-02-21",
+        -31.0934
+      ],
+      [
+        "2025-02-27",
+        -31.5346
+      ],
+      [
+        "2025-03-17",
+        -32.9098
+      ],
+      [
+        "2025-04-01",
+        -29.954
+      ],
+      [
+        "2025-04-03",
+        -31.922
+      ],
+      [
+        "2025-04-29",
+        -34.8471
+      ],
+      [
+        "2025-05-06",
+        -33.2701
+      ],
+      [
+        "2025-05-08",
+        -35.8131
+      ],
+      [
+        "2025-05-13",
+        -38.796
+      ],
+      [
+        "2025-05-26",
+        -39.297
+      ],
+      [
+        "2025-05-27",
+        -40.7138
+      ],
+      [
+        "2025-06-02",
+        -39.3627
+      ],
+      [
+        "2025-06-04",
+        -39.8255
+      ],
+      [
+        "2025-06-06",
+        -37.486
+      ],
+      [
+        "2025-06-18",
+        -36.8071
+      ],
+      [
+        "2025-06-26",
+        -38.3928
+      ],
+      [
+        "2025-06-30",
+        -39.5781
+      ],
+      [
+        "2025-07-02",
+        -41.6877
+      ],
+      [
+        "2025-07-04",
+        -43.2877
+      ],
+      [
+        "2025-07-07",
+        -42.3722
+      ],
+      [
+        "2025-07-18",
+        -41.5097
+      ],
+      [
+        "2025-07-21",
+        -42.6084
+      ],
+      [
+        "2025-07-23",
+        -43.6795
+      ],
+      [
+        "2025-08-04",
+        -40.4761
+      ],
+      [
+        "2025-08-05",
+        -42.2947
+      ],
+      [
+        "2025-08-12",
+        -42.1182
+      ],
+      [
+        "2025-08-14",
+        -44.4824
+      ],
+      [
+        "2025-08-18",
+        -46.1162
+      ],
+      [
+        "2025-09-03",
+        -45.4048
+      ],
+      [
+        "2025-09-05",
+        -44.6835
+      ],
+      [
+        "2025-09-17",
+        -44.6431
+      ],
+      [
+        "2025-09-25",
+        -45.8576
+      ],
+      [
+        "2025-09-26",
+        -47.03
+      ],
+      [
+        "2025-10-17",
+        -44.2387
+      ],
+      [
+        "2025-10-24",
+        -44.8769
+      ],
+      [
+        "2025-10-29",
+        -45.4531
+      ],
+      [
+        "2025-10-31",
+        -47.6281
+      ],
+      [
+        "2025-11-11",
+        -49.7859
+      ],
+      [
+        "2025-11-12",
+        -48.3023
+      ],
+      [
+        "2025-11-14",
+        -48.2845
+      ],
+      [
+        "2025-11-21",
+        -49.653
+      ],
+      [
+        "2025-12-03",
+        -50.2277
+      ],
+      [
+        "2025-12-09",
+        -49.7833
+      ],
+      [
+        "2025-12-10",
+        -50.0865
+      ],
+      [
+        "2025-12-15",
+        -47.4478
+      ],
+      [
+        "2025-12-22",
+        -48.392
+      ],
+      [
+        "2025-12-24",
+        -48.9222
+      ],
+      [
+        "2026-01-08",
+        -50.9979
+      ],
+      [
+        "2026-01-20",
+        -50.1675
+      ],
+      [
+        "2026-02-23",
+        -49.0233
+      ],
+      [
+        "2026-02-27",
+        -48.3756
+      ],
+      [
+        "2026-03-16",
+        -45.6462
+      ],
+      [
+        "2026-04-16",
+        -45.7236
+      ],
+      [
+        "2026-04-20",
+        -46.8549
+      ],
+      [
+        "2026-04-24",
+        -47.2595
+      ],
+      [
+        "2026-05-04",
+        -48.0852
+      ],
+      [
+        "2026-05-07",
+        -48.6482
+      ],
+      [
+        "2026-06-04",
+        -52.0659
+      ],
+      [
+        "2026-06-19",
+        -52.2531
+      ],
+      [
+        "2026-06-29",
+        -53.5947
+      ],
+      [
+        "2026-07-01",
+        -53.4502
+      ],
+      [
+        "2026-07-06",
+        -52.524
+      ],
+      [
+        "2026-07-09",
+        -50.3329
+      ],
+      [
+        "2026-07-21",
+        -47.2923
+      ],
+      [
+        "2026-07-23",
+        -44.8026
+      ],
+      [
+        "2026-07-29",
+        -44.0913
+      ],
+      [
+        "2026-08-07",
+        -45.2837
+      ],
+      [
+        "2026-08-14",
+        -46.3692
+      ],
+      [
+        "2026-08-21",
+        -46.4955
+      ],
+      [
+        "2026-08-27",
+        -47.1498
+      ],
+      [
+        "2026-08-28",
+        -46.6654
+      ],
+      [
+        "2026-09-02",
+        -43.5076
+      ],
+      [
+        "2026-09-07",
+        -42.0863
+      ],
+      [
+        "2026-09-10",
+        -40.9775
+      ],
+      [
+        "2026-09-22",
+        -41.9928
+      ],
+      [
+        "2026-10-01",
+        -43.1487
+      ],
+      [
+        "2026-10-15",
+        -44.8817
+      ],
+      [
+        "2026-10-16",
+        -45.9111
+      ],
+      [
+        "2026-10-19",
+        -46.4693
+      ]
+    ],
+    "equity_r": [
+      [
+        "2017-01-23",
+        -2.0238
+      ],
+      [
+        "2017-01-25",
+        -2.2406
+      ],
+      [
+        "2017-02-03",
+        -2.4193
+      ],
+      [
+        "2017-02-08",
+        -2.3971
+      ],
+      [
+        "2017-02-13",
+        -3.1221
+      ],
+      [
+        "2017-02-22",
+        -1.6809
+      ],
+      [
+        "2017-02-27",
+        -4.1024
+      ],
+      [
+        "2017-03-02",
+        -2.7426
+      ],
+      [
+        "2017-03-08",
+        -4.5492
+      ],
+      [
+        "2017-03-16",
+        -1.4373
+      ],
+      [
+        "2017-03-31",
+        -3.6866
+      ],
+      [
+        "2017-04-25",
+        1.4313
+      ],
+      [
+        "2017-05-02",
+        -0.4697
+      ],
+      [
+        "2017-05-05",
+        4.1274
+      ],
+      [
+        "2017-05-09",
+        2.8898
+      ],
+      [
+        "2017-05-22",
+        3.3911
+      ],
+      [
+        "2017-05-30",
+        5.404
+      ],
+      [
+        "2017-06-19",
+        9.1235
+      ],
+      [
+        "2017-06-23",
+        7.6381
+      ],
+      [
+        "2017-07-05",
+        8.4063
+      ],
+      [
+        "2017-07-11",
+        7.5966
+      ],
+      [
+        "2017-07-24",
+        10.8755
+      ],
+      [
+        "2017-08-07",
+        9.0903
+      ],
+      [
+        "2017-08-18",
+        9.267
+      ],
+      [
+        "2017-08-31",
+        12.6773
+      ],
+      [
+        "2017-09-08",
+        12.3615
+      ],
+      [
+        "2017-09-15",
+        11.8118
+      ],
+      [
+        "2017-09-21",
+        9.5903
+      ],
+      [
+        "2017-10-05",
+        7.8807
+      ],
+      [
+        "2017-10-10",
+        8.583
+      ],
+      [
+        "2017-10-26",
+        10.4837
+      ],
+      [
+        "2017-11-03",
+        9.4506
+      ],
+      [
+        "2017-11-08",
+        7.8632
+      ],
+      [
+        "2017-11-14",
+        7.6188
+      ],
+      [
+        "2017-11-28",
+        6.41
+      ],
+      [
+        "2017-12-01",
+        7.7249
+      ],
+      [
+        "2017-12-07",
+        9.3111
+      ],
+      [
+        "2017-12-19",
+        10.5608
+      ],
+      [
+        "2017-12-28",
+        7.9695
+      ],
+      [
+        "2018-01-04",
+        6.946
+      ],
+      [
+        "2018-01-10",
+        6.7402
+      ],
+      [
+        "2018-01-15",
+        6.7052
+      ],
+      [
+        "2018-01-17",
+        16.3156
+      ],
+      [
+        "2018-01-24",
+        14.6976
+      ],
+      [
+        "2018-01-29",
+        17.5863
+      ],
+      [
+        "2018-02-02",
+        19.0236
+      ],
+      [
+        "2018-02-09",
+        18.6803
+      ],
+      [
+        "2018-02-16",
+        18.6129
+      ],
+      [
+        "2018-02-27",
+        15.2949
+      ],
+      [
+        "2018-03-14",
+        17.9352
+      ],
+      [
+        "2018-03-19",
+        17.4723
+      ],
+      [
+        "2018-03-23",
+        20.7568
+      ],
+      [
+        "2018-04-06",
+        21.3457
+      ],
+      [
+        "2018-04-10",
+        20.5245
+      ],
+      [
+        "2018-04-17",
+        20.235
+      ],
+      [
+        "2018-04-25",
+        19.8731
+      ],
+      [
+        "2018-05-03",
+        23.1934
+      ],
+      [
+        "2018-05-11",
+        22.5821
+      ],
+      [
+        "2018-05-15",
+        21.2206
+      ],
+      [
+        "2018-05-28",
+        25.126
+      ],
+      [
+        "2018-06-01",
+        24.5707
+      ],
+      [
+        "2018-06-05",
+        24.023
+      ],
+      [
+        "2018-06-13",
+        23.0103
+      ],
+      [
+        "2018-06-25",
+        24.0151
+      ],
+      [
+        "2018-06-28",
+        20.9463
+      ],
+      [
+        "2018-07-04",
+        20.2863
+      ],
+      [
+        "2018-07-06",
+        21.331
+      ],
+      [
+        "2018-07-12",
+        23.3779
+      ],
+      [
+        "2018-07-27",
+        22.1481
+      ],
+      [
+        "2018-08-06",
+        21.8964
+      ],
+      [
+        "2018-08-14",
+        22.8256
+      ],
+      [
+        "2018-08-29",
+        22.9864
+      ],
+      [
+        "2018-09-03",
+        22.8694
+      ],
+      [
+        "2018-09-11",
+        22.4945
+      ],
+      [
+        "2018-09-21",
+        25.5361
+      ],
+      [
+        "2018-09-27",
+        23.3202
+      ],
+      [
+        "2018-10-03",
+        21.609
+      ],
+      [
+        "2018-10-12",
+        20.2626
+      ],
+      [
+        "2018-10-25",
+        18.7649
+      ],
+      [
+        "2018-10-29",
+        20.7514
+      ],
+      [
+        "2018-11-13",
+        19.8511
+      ],
+      [
+        "2018-11-16",
+        19.8965
+      ],
+      [
+        "2018-11-27",
+        20.4633
+      ],
+      [
+        "2018-11-29",
+        23.3245
+      ],
+      [
+        "2018-12-14",
+        21.9097
+      ],
+      [
+        "2018-12-26",
+        20.6742
+      ],
+      [
+        "2018-12-28",
+        20.8373
+      ],
+      [
+        "2019-01-07",
+        18.6508
+      ],
+      [
+        "2019-01-09",
+        18.8464
+      ],
+      [
+        "2019-01-11",
+        17.3376
+      ],
+      [
+        "2019-01-16",
+        14.8991
+      ],
+      [
+        "2019-01-21",
+        14.3215
+      ],
+      [
+        "2019-02-18",
+        14.5475
+      ],
+      [
+        "2019-02-27",
+        13.1992
+      ],
+      [
+        "2019-03-01",
+        14.3772
+      ],
+      [
+        "2019-03-06",
+        17.267
+      ],
+      [
+        "2019-03-13",
+        18.3008
+      ],
+      [
+        "2019-03-22",
+        20.9184
+      ],
+      [
+        "2019-03-26",
+        22.9106
+      ],
+      [
+        "2019-04-10",
+        24.2174
+      ],
+      [
+        "2019-04-18",
+        23.0232
+      ],
+      [
+        "2019-05-06",
+        21.7877
+      ],
+      [
+        "2019-05-15",
+        20.6339
+      ],
+      [
+        "2019-05-17",
+        21.0723
+      ],
+      [
+        "2019-05-22",
+        20.3089
+      ],
+      [
+        "2019-05-27",
+        20.6031
+      ],
+      [
+        "2019-06-04",
+        21.6272
+      ],
+      [
+        "2019-06-07",
+        22.5081
+      ],
+      [
+        "2019-06-12",
+        22.3737
+      ],
+      [
+        "2019-06-17",
+        22.676
+      ],
+      [
+        "2019-06-27",
+        22.5625
+      ],
+      [
+        "2019-07-03",
+        20.7233
+      ],
+      [
+        "2019-07-08",
+        18.5458
+      ],
+      [
+        "2019-07-15",
+        15.8714
+      ],
+      [
+        "2019-07-19",
+        15.7882
+      ],
+      [
+        "2019-07-29",
+        18.2136
+      ],
+      [
+        "2019-08-02",
+        17.8165
+      ],
+      [
+        "2019-08-07",
+        17.9423
+      ],
+      [
+        "2019-08-20",
+        16.9262
+      ],
+      [
+        "2019-09-06",
+        16.4354
+      ],
+      [
+        "2019-09-16",
+        15.8375
+      ],
+      [
+        "2019-09-20",
+        17.8235
+      ],
+      [
+        "2019-10-04",
+        17.8536
+      ],
+      [
+        "2019-10-10",
+        15.9333
+      ],
+      [
+        "2019-10-15",
+        14.1782
+      ],
+      [
+        "2019-10-25",
+        14.2565
+      ],
+      [
+        "2019-10-30",
+        14.9438
+      ],
+      [
+        "2019-11-01",
+        14.7455
+      ],
+      [
+        "2019-11-07",
+        15.415
+      ],
+      [
+        "2019-11-11",
+        16.7568
+      ],
+      [
+        "2019-11-14",
+        16.7807
+      ],
+      [
+        "2019-11-20",
+        20.16
+      ],
+      [
+        "2019-11-25",
+        22.5324
+      ],
+      [
+        "2019-12-03",
+        21.2813
+      ],
+      [
+        "2019-12-06",
+        21.0205
+      ],
+      [
+        "2019-12-11",
+        18.9203
+      ],
+      [
+        "2019-12-23",
+        17.3645
+      ],
+      [
+        "2019-12-30",
+        17.1623
+      ],
+      [
+        "2020-01-20",
+        19.0092
+      ],
+      [
+        "2020-01-24",
+        18.9889
+      ],
+      [
+        "2020-02-05",
+        16.7616
+      ],
+      [
+        "2020-02-11",
+        16.0402
+      ],
+      [
+        "2020-02-13",
+        18.0247
+      ],
+      [
+        "2020-03-03",
+        17.6013
+      ],
+      [
+        "2020-03-09",
+        18.4637
+      ],
+      [
+        "2020-03-25",
+        19.705
+      ],
+      [
+        "2020-04-09",
+        21.4944
+      ],
+      [
+        "2020-05-11",
+        25.2348
+      ],
+      [
+        "2020-06-01",
+        28.4465
+      ],
+      [
+        "2020-06-10",
+        26.3604
+      ],
+      [
+        "2020-06-15",
+        22.9968
+      ],
+      [
+        "2020-06-17",
+        20.7084
+      ],
+      [
+        "2020-06-19",
+        25.0955
+      ],
+      [
+        "2020-06-29",
+        26.3167
+      ],
+      [
+        "2020-07-02",
+        27.6263
+      ],
+      [
+        "2020-07-09",
+        26.1394
+      ],
+      [
+        "2020-07-14",
+        23.7183
+      ],
+      [
+        "2020-07-16",
+        26.8101
+      ],
+      [
+        "2020-07-22",
+        26.6387
+      ],
+      [
+        "2020-07-29",
+        24.9816
+      ],
+      [
+        "2020-07-31",
+        24.349
+      ],
+      [
+        "2020-08-07",
+        25.8841
+      ],
+      [
+        "2020-08-11",
+        25.5502
+      ],
+      [
+        "2020-08-14",
+        25.6685
+      ],
+      [
+        "2020-08-18",
+        26.4753
+      ],
+      [
+        "2020-08-25",
+        26.1528
+      ],
+      [
+        "2020-08-31",
+        27.9196
+      ],
+      [
+        "2020-09-10",
+        25.6531
+      ],
+      [
+        "2020-09-17",
+        26.1643
+      ],
+      [
+        "2020-09-21",
+        26.7576
+      ],
+      [
+        "2020-10-07",
+        26.0711
+      ],
+      [
+        "2020-10-12",
+        26.4049
+      ],
+      [
+        "2020-10-16",
+        22.9785
+      ],
+      [
+        "2020-10-20",
+        23.0046
+      ],
+      [
+        "2020-10-26",
+        26.649
+      ],
+      [
+        "2020-10-30",
+        24.5905
+      ],
+      [
+        "2020-11-04",
+        25.0331
+      ],
+      [
+        "2020-11-25",
+        23.8442
+      ],
+      [
+        "2020-11-27",
+        27.002
+      ],
+      [
+        "2020-12-02",
+        24.4822
+      ],
+      [
+        "2020-12-10",
+        27.5268
+      ],
+      [
+        "2020-12-15",
+        28.7844
+      ],
+      [
+        "2020-12-17",
+        28.5386
+      ],
+      [
+        "2020-12-21",
+        27.104
+      ],
+      [
+        "2021-01-01",
+        26.4798
+      ],
+      [
+        "2021-01-05",
+        27.9274
+      ],
+      [
+        "2021-01-07",
+        28.1931
+      ],
+      [
+        "2021-01-12",
+        27.7919
+      ],
+      [
+        "2021-01-20",
+        27.0534
+      ],
+      [
+        "2021-02-11",
+        26.8256
+      ],
+      [
+        "2021-02-15",
+        26.2408
+      ],
+      [
+        "2021-02-18",
+        25.2126
+      ],
+      [
+        "2021-02-23",
+        25.471
+      ],
+      [
+        "2021-02-26",
+        24.6438
+      ],
+      [
+        "2021-03-09",
+        28.839
+      ],
+      [
+        "2021-03-15",
+        27.8038
+      ],
+      [
+        "2021-03-18",
+        28.4724
+      ],
+      [
+        "2021-03-24",
+        27.0337
+      ],
+      [
+        "2021-04-05",
+        26.2326
+      ],
+      [
+        "2021-04-07",
+        26.8875
+      ],
+      [
+        "2021-04-27",
+        26.6291
+      ],
+      [
+        "2021-04-30",
+        27.65
+      ],
+      [
+        "2021-05-06",
+        26.9448
+      ],
+      [
+        "2021-05-12",
+        24.8347
+      ],
+      [
+        "2021-05-19",
+        24.151
+      ],
+      [
+        "2021-05-25",
+        25.6696
+      ],
+      [
+        "2021-05-28",
+        25.9347
+      ],
+      [
+        "2021-06-01",
+        26.2051
+      ],
+      [
+        "2021-06-09",
+        23.9772
+      ],
+      [
+        "2021-06-11",
+        23.9176
+      ],
+      [
+        "2021-06-15",
+        21.4184
+      ],
+      [
+        "2021-06-17",
+        21.0964
+      ],
+      [
+        "2021-06-24",
+        16.7035
+      ],
+      [
+        "2021-06-30",
+        14.5068
+      ],
+      [
+        "2021-07-02",
+        14.2599
+      ],
+      [
+        "2021-07-12",
+        12.9732
+      ],
+      [
+        "2021-07-15",
+        15.2465
+      ],
+      [
+        "2021-07-28",
+        15.1203
+      ],
+      [
+        "2021-08-04",
+        14.6126
+      ],
+      [
+        "2021-08-10",
+        15.9753
+      ],
+      [
+        "2021-08-18",
+        16.8378
+      ],
+      [
+        "2021-08-26",
+        17.5713
+      ],
+      [
+        "2021-09-01",
+        15.0464
+      ],
+      [
+        "2021-09-06",
+        12.9655
+      ],
+      [
+        "2021-09-09",
+        12.4549
+      ],
+      [
+        "2021-09-14",
+        12.0076
+      ],
+      [
+        "2021-09-22",
+        12.8772
+      ],
+      [
+        "2021-10-07",
+        13.1597
+      ],
+      [
+        "2021-10-12",
+        7.802
+      ],
+      [
+        "2021-10-19",
+        7.5537
+      ],
+      [
+        "2021-10-28",
+        6.8739
+      ],
+      [
+        "2021-11-10",
+        6.2421
+      ],
+      [
+        "2021-11-17",
+        7.5004
+      ],
+      [
+        "2021-12-06",
+        7.5961
+      ],
+      [
+        "2021-12-14",
+        7.9956
+      ],
+      [
+        "2021-12-16",
+        5.745
+      ],
+      [
+        "2021-12-28",
+        4.9052
+      ],
+      [
+        "2022-01-14",
+        4.5523
+      ],
+      [
+        "2022-01-18",
+        7.5102
+      ],
+      [
+        "2022-01-24",
+        8.0563
+      ],
+      [
+        "2022-02-04",
+        8.4201
+      ],
+      [
+        "2022-02-11",
+        7.3846
+      ],
+      [
+        "2022-03-17",
+        7.7893
+      ],
+      [
+        "2022-03-23",
+        7.4926
+      ],
+      [
+        "2022-03-28",
+        8.0534
+      ],
+      [
+        "2022-03-30",
+        6.0487
+      ],
+      [
+        "2022-04-01",
+        7.4021
+      ],
+      [
+        "2022-04-08",
+        7.4947
+      ],
+      [
+        "2022-04-12",
+        7.1401
+      ],
+      [
+        "2022-04-20",
+        5.2582
+      ],
+      [
+        "2022-04-22",
+        4.234
+      ],
+      [
+        "2022-05-02",
+        2.9603
+      ],
+      [
+        "2022-05-10",
+        4.407
+      ],
+      [
+        "2022-05-20",
+        3.7091
+      ],
+      [
+        "2022-06-01",
+        3.7629
+      ],
+      [
+        "2022-06-08",
+        4.2613
+      ],
+      [
+        "2022-06-10",
+        4.0194
+      ],
+      [
+        "2022-06-15",
+        3.7669
+      ],
+      [
+        "2022-06-28",
+        1.7123
+      ],
+      [
+        "2022-06-30",
+        1.3058
+      ],
+      [
+        "2022-07-06",
+        -1.1241
+      ],
+      [
+        "2022-07-14",
+        0.6954
+      ],
+      [
+        "2022-07-20",
+        1.6369
+      ],
+      [
+        "2022-07-25",
+        1.4175
+      ],
+      [
+        "2022-07-28",
+        1.3475
+      ],
+      [
+        "2022-08-02",
+        2.1031
+      ],
+      [
+        "2022-08-16",
+        1.9178
+      ],
+      [
+        "2022-08-29",
+        3.3092
+      ],
+      [
+        "2022-09-05",
+        2.1882
+      ],
+      [
+        "2022-09-07",
+        2.1429
+      ],
+      [
+        "2022-09-09",
+        0.7702
+      ],
+      [
+        "2022-09-14",
+        -1.0414
+      ],
+      [
+        "2022-09-16",
+        0.63
+      ],
+      [
+        "2022-09-30",
+        -0.7029
+      ],
+      [
+        "2022-10-04",
+        1.974
+      ],
+      [
+        "2022-10-17",
+        2.6926
+      ],
+      [
+        "2022-10-19",
+        0.4893
+      ],
+      [
+        "2022-10-27",
+        -0.119
+      ],
+      [
+        "2022-10-31",
+        -0.8596
+      ],
+      [
+        "2022-11-03",
+        -0.1564
+      ],
+      [
+        "2022-11-09",
+        -0.7577
+      ],
+      [
+        "2022-11-16",
+        1.2132
+      ],
+      [
+        "2022-11-18",
+        0.1993
+      ],
+      [
+        "2022-11-22",
+        -2.4937
+      ],
+      [
+        "2022-11-25",
+        -0.6424
+      ],
+      [
+        "2022-12-02",
+        -2.1896
+      ],
+      [
+        "2022-12-08",
+        -2.6529
+      ],
+      [
+        "2022-12-15",
+        -4.1837
+      ],
+      [
+        "2022-12-30",
+        -3.6695
+      ],
+      [
+        "2023-01-04",
+        -3.9237
+      ],
+      [
+        "2023-01-06",
+        -3.8727
+      ],
+      [
+        "2023-01-12",
+        -3.6497
+      ],
+      [
+        "2023-01-17",
+        -3.5211
+      ],
+      [
+        "2023-01-23",
+        -5.1618
+      ],
+      [
+        "2023-02-03",
+        -6.1822
+      ],
+      [
+        "2023-02-07",
+        -8.3354
+      ],
+      [
+        "2023-02-09",
+        -8.651
+      ],
+      [
+        "2023-02-13",
+        -8.7098
+      ],
+      [
+        "2023-02-24",
+        -7.3804
+      ],
+      [
+        "2023-02-28",
+        -5.3444
+      ],
+      [
+        "2023-03-03",
+        -6.9178
+      ],
+      [
+        "2023-03-09",
+        -8.0719
+      ],
+      [
+        "2023-03-17",
+        -7.9059
+      ],
+      [
+        "2023-04-13",
+        -7.7023
+      ],
+      [
+        "2023-04-19",
+        -8.6059
+      ],
+      [
+        "2023-04-25",
+        -7.6587
+      ],
+      [
+        "2023-04-27",
+        -7.9196
+      ],
+      [
+        "2023-05-10",
+        -10.2007
+      ],
+      [
+        "2023-05-15",
+        -7.7054
+      ],
+      [
+        "2023-05-26",
+        -9.6628
+      ],
+      [
+        "2023-05-30",
+        -8.1802
+      ],
+      [
+        "2023-06-05",
+        -7.9185
+      ],
+      [
+        "2023-06-12",
+        -9.3081
+      ],
+      [
+        "2023-06-14",
+        -5.9357
+      ],
+      [
+        "2023-06-16",
+        -8.1481
+      ],
+      [
+        "2023-06-22",
+        -8.6409
+      ],
+      [
+        "2023-06-27",
+        -7.8077
+      ],
+      [
+        "2023-07-03",
+        -8.6927
+      ],
+      [
+        "2023-07-14",
+        -10.077
+      ],
+      [
+        "2023-07-19",
+        -7.8526
+      ],
+      [
+        "2023-07-25",
+        -8.3057
+      ],
+      [
+        "2023-07-27",
+        -9.9375
+      ],
+      [
+        "2023-08-01",
+        -10.498
+      ],
+      [
+        "2023-08-07",
+        -7.8397
+      ],
+      [
+        "2023-08-11",
+        -8.3655
+      ],
+      [
+        "2023-08-17",
+        -10.21
+      ],
+      [
+        "2023-08-23",
+        -9.5586
+      ],
+      [
+        "2023-08-25",
+        -7.8045
+      ],
+      [
+        "2023-09-05",
+        -6.4116
+      ],
+      [
+        "2023-09-13",
+        -5.6188
+      ],
+      [
+        "2023-09-25",
+        -8.6632
+      ],
+      [
+        "2023-09-28",
+        -6.4272
+      ],
+      [
+        "2023-10-03",
+        -10.1386
+      ],
+      [
+        "2023-10-09",
+        -12.2992
+      ],
+      [
+        "2023-10-18",
+        -12.1229
+      ],
+      [
+        "2023-10-23",
+        -9.2188
+      ],
+      [
+        "2023-11-02",
+        -10.3987
+      ],
+      [
+        "2023-11-16",
+        -7.652
+      ],
+      [
+        "2023-11-22",
+        -4.3371
+      ],
+      [
+        "2023-11-29",
+        -4.4674
+      ],
+      [
+        "2023-12-06",
+        -4.8423
+      ],
+      [
+        "2023-12-08",
+        -0.557
+      ],
+      [
+        "2023-12-14",
+        -0.1672
+      ],
+      [
+        "2023-12-21",
+        0.676
+      ],
+      [
+        "2023-12-27",
+        -1.1773
+      ],
+      [
+        "2023-12-29",
+        -0.5139
+      ],
+      [
+        "2024-01-03",
+        -0.0945
+      ],
+      [
+        "2024-01-09",
+        -0.5063
+      ],
+      [
+        "2024-01-12",
+        -2.3648
+      ],
+      [
+        "2024-01-18",
+        -3.2748
+      ],
+      [
+        "2024-01-25",
+        -1.3536
+      ],
+      [
+        "2024-01-30",
+        0.2736
+      ],
+      [
+        "2024-02-02",
+        -0.6326
+      ],
+      [
+        "2024-02-06",
+        -1.4674
+      ],
+      [
+        "2024-02-08",
+        -0.1035
+      ],
+      [
+        "2024-02-13",
+        -0.0181
+      ],
+      [
+        "2024-02-20",
+        -2.33
+      ],
+      [
+        "2024-02-23",
+        -3.9641
+      ],
+      [
+        "2024-02-27",
+        -2.8485
+      ],
+      [
+        "2024-03-13",
+        2.4076
+      ],
+      [
+        "2024-03-18",
+        0.5918
+      ],
+      [
+        "2024-03-20",
+        -2.1722
+      ],
+      [
+        "2024-04-08",
+        -2.0187
+      ],
+      [
+        "2024-04-10",
+        -1.5675
+      ],
+      [
+        "2024-04-18",
+        -3.1527
+      ],
+      [
+        "2024-04-26",
+        -1.881
+      ],
+      [
+        "2024-04-30",
+        -0.0134
+      ],
+      [
+        "2024-05-03",
+        -1.6606
+      ],
+      [
+        "2024-05-08",
+        -1.2601
+      ],
+      [
+        "2024-05-16",
+        -1.3396
+      ],
+      [
+        "2024-05-21",
+        0.9971
+      ],
+      [
+        "2024-05-30",
+        -1.3685
+      ],
+      [
+        "2024-06-04",
+        0.7739
+      ],
+      [
+        "2024-06-12",
+        1.801
+      ],
+      [
+        "2024-06-19",
+        1.7642
+      ],
+      [
+        "2024-06-27",
+        1.1711
+      ],
+      [
+        "2024-07-01",
+        2.2012
+      ],
+      [
+        "2024-07-05",
+        2.0595
+      ],
+      [
+        "2024-07-10",
+        0.7498
+      ],
+      [
+        "2024-07-12",
+        -0.2459
+      ],
+      [
+        "2024-07-18",
+        -3.0625
+      ],
+      [
+        "2024-08-01",
+        -2.6008
+      ],
+      [
+        "2024-08-09",
+        -1.9304
+      ],
+      [
+        "2024-08-20",
+        -2.1641
+      ],
+      [
+        "2024-08-30",
+        1.1508
+      ],
+      [
+        "2024-09-09",
+        1.6601
+      ],
+      [
+        "2024-09-17",
+        -1.0238
+      ],
+      [
+        "2024-09-19",
+        -3.5793
+      ],
+      [
+        "2024-09-23",
+        -6.1398
+      ],
+      [
+        "2024-09-26",
+        -6.0111
+      ],
+      [
+        "2024-10-07",
+        -4.3887
+      ],
+      [
+        "2024-10-15",
+        -3.7649
+      ],
+      [
+        "2024-10-17",
+        -5.6005
+      ],
+      [
+        "2024-10-22",
+        -6.362
+      ],
+      [
+        "2024-10-31",
+        -7.382
+      ],
+      [
+        "2024-11-05",
+        -7.5165
+      ],
+      [
+        "2024-12-04",
+        -8.3009
+      ],
+      [
+        "2024-12-10",
+        -11.2265
+      ],
+      [
+        "2024-12-13",
+        -12.4291
+      ],
+      [
+        "2024-12-18",
+        -11.0524
+      ],
+      [
+        "2024-12-26",
+        -13.0547
+      ],
+      [
+        "2024-12-30",
+        -10.6395
+      ],
+      [
+        "2025-01-03",
+        -13.6583
+      ],
+      [
+        "2025-01-09",
+        -0.1523
+      ],
+      [
+        "2025-01-16",
+        1.188
+      ],
+      [
+        "2025-01-30",
+        0.9163
+      ],
+      [
+        "2025-02-03",
+        3.7136
+      ],
+      [
+        "2025-02-05",
+        3.1006
+      ],
+      [
+        "2025-02-11",
+        1.3418
+      ],
+      [
+        "2025-02-14",
+        0.0271
+      ],
+      [
+        "2025-02-19",
+        -1.0792
+      ],
+      [
+        "2025-02-25",
+        -0.3501
+      ],
+      [
+        "2025-03-07",
+        -1.3556
+      ],
+      [
+        "2025-03-17",
+        -2.8407
+      ],
+      [
+        "2025-04-01",
+        0.1152
+      ],
+      [
+        "2025-04-03",
+        -1.8529
+      ],
+      [
+        "2025-04-29",
+        -4.778
+      ],
+      [
+        "2025-05-06",
+        -3.2009
+      ],
+      [
+        "2025-05-08",
+        -5.7439
+      ],
+      [
+        "2025-05-13",
+        -8.7269
+      ],
+      [
+        "2025-05-26",
+        -9.2279
+      ],
+      [
+        "2025-05-30",
+        -8.7337
+      ],
+      [
+        "2025-06-03",
+        -8.531
+      ],
+      [
+        "2025-06-05",
+        -8.5196
+      ],
+      [
+        "2025-06-09",
+        -7.0567
+      ],
+      [
+        "2025-06-18",
+        -6.7379
+      ],
+      [
+        "2025-06-26",
+        -8.3237
+      ],
+      [
+        "2025-06-30",
+        -9.5089
+      ],
+      [
+        "2025-07-02",
+        -11.6186
+      ],
+      [
+        "2025-07-04",
+        -13.2186
+      ],
+      [
+        "2025-07-08",
+        -11.8079
+      ],
+      [
+        "2025-07-18",
+        -11.4405
+      ],
+      [
+        "2025-07-22",
+        -12.3814
+      ],
+      [
+        "2025-07-25",
+        -12.9705
+      ],
+      [
+        "2025-08-04",
+        -10.407
+      ],
+      [
+        "2025-08-06",
+        -11.8912
+      ],
+      [
+        "2025-08-12",
+        -12.049
+      ],
+      [
+        "2025-08-14",
+        -14.4132
+      ],
+      [
+        "2025-08-25",
+        -15.0306
+      ],
+      [
+        "2025-09-03",
+        -15.3356
+      ],
+      [
+        "2025-09-16",
+        -13.4245
+      ],
+      [
+        "2025-09-19",
+        -14.3956
+      ],
+      [
+        "2025-09-25",
+        -15.7885
+      ],
+      [
+        "2025-10-08",
+        -14.0583
+      ],
+      [
+        "2025-10-17",
+        -14.1695
+      ],
+      [
+        "2025-10-24",
+        -14.8078
+      ],
+      [
+        "2025-10-29",
+        -15.384
+      ],
+      [
+        "2025-10-31",
+        -17.5589
+      ],
+      [
+        "2025-11-11",
+        -19.7168
+      ],
+      [
+        "2025-11-13",
+        -17.3132
+      ],
+      [
+        "2025-11-18",
+        -17.6226
+      ],
+      [
+        "2025-11-21",
+        -19.5839
+      ],
+      [
+        "2025-12-03",
+        -20.1585
+      ],
+      [
+        "2025-12-09",
+        -19.7141
+      ],
+      [
+        "2025-12-12",
+        -18.7806
+      ],
+      [
+        "2025-12-16",
+        -16.1047
+      ],
+      [
+        "2025-12-22",
+        -18.3229
+      ],
+      [
+        "2025-12-30",
+        -18.4458
+      ],
+      [
+        "2026-01-08",
+        -20.9288
+      ],
+      [
+        "2026-02-12",
+        -19.6289
+      ],
+      [
+        "2026-02-24",
+        -18.678
+      ],
+      [
+        "2026-03-02",
+        -17.1132
+      ],
+      [
+        "2026-03-16",
+        -15.5771
+      ],
+      [
+        "2026-04-16",
+        -15.6545
+      ],
+      [
+        "2026-04-23",
+        -16.5578
+      ],
+      [
+        "2026-04-27",
+        -17.0467
+      ],
+      [
+        "2026-05-04",
+        -18.0161
+      ],
+      [
+        "2026-05-07",
+        -18.5791
+      ],
+      [
+        "2026-06-04",
+        -21.9967
+      ],
+      [
+        "2026-06-24",
+        -21.793
+      ],
+      [
+        "2026-06-29",
+        -23.5255
+      ],
+      [
+        "2026-07-02",
+        -23.0888
+      ],
+      [
+        "2026-07-08",
+        -19.1113
+      ],
+      [
+        "2026-07-17",
+        -18.1101
+      ],
+      [
+        "2026-07-22",
+        -14.1247
+      ],
+      [
+        "2026-07-24",
+        -14.5767
+      ],
+      [
+        "2026-07-29",
+        -14.0222
+      ],
+      [
+        "2026-08-07",
+        -15.2145
+      ],
+      [
+        "2026-08-14",
+        -16.3001
+      ],
+      [
+        "2026-08-21",
+        -16.4263
+      ],
+      [
+        "2026-08-27",
+        -17.0807
+      ],
+      [
+        "2026-08-31",
+        -16.498
+      ],
+      [
+        "2026-09-02",
+        -13.4385
+      ],
+      [
+        "2026-09-08",
+        -11.5465
+      ],
+      [
+        "2026-09-10",
+        -10.9084
+      ],
+      [
+        "2026-09-22",
+        -11.9236
+      ],
+      [
+        "2026-10-08",
+        -12.0592
+      ],
+      [
+        "2026-10-15",
+        -14.8125
+      ],
+      [
+        "2026-10-16",
+        -15.842
+      ],
+      [
+        "2026-10-19",
+        -16.4002
+      ]
+    ],
+    "monthly": [
+      {
+        "month": "2017-01",
+        "n": 6,
+        "net_r": -0.3734,
+        "total_r": -2.2406
+      },
+      {
+        "month": "2017-02",
+        "n": 14,
+        "net_r": -0.2697,
+        "total_r": -3.776
+      },
+      {
+        "month": "2017-03",
+        "n": 10,
+        "net_r": 0.233,
+        "total_r": 2.33
+      },
+      {
+        "month": "2017-04",
+        "n": 3,
+        "net_r": 1.6432,
+        "total_r": 4.9295
+      },
+      {
+        "month": "2017-05",
+        "n": 13,
+        "net_r": 0.3201,
+        "total_r": 4.1611
+      },
+      {
+        "month": "2017-06",
+        "n": 7,
+        "net_r": 0.2888,
+        "total_r": 2.0219
+      },
+      {
+        "month": "2017-07",
+        "n": 6,
+        "net_r": 0.3815,
+        "total_r": 2.2892
+      },
+      {
+        "month": "2017-08",
+        "n": 5,
+        "net_r": 0.5924,
+        "total_r": 2.9622
+      },
+      {
+        "month": "2017-09",
+        "n": 7,
+        "net_r": -0.441,
+        "total_r": -3.087
+      },
+      {
+        "month": "2017-10",
+        "n": 8,
+        "net_r": -0.0505,
+        "total_r": -0.4037
+      },
+      {
+        "month": "2017-11",
+        "n": 10,
+        "net_r": -0.2997,
+        "total_r": -2.9975
+      },
+      {
+        "month": "2017-12",
+        "n": 10,
+        "net_r": 0.178,
+        "total_r": 1.7804
+      },
+      {
+        "month": "2018-01",
+        "n": 19,
+        "net_r": 0.5061,
+        "total_r": 9.6168
+      },
+      {
+        "month": "2018-02",
+        "n": 9,
+        "net_r": -0.2546,
+        "total_r": -2.2914
+      },
+      {
+        "month": "2018-03",
+        "n": 9,
+        "net_r": 0.6326,
+        "total_r": 5.693
+      },
+      {
+        "month": "2018-04",
+        "n": 9,
+        "net_r": -0.1239,
+        "total_r": -1.1148
+      },
+      {
+        "month": "2018-05",
+        "n": 12,
+        "net_r": 0.3801,
+        "total_r": 4.5617
+      },
+      {
+        "month": "2018-06",
+        "n": 13,
+        "net_r": -0.2683,
+        "total_r": -3.4885
+      },
+      {
+        "month": "2018-07",
+        "n": 10,
+        "net_r": 0.1202,
+        "total_r": 1.2019
+      },
+      {
+        "month": "2018-08",
+        "n": 7,
+        "net_r": 0.0894,
+        "total_r": 0.6259
+      },
+      {
+        "month": "2018-09",
+        "n": 9,
+        "net_r": -0.0687,
+        "total_r": -0.6187
+      },
+      {
+        "month": "2018-10",
+        "n": 8,
+        "net_r": -0.1755,
+        "total_r": -1.404
+      },
+      {
+        "month": "2018-11",
+        "n": 10,
+        "net_r": 0.2573,
+        "total_r": 2.5732
+      },
+      {
+        "month": "2018-12",
+        "n": 8,
+        "net_r": -0.3109,
+        "total_r": -2.4872
+      },
+      {
+        "month": "2019-01",
+        "n": 12,
+        "net_r": -0.543,
+        "total_r": -6.5158
+      },
+      {
+        "month": "2019-02",
+        "n": 5,
+        "net_r": 0.0593,
+        "total_r": 0.2967
+      },
+      {
+        "month": "2019-03",
+        "n": 12,
+        "net_r": 0.691,
+        "total_r": 8.2924
+      },
+      {
+        "month": "2019-04",
+        "n": 4,
+        "net_r": 0.0281,
+        "total_r": 0.1126
+      },
+      {
+        "month": "2019-05",
+        "n": 12,
+        "net_r": -0.236,
+        "total_r": -2.8322
+      },
+      {
+        "month": "2019-06",
+        "n": 10,
+        "net_r": 0.2372,
+        "total_r": 2.3715
+      },
+      {
+        "month": "2019-07",
+        "n": 14,
+        "net_r": -0.399,
+        "total_r": -5.586
+      },
+      {
+        "month": "2019-08",
+        "n": 8,
+        "net_r": -0.0063,
+        "total_r": -0.0502
+      },
+      {
+        "month": "2019-09",
+        "n": 8,
+        "net_r": 0.1122,
+        "total_r": 0.8973
+      },
+      {
+        "month": "2019-10",
+        "n": 13,
+        "net_r": -0.2469,
+        "total_r": -3.2101
+      },
+      {
+        "month": "2019-11",
+        "n": 20,
+        "net_r": 0.39,
+        "total_r": 7.8
+      },
+      {
+        "month": "2019-12",
+        "n": 13,
+        "net_r": -0.4039,
+        "total_r": -5.2511
+      },
+      {
+        "month": "2020-01",
+        "n": 6,
+        "net_r": 0.1183,
+        "total_r": 0.7099
+      },
+      {
+        "month": "2020-02",
+        "n": 7,
+        "net_r": 0.1313,
+        "total_r": 0.9192
+      },
+      {
+        "month": "2020-03",
+        "n": 8,
+        "net_r": 0.1142,
+        "total_r": 0.9135
+      },
+      {
+        "month": "2020-04",
+        "n": 5,
+        "net_r": 0.5409,
+        "total_r": 2.7043
+      },
+      {
+        "month": "2020-05",
+        "n": 8,
+        "net_r": 0.6079,
+        "total_r": 4.8631
+      },
+      {
+        "month": "2020-06",
+        "n": 19,
+        "net_r": 0.0028,
+        "total_r": 0.0536
+      },
+      {
+        "month": "2020-07",
+        "n": 17,
+        "net_r": -0.1751,
+        "total_r": -2.9769
+      },
+      {
+        "month": "2020-08",
+        "n": 17,
+        "net_r": 0.21,
+        "total_r": 3.5706
+      },
+      {
+        "month": "2020-09",
+        "n": 8,
+        "net_r": -0.1453,
+        "total_r": -1.162
+      },
+      {
+        "month": "2020-10",
+        "n": 25,
+        "net_r": -0.0867,
+        "total_r": -2.1671
+      },
+      {
+        "month": "2020-11",
+        "n": 7,
+        "net_r": 0.3445,
+        "total_r": 2.4115
+      },
+      {
+        "month": "2020-12",
+        "n": 19,
+        "net_r": -0.0317,
+        "total_r": -0.6021
+      },
+      {
+        "month": "2021-01",
+        "n": 12,
+        "net_r": 0.0545,
+        "total_r": 0.6536
+      },
+      {
+        "month": "2021-02",
+        "n": 14,
+        "net_r": -0.1721,
+        "total_r": -2.4096
+      },
+      {
+        "month": "2021-03",
+        "n": 12,
+        "net_r": 0.1992,
+        "total_r": 2.3899
+      },
+      {
+        "month": "2021-04",
+        "n": 11,
+        "net_r": 0.056,
+        "total_r": 0.6163
+      },
+      {
+        "month": "2021-05",
+        "n": 14,
+        "net_r": -0.0997,
+        "total_r": -1.3954
+      },
+      {
+        "month": "2021-06",
+        "n": 20,
+        "net_r": -0.5874,
+        "total_r": -11.7478
+      },
+      {
+        "month": "2021-07",
+        "n": 14,
+        "net_r": 0.0,
+        "total_r": 0.0002
+      },
+      {
+        "month": "2021-08",
+        "n": 12,
+        "net_r": 0.1005,
+        "total_r": 1.2064
+      },
+      {
+        "month": "2021-09",
+        "n": 15,
+        "net_r": -0.1619,
+        "total_r": -2.4282
+      },
+      {
+        "month": "2021-10",
+        "n": 13,
+        "net_r": -0.4932,
+        "total_r": -6.4113
+      },
+      {
+        "month": "2021-11",
+        "n": 6,
+        "net_r": 0.1044,
+        "total_r": 0.6265
+      },
+      {
+        "month": "2021-12",
+        "n": 11,
+        "net_r": -0.2359,
+        "total_r": -2.5952
+      },
+      {
+        "month": "2022-01",
+        "n": 7,
+        "net_r": 0.4501,
+        "total_r": 3.151
+      },
+      {
+        "month": "2022-02",
+        "n": 6,
+        "net_r": -0.1527,
+        "total_r": -0.9163
+      },
+      {
+        "month": "2022-03",
+        "n": 11,
+        "net_r": -0.3088,
+        "total_r": -3.3964
+      },
+      {
+        "month": "2022-04",
+        "n": 13,
+        "net_r": 0.0125,
+        "total_r": 0.163
+      },
+      {
+        "month": "2022-05",
+        "n": 6,
+        "net_r": 0.152,
+        "total_r": 0.9123
+      },
+      {
+        "month": "2022-06",
+        "n": 14,
+        "net_r": -0.2509,
+        "total_r": -3.5132
+      },
+      {
+        "month": "2022-07",
+        "n": 16,
+        "net_r": 0.0426,
+        "total_r": 0.6822
+      },
+      {
+        "month": "2022-08",
+        "n": 11,
+        "net_r": 0.0164,
+        "total_r": 0.1802
+      },
+      {
+        "month": "2022-09",
+        "n": 14,
+        "net_r": -0.2051,
+        "total_r": -2.8711
+      },
+      {
+        "month": "2022-10",
+        "n": 18,
+        "net_r": -0.0087,
+        "total_r": -0.1567
+      },
+      {
+        "month": "2022-11",
+        "n": 16,
+        "net_r": 0.0136,
+        "total_r": 0.2172
+      },
+      {
+        "month": "2022-12",
+        "n": 13,
+        "net_r": -0.2329,
+        "total_r": -3.0271
+      },
+      {
+        "month": "2023-01",
+        "n": 12,
+        "net_r": -0.1022,
+        "total_r": -1.2266
+      },
+      {
+        "month": "2023-02",
+        "n": 14,
+        "net_r": -0.032,
+        "total_r": -0.4483
+      },
+      {
+        "month": "2023-03",
+        "n": 7,
+        "net_r": -0.537,
+        "total_r": -3.7591
+      },
+      {
+        "month": "2023-04",
+        "n": 9,
+        "net_r": 0.1315,
+        "total_r": 1.1838
+      },
+      {
+        "month": "2023-05",
+        "n": 12,
+        "net_r": -0.0217,
+        "total_r": -0.2606
+      },
+      {
+        "month": "2023-06",
+        "n": 17,
+        "net_r": 0.0089,
+        "total_r": 0.152
+      },
+      {
+        "month": "2023-07",
+        "n": 11,
+        "net_r": -0.189,
+        "total_r": -2.0787
+      },
+      {
+        "month": "2023-08",
+        "n": 13,
+        "net_r": 0.078,
+        "total_r": 1.0139
+      },
+      {
+        "month": "2023-09",
+        "n": 10,
+        "net_r": 0.1847,
+        "total_r": 1.847
+      },
+      {
+        "month": "2023-10",
+        "n": 12,
+        "net_r": -0.1734,
+        "total_r": -2.0811
+      },
+      {
+        "month": "2023-11",
+        "n": 12,
+        "net_r": 0.3981,
+        "total_r": 4.7767
+      },
+      {
+        "month": "2023-12",
+        "n": 14,
+        "net_r": 0.2883,
+        "total_r": 4.0364
+      },
+      {
+        "month": "2024-01",
+        "n": 16,
+        "net_r": 0.0492,
+        "total_r": 0.7875
+      },
+      {
+        "month": "2024-02",
+        "n": 19,
+        "net_r": -0.1643,
+        "total_r": -3.1222
+      },
+      {
+        "month": "2024-03",
+        "n": 11,
+        "net_r": 0.1094,
+        "total_r": 1.2033
+      },
+      {
+        "month": "2024-04",
+        "n": 13,
+        "net_r": 0.1255,
+        "total_r": 1.6319
+      },
+      {
+        "month": "2024-05",
+        "n": 17,
+        "net_r": 0.0049,
+        "total_r": 0.0837
+      },
+      {
+        "month": "2024-06",
+        "n": 8,
+        "net_r": 0.1478,
+        "total_r": 1.1824
+      },
+      {
+        "month": "2024-07",
+        "n": 17,
+        "net_r": -0.2099,
+        "total_r": -3.5687
+      },
+      {
+        "month": "2024-08",
+        "n": 8,
+        "net_r": 0.4333,
+        "total_r": 3.4668
+      },
+      {
+        "month": "2024-09",
+        "n": 20,
+        "net_r": -0.3581,
+        "total_r": -7.1619
+      },
+      {
+        "month": "2024-10",
+        "n": 13,
+        "net_r": -0.1054,
+        "total_r": -1.3708
+      },
+      {
+        "month": "2024-11",
+        "n": 3,
+        "net_r": -0.206,
+        "total_r": -0.6181
+      },
+      {
+        "month": "2024-12",
+        "n": 18,
+        "net_r": -0.2918,
+        "total_r": -5.2532
+      },
+      {
+        "month": "2025-01",
+        "n": 16,
+        "net_r": 0.9555,
+        "total_r": 15.2885
+      },
+      {
+        "month": "2025-02",
+        "n": 19,
+        "net_r": -0.1842,
+        "total_r": -3.5007
+      },
+      {
+        "month": "2025-03",
+        "n": 5,
+        "net_r": 0.3662,
+        "total_r": 1.8312
+      },
+      {
+        "month": "2025-04",
+        "n": 11,
+        "net_r": -0.4676,
+        "total_r": -5.1438
+      },
+      {
+        "month": "2025-05",
+        "n": 17,
+        "net_r": -0.2327,
+        "total_r": -3.9557
+      },
+      {
+        "month": "2025-06",
+        "n": 15,
+        "net_r": -0.0517,
+        "total_r": -0.7752
+      },
+      {
+        "month": "2025-07",
+        "n": 20,
+        "net_r": -0.1731,
+        "total_r": -3.4615
+      },
+      {
+        "month": "2025-08",
+        "n": 19,
+        "net_r": -0.1084,
+        "total_r": -2.0601
+      },
+      {
+        "month": "2025-09",
+        "n": 9,
+        "net_r": -0.2145,
+        "total_r": -1.9303
+      },
+      {
+        "month": "2025-10",
+        "n": 14,
+        "net_r": -0.0427,
+        "total_r": -0.5981
+      },
+      {
+        "month": "2025-11",
+        "n": 11,
+        "net_r": -0.1887,
+        "total_r": -2.0756
+      },
+      {
+        "month": "2025-12",
+        "n": 16,
+        "net_r": 0.0743,
+        "total_r": 1.1887
+      },
+      {
+        "month": "2026-01",
+        "n": 4,
+        "net_r": -0.4131,
+        "total_r": -1.6525
+      },
+      {
+        "month": "2026-02",
+        "n": 6,
+        "net_r": 0.2986,
+        "total_r": 1.7919
+      },
+      {
+        "month": "2026-03",
+        "n": 4,
+        "net_r": 0.7381,
+        "total_r": 2.9523
+      },
+      {
+        "month": "2026-04",
+        "n": 7,
+        "net_r": -0.2123,
+        "total_r": -1.4861
+      },
+      {
+        "month": "2026-05",
+        "n": 3,
+        "net_r": -0.5796,
+        "total_r": -1.7388
+      },
+      {
+        "month": "2026-06",
+        "n": 8,
+        "net_r": -0.6183,
+        "total_r": -4.9465
+      },
+      {
+        "month": "2026-07",
+        "n": 13,
+        "net_r": 0.731,
+        "total_r": 9.5034
+      },
+      {
+        "month": "2026-08",
+        "n": 13,
+        "net_r": -0.1904,
+        "total_r": -2.4758
+      },
+      {
+        "month": "2026-09",
+        "n": 9,
+        "net_r": 0.5083,
+        "total_r": 4.5744
+      },
+      {
+        "month": "2026-10",
+        "n": 9,
+        "net_r": -0.4974,
+        "total_r": -4.4766
+      }
+    ]
+  },
+  "split": {
+    "embargo_sessions": 1,
+    "embargoed_oos": 0,
+    "oos_start": "2023-11-08",
+    "purged_in_sample": 0,
+    "type": "oos"
+  },
+  "trials": {
+    "external": 7,
+    "material": 2,
+    "source": "trials.yaml",
+    "total": 9
+  },
+  "validity": {
+    "checks_run": [
+      "data_quality",
+      "config",
+      "lineage",
+      "truncation"
+    ],
+    "failures": [],
+    "ok": true
+  },
+  "verdict": {
+    "caps_applied": [],
+    "primary_failed_gate": "G6.1",
+    "qualifications": [
+      "Point-in-time universe membership and per-date eligibility"
+    ],
+    "reasons": [
+      {
+        "evidence_ref": "evaluation:G6.1",
+        "gate": "G6.1",
+        "status": "FAIL",
+        "text": "Research integrity failed: Session and square-off (G6.1). No performance result can be trusted."
+      },
+      {
+        "evidence_ref": "evaluation:G4.8",
+        "gate": "G4.8",
+        "status": "NOT_RUN",
+        "text": "Required before the paper stage, does not decide this verdict: Event days (G4.8) was not run; event-day analysis has not been performed: it needs an event calendar (results dates, monthly expiry, index rebalance, budget and election days) that is not held, so how much of the result depends on event days is unknown until it is evaluated."
+      },
+      {
+        "evidence_ref": "evaluation:G6.6",
+        "gate": "G6.6",
+        "status": "NOT_RUN",
+        "text": "Required before the paper stage, does not decide this verdict: SEBI retail algo framework (G6.6) was not run; operational authorization (broker-registered API, static IP, 2FA, order tagging), not the validity of a backtest."
+      }
+    ],
+    "run_verdict": "INCONCLUSIVE"
+  }
+}

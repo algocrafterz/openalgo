@@ -1,0 +1,14 @@
+{
+  "branch_label": null,
+  "direction": "both",
+  "name": "Multi-day balance breakout",
+  "params_fingerprint": "7be96713926d0b3e474f526879be414ba7ed9b242597c2a9f9822543f276ecca",
+  "parent_version": "v1",
+  "product": "MIS",
+  "rules_fingerprint": "d37a38808ab2c103fecc5a5e67174a5b4604167197e237b163d1fff6c51bc0e5",
+  "strategy_fingerprint": "95a55a16f78ff5c37ebb292e0b37ec52b5fb6c05caa530764f8fee13bbf92346",
+  "strategy_id": "IDEA-034",
+  "style": "intraday",
+  "timeframe": "5m",
+  "version": "v2"
+}

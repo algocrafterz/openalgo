@@ -11,7 +11,7 @@ source:
   author: Owner (auction market theory)
   ref: _inbox/multi-day-balance-breakout.txt
   captured: 2026-10-28
-result: Gross +8.6 bps (t 3.2) beats both placebos but not the 11.55 bps cost; net -3.0 bps, fails G1.2 in and out of sample.
+result: Gross +8.6 bps (t 3.2) beats both placebos but not the 11.55 bps cost; net -3.0 bps, fails G1.2. v2 wider balance (H >= 1.5 percent) net -2.1 bps, IS and OOS negative, fails too.
 summary: Find stocks whose last N completed sessions form a balance (overlapping 70 percent value areas, composite range narrow versus daily ATR14), then trade the first accepted breakout of the composite range after 10:15 and before 13:00. Stop back inside balance, target one balance height from the broken edge, time exit 14:45.
 backtest_module: backtest/strategies/balance_breakout.py
 revisit_when: 'A cheaper execution path than 11.55 bps round trip exists, or a point-in-time universe or 1m data allows a materially different balance definition; the pre-registered grid is exhausted.'
@@ -104,6 +104,31 @@ Hold-out from the run system (last 30 percent of sessions out of sample). Report
 and R, t (clustered by day), profit factor, max drawdown, trades, long/short split, by year, and
 the acceptance criteria gates. Verdict stops at the first HARD fail.
 
+## v2 pre-registration: wider balance (written 2026-10-28, before any v2 result)
+
+Rationale: the round trip costs a roughly fixed 11.55 bps whatever the trade, so a balance whose
+measured-move target is large relative to price should keep more of its gross edge after cost.
+
+- Everything identical to v1 configuration 1: N 5, k 1.5, 30-minute close trigger, edge stop,
+  70 percent value area, first breakout per stock per day, 14:45 time exit, measured-move target H.
+- New parameter `min_height_pct` (default 0.0 = v1 unchanged): the trade is taken only if
+  H / composite-edge price x 100 >= min_height_pct, where the edge is the one being broken
+  (composite high for a long, composite low for a short). H and the edge come only from the 5
+  completed prior sessions, so the filter is known at 09:15 (no look-ahead).
+- Primary: min_height_pct = 1.5. Secondary trials, all reported, none chosen after the fact:
+  2.0 and 2.5.
+- Descriptive only: v1 trades bucketed by H% (<1.0, 1.0-1.5, 1.5-2.0, 2.0-2.5, >=2.5) with gross
+  and net bps.
+- Placebo: P1 non-balance (H > 1.5 x ATR14) with the same min_height_pct = 1.5 filter.
+- Decision rule: v2 passes only if the primary is net-positive in sample AND out of sample under
+  the primary cost scenario, AND its gross beats the P1 placebo under the same H% filter.
+- Honesty: the 2023-11-08 hold-out was already seen by v1, so it is NOT a clean hold-out for v2.
+  n_trials grows from 6 to 9 (placebos are not trials).
+- Implementation note (after the pre-registration, no rule change): a recorded run binds the
+  strategy class defaults to the frozen spec, so the shipped default is the v2 primary
+  (min_height_pct 1.5); min_height_pct 0.0 reproduces v1. The v1 run's own frozen spec has no
+  such parameter, so `--reproduce` of the v1 run now fails parameter binding.
+
 ## Analysis and backtest
 
 See `RESULTS.md` in this folder. Recorded run: `runs/2026-10-28-multi-day-balance-breakout-v1.json` (non-reproducible, dirty tree). Gross +8.6 bps, net -3.0 bps, t -0.99; fails G1.2.
@@ -112,3 +137,4 @@ See `RESULTS.md` in this folder. Recorded run: `runs/2026-10-28-multi-day-balanc
 
 - 2026-10-28: onboarded and pre-registered before any backtest.
 - 2026-10-28: run and evaluated. Gross edge real but below cost; fails G1.2. research_state weak_evidence. No paper test.
+- 2026-10-28: v2 wider balance (min_height_pct 1.5, trials 2.0 and 2.5) pre-registered and run. Net -2.11 bps (IS -1.30, OOS -3.83); fails the v2 decision rule. n_trials 9. No paper test.

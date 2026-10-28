@@ -223,3 +223,59 @@ def test_engine_enters_at_next_open_and_frozen_params_bind():
     t = trades[0]
     assert t.direction == 1 and t.entry_time == pd.Timestamp(f"{day} 10:15", tz=IST)
     assert {f.name for f in dataclasses.fields(p)} >= {"balance_days", "atr_max_multiple"}
+
+
+def _height_pct(row, side):
+    edge = row["bal_hi"] if side == 1 else row["bal_lo"]
+    return row["bal_h"] / edge * 100.0
+
+
+def test_min_height_pct_rejects_a_balance_narrower_than_the_threshold():
+    df, day = _frame()
+    _push(df, day, "10:10", 110.0)
+    d, _ = _prep(df)
+    h_pct = _height_pct(_sigs(d, day).iloc[0], 1)
+    d2, _ = _prep(df, min_height_pct=h_pct + 0.01)
+    assert _sigs(d2, day).empty
+
+
+def test_min_height_pct_accepts_a_wide_enough_balance_on_both_sides():
+    df, day = _frame()
+    _push(df, day, "10:10", 110.0)
+    d, _ = _prep(df)
+    h_pct = _height_pct(_sigs(d, day).iloc[0], 1)
+    d2, _ = _prep(df, min_height_pct=h_pct - 0.01)
+    assert len(_sigs(d2, day)) == 1
+    dfs, day = _frame()
+    _push(dfs, day, "10:10", 90.0)
+    ds, _ = _prep(dfs)
+    hs = _height_pct(_sigs(ds, day).iloc[0], -1)  # short measured against the composite low
+    assert len(_sigs(_prep(dfs, min_height_pct=hs - 0.01)[0], day)) == 1
+    assert _sigs(_prep(dfs, min_height_pct=hs + 0.01)[0], day).empty
+
+
+def test_min_height_pct_zero_reproduces_v1_signals():
+    df, day = _frame()
+    _push(df, day, "10:10", 110.0)
+    _push(df, day, "11:10", 90.0)
+    assert BalanceParams().min_height_pct == 1.5  # v2 primary is the shipped default
+    d0, _ = _prep(df, min_height_pct=0.0)
+    s = _sigs(d0, day)
+    assert len(s) == 1 and s.iloc[0]["sig_dir"] == 1  # the v1 first-breakout rule is untouched
+    tiny, _ = _prep(df, min_height_pct=1e-9)
+    cols = ["sig_dir", "sig_sl", "sig_tp"]
+    pd.testing.assert_frame_equal(d0[cols], tiny[cols])
+
+
+def test_min_height_pct_also_filters_the_non_balance_placebo():
+    waves = [1.5 if k % 2 == 0 else 8.0 for k in range(N_HIST)]
+    base = [100.0 + 6.0 * (k % 2) for k in range(N_HIST)]
+    days = pd.bdate_range("2026-01-05", periods=N_HIST + 1)
+    parts = [_day(dt.date(), wave=waves[k], base=base[k]) for k, dt in enumerate(days[:-1])]
+    parts.append(_day(days[-1].date(), wave=0.0, base=103.0))
+    df, day = pd.concat(parts), days[-1].date()
+    _push(df, day, "10:10", 130.0)
+    dp, _ = _prep(df, atr_max_multiple=0.5, placebo="non_balance")
+    h_pct = _height_pct(_sigs(dp, day).iloc[0], 1)
+    dq, _ = _prep(df, atr_max_multiple=0.5, placebo="non_balance", min_height_pct=h_pct + 0.01)
+    assert _sigs(dq, day).empty

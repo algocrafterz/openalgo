@@ -1,0 +1,638 @@
+{
+  "entries": [
+    {
+      "confidence": "high",
+      "field": "name",
+      "id": "A-055",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "Multi-day balance breakout"
+    },
+    {
+      "confidence": "high",
+      "field": "source.kind",
+      "id": "A-056",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "own_words"
+    },
+    {
+      "confidence": "high",
+      "field": "source.ref",
+      "id": "A-057",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "_inbox/multi-day-balance-breakout.txt"
+    },
+    {
+      "confidence": "high",
+      "field": "profile",
+      "id": "A-058",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "flattrade-nse-cash"
+    },
+    {
+      "confidence": "high",
+      "field": "style",
+      "id": "A-059",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "intraday"
+    },
+    {
+      "confidence": "high",
+      "field": "direction",
+      "id": "A-060",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "both"
+    },
+    {
+      "confidence": "high",
+      "field": "timeframe",
+      "id": "A-061",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "5m"
+    },
+    {
+      "confidence": "high",
+      "field": "product",
+      "id": "A-062",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "MIS"
+    },
+    {
+      "confidence": "high",
+      "field": "entry",
+      "id": "A-063",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": [
+        "Balance on trade day t from the last 5 completed sessions only: adjacent 70 percent value areas overlap by at least 0.5 of the narrower one, and composite height H = max(VAH) - min(VAL) is at most 1.5 x daily ATR14",
+        "Long: a 30-minute period close (periods anchored 09:15, closing 10:15 through 12:45) above the composite high while the previous 30-minute close was at or below it; short mirrors below the composite low",
+        "First such breakout of the day only, one trade per stock per day; the order fills at the next 5m candle open",
+        "v2 wider balance: take the trade only if H / broken composite edge x 100 is at least min_height_pct (1.5), from the same 5 completed sessions"
+      ]
+    },
+    {
+      "confidence": "high",
+      "field": "exit",
+      "id": "A-064",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": [
+        "Measured-move target: composite high + H for a long, composite low - H for a short",
+        "Time exit at 14:45"
+      ]
+    },
+    {
+      "confidence": "high",
+      "field": "stop",
+      "id": "A-065",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": [
+        "Long: composite high - 0.25 x daily ATR14; short: composite low + 0.25 x daily ATR14"
+      ]
+    },
+    {
+      "confidence": "high",
+      "field": "take_profit",
+      "id": "A-066",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": [
+        "Composite edge projected by H in the trade direction"
+      ]
+    },
+    {
+      "confidence": "high",
+      "field": "holding_period",
+      "id": "A-067",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "same_session"
+    },
+    {
+      "confidence": "high",
+      "field": "indicators",
+      "id": "A-068",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": [
+        {
+          "name": "ATR",
+          "period": 14
+        }
+      ]
+    },
+    {
+      "confidence": "high",
+      "field": "parameters",
+      "id": "A-069",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": {
+        "atr_len": 14,
+        "atr_max_multiple": 1.5,
+        "balance_days": 5,
+        "bin_pct_of_price": 0.05,
+        "min_height_pct": 1.5,
+        "min_session_bars": 60,
+        "min_va_overlap": 0.5,
+        "placebo": "none",
+        "stop_buffer_atr": 0.25,
+        "stop_mode": "edge",
+        "trigger": "p30",
+        "value_area_pct": 70
+      }
+    },
+    {
+      "confidence": "high",
+      "field": "timing.signal_evaluation",
+      "id": "A-070",
+      "materiality": "medium",
+      "reason": "entry text says \"closing\": evaluated when the bar closes",
+      "section": "intent",
+      "source": "inferred",
+      "user_confirmed": false,
+      "value": "bar_close"
+    },
+    {
+      "confidence": "high",
+      "field": "timing.order_submission",
+      "id": "A-071",
+      "materiality": "medium",
+      "reason": "follows from evaluating at bar_close",
+      "section": "intent",
+      "source": "inferred",
+      "user_confirmed": false,
+      "value": "signal_close"
+    },
+    {
+      "confidence": "medium",
+      "field": "timing.fill_model",
+      "id": "A-072",
+      "materiality": "medium",
+      "reason": "entry text does not state the fill; next_bar_open follows from evaluating at bar_close",
+      "section": "intent",
+      "source": "inferred",
+      "user_confirmed": false,
+      "value": "next_bar_open"
+    },
+    {
+      "confidence": "high",
+      "field": "filters",
+      "id": "A-073",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "none"
+    },
+    {
+      "confidence": "high",
+      "field": "session_window",
+      "id": "A-074",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": {
+        "entry": "10:15-13:00"
+      }
+    },
+    {
+      "confidence": "high",
+      "field": "re_entry.allowed",
+      "id": "A-075",
+      "materiality": "medium",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": false
+    },
+    {
+      "confidence": "high",
+      "field": "sizing.risk_per_trade_pct",
+      "id": "A-076",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 1.0
+    },
+    {
+      "confidence": "high",
+      "field": "sizing.capital_per_trade",
+      "id": "A-077",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 100000
+    },
+    {
+      "confidence": "high",
+      "field": "data.frequency",
+      "id": "A-078",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "5m"
+    },
+    {
+      "confidence": "high",
+      "field": "data.field_families",
+      "id": "A-079",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": [
+        "price",
+        "volume"
+      ]
+    },
+    {
+      "confidence": "high",
+      "field": "data.min_n_minutes",
+      "id": "A-080",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 1
+    },
+    {
+      "confidence": "high",
+      "field": "data.complete_bins",
+      "id": "A-081",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": {
+        "first": "09:15",
+        "last": "15:10"
+      }
+    },
+    {
+      "confidence": "high",
+      "field": "portfolio.mode",
+      "id": "A-082",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "multi_position"
+    },
+    {
+      "confidence": "high",
+      "field": "portfolio.max_concurrent",
+      "id": "A-083",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 213
+    },
+    {
+      "confidence": "high",
+      "field": "portfolio.max_trades_per_day",
+      "id": "A-084",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 213
+    },
+    {
+      "confidence": "high",
+      "field": "portfolio.capital_per_position",
+      "id": "A-085",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 100000
+    },
+    {
+      "confidence": "high",
+      "field": "portfolio.max_exposure",
+      "id": "A-086",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 21300000
+    },
+    {
+      "confidence": "high",
+      "field": "portfolio.selection",
+      "id": "A-087",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "chronological"
+    },
+    {
+      "confidence": "high",
+      "field": "portfolio.conflict",
+      "id": "A-088",
+      "materiality": "high",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "skip_if_symbol_open"
+    },
+    {
+      "confidence": "high",
+      "field": "disclosure.prior_variants",
+      "id": "A-089",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": 6
+    },
+    {
+      "confidence": "high",
+      "field": "disclosure.chart_peeking",
+      "id": "A-090",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": false
+    },
+    {
+      "confidence": "high",
+      "field": "disclosure.destination",
+      "id": "A-091",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "python"
+    },
+    {
+      "confidence": "high",
+      "field": "rationale",
+      "id": "A-092",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "A multi-day overlapping value area is agreed value; price accepted outside it moves to new value, and the level is known before the move."
+    },
+    {
+      "confidence": "high",
+      "field": "kill_criterion",
+      "id": "A-093",
+      "materiality": "low",
+      "reason": "stated in spec.yaml",
+      "section": "intent",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "Net expectancy not above zero out of sample after statutory costs plus 4 bps slippage per side, or no gain over the non-balance placebo."
+    },
+    {
+      "confidence": "high",
+      "field": "execution.product",
+      "id": "A-094",
+      "materiality": "medium",
+      "reason": "stated in the spec",
+      "section": "execution",
+      "source": "user",
+      "user_confirmed": true,
+      "value": "MIS"
+    },
+    {
+      "confidence": "high",
+      "field": "execution.bar_size",
+      "id": "A-095",
+      "materiality": "medium",
+      "reason": "same as the spec timeframe",
+      "section": "execution",
+      "source": "derived",
+      "user_confirmed": false,
+      "value": "5m"
+    },
+    {
+      "confidence": "high",
+      "field": "execution.warmup_bars",
+      "id": "A-096",
+      "materiality": "medium",
+      "reason": "longest indicator period: ATR(14)",
+      "section": "execution",
+      "source": "derived",
+      "user_confirmed": false,
+      "value": 14
+    },
+    {
+      "confidence": "high",
+      "field": "execution.slippage_bps_per_side",
+      "id": "A-097",
+      "materiality": "medium",
+      "reason": "house default for market orders",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": false,
+      "value": 4.0
+    },
+    {
+      "confidence": "high",
+      "field": "execution.cost_bps_round_trip",
+      "id": "A-098",
+      "materiality": "medium",
+      "reason": "intraday round-trip cost default",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": false,
+      "value": 16.0
+    },
+    {
+      "confidence": "high",
+      "field": "execution.oos_fraction",
+      "id": "A-099",
+      "materiality": "low",
+      "reason": "G3.1 holdout fraction",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": false,
+      "value": 0.3
+    },
+    {
+      "confidence": "high",
+      "field": "execution.embargo_sessions",
+      "id": "A-100",
+      "materiality": "low",
+      "reason": "G3.5 embargo after the cut",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": false,
+      "value": 1
+    },
+    {
+      "confidence": "high",
+      "field": "execution.eligibility_min_prior_sessions",
+      "id": "A-101",
+      "materiality": "medium",
+      "reason": "listing age: earlier traded sessions required before a symbol is eligible",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": false,
+      "value": 60
+    },
+    {
+      "confidence": "high",
+      "field": "execution.eligibility_min_volume",
+      "id": "A-102",
+      "materiality": "medium",
+      "reason": "session volume must be above this to count as traded",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": false,
+      "value": 1
+    },
+    {
+      "confidence": "high",
+      "field": "execution.eligibility_min_price",
+      "id": "A-103",
+      "materiality": "medium",
+      "reason": "floor in rupees on the NSE raw (unadjusted) session close, excludes penny-priced sessions",
+      "section": "execution",
+      "source": "platform_default",
+      "user_confirmed": false,
+      "value": 10.0
+    },
+    {
+      "confidence": "high",
+      "field": "profile.mis_squareoff_min",
+      "id": "A-104",
+      "materiality": "medium",
+      "reason": "profile flattrade-nse-cash MIS",
+      "section": "profile",
+      "source": "broker_config",
+      "user_confirmed": false,
+      "value": 900
+    },
+    {
+      "confidence": "high",
+      "field": "profile.squareoff_margin_min",
+      "id": "A-105",
+      "materiality": "medium",
+      "reason": "profile flattrade-nse-cash MIS",
+      "section": "profile",
+      "source": "broker_config",
+      "user_confirmed": false,
+      "value": 5
+    },
+    {
+      "confidence": "high",
+      "field": "profile.time_exit_min",
+      "id": "A-106",
+      "materiality": "medium",
+      "reason": "profile flattrade-nse-cash MIS",
+      "section": "profile",
+      "source": "broker_config",
+      "user_confirmed": false,
+      "value": 885
+    },
+    {
+      "confidence": "high",
+      "field": "profile.tick_grid",
+      "id": "A-107",
+      "materiality": "medium",
+      "reason": "profile flattrade-nse-cash MIS",
+      "section": "profile",
+      "source": "broker_config",
+      "user_confirmed": false,
+      "value": "safe_tick"
+    },
+    {
+      "confidence": "high",
+      "field": "profile.carry_forward",
+      "id": "A-108",
+      "materiality": "medium",
+      "reason": "profile flattrade-nse-cash MIS",
+      "section": "profile",
+      "source": "broker_config",
+      "user_confirmed": false,
+      "value": false
+    }
+  ],
+  "next_id": 109,
+  "sealed_ist": "2026-10-28T15:00:31.508327+05:30"
+}

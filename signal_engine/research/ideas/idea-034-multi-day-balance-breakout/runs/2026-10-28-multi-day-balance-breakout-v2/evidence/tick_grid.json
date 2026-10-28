@@ -1,0 +1,53 @@
+{
+  "by_tier": {
+    "0.01": {
+      "checked": 52
+    },
+    "0.05": {
+      "checked": 1195
+    },
+    "0.1": {
+      "checked": 81
+    },
+    "0.5": {
+      "checked": 16
+    },
+    "1": {
+      "checked": 4
+    },
+    "5": {
+      "checked": 4
+    }
+  },
+  "engine_tick_grid": "safe_tick",
+  "not_covered": [
+    "stops moved by a ladder exit plan are not snapped or checked",
+    "trailed stops are snapped by the engine but only the initial stop of each trade is checked",
+    "targets are market exits in production and are not orders",
+    "broker acceptance of a trigger is a pre-live operational check and is not part of this evidence",
+    "the dated tick reference is verified against the NSE circulars for the 2024 and 2025 changes; the Rs 0.05 tick before 2024-06-10 is primary-confirmed only as of May 2024 (see its header)"
+  ],
+  "off_grid": 0,
+  "on_grid": 1352,
+  "reference": {
+    "coverage_start": "2016-01-01",
+    "regimes": [
+      "flat-0.05",
+      "two-tier-2024",
+      "six-tier-2025"
+    ],
+    "sha256": "a0714114834ff68971bbf76608f4edba395cc093a79c8e0f65ef1e32ae103de2",
+    "verification": "partial",
+    "verified_on": "2026-10-13",
+    "version": 1
+  },
+  "rule": "every stop trigger is a multiple of the exact tick tier of its month, taken from the previous month's last close restated for corporate actions into the trade session's price units (safe_tick of the stop where that month is not in the data)",
+  "stops_checked": 1352,
+  "tick_basis": {
+    "exact": 1346,
+    "fallback_safe_tick": 6
+  },
+  "uncovered": 0,
+  "version": 2,
+  "worst": []
+}

@@ -105,3 +105,55 @@ No, as defined: the net loss is consistent across IS, OOS, both stops and both t
 the only lever worth studying is cost: the strategy needs about 4 bps less round-trip cost, or a
 higher-payoff variant (the short side alone is net -1.1 bps, closest to breakeven). Tuning that now
 would be a post-hoc search on seen data and needs a fresh trial count and a hold-out not yet used.
+
+## v2 wider balance (2026-10-28)
+
+Verdict: FAIL the pre-registered decision rule. The primary (H at least 1.5 percent of the broken
+edge) is net negative in sample (-1.30 bps) and out of sample (-3.83 bps). It does beat the
+non-balance placebo under the same filter (+7.1 bps gross, approx t 2.3), but that was already
+true of v1. Requiring a wider balance does not lift the gross edge enough to pay the 11.55 bps
+cost, and the H% buckets show no "wider is better" trend.
+
+Pre-registration: `idea.md`, "v2 pre-registration", written before any v2 result. Same data,
+universe, engine, cost model and 2023-11-08 cut as v1. That hold-out was already seen by v1, so it
+is NOT a clean hold-out for v2. n_trials 6 -> 9 (primary material + 2 external secondary trials;
+placebos are not trials).
+
+| Config | Trades | Gross bps | Net bps | Net t (day) | Gross t (day) | PF | IS net | OOS net (n) | Long net | Short net |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| v1 (H% >= 0) | 1,657 | +8.53 | -3.02 | -0.99 | 3.23 | 0.92 | -2.37 | -4.28 (560) | -5.18 | -1.14 |
+| v2 primary H% >= 1.5 | 1,352 | +9.44 | -2.11 | -0.47 | 3.20 | 0.97 | -1.30 | -3.83 (433) | -4.09 | -0.45 |
+| v2 trial H% >= 2.0 | 981 | +8.90 | -2.64 | -0.45 | 2.51 | 0.95 | -2.54 | -2.89 (288) | -3.24 | -2.13 |
+| v2 trial H% >= 2.5 | 680 | +9.58 | -1.97 | -0.14 | 2.14 | 0.95 | -0.91 | -4.51 (200) | -1.04 | -2.79 |
+
+Mean round-trip cost 11.55 bps in every row (statutory 3.55 bps plus 4 bps slippage per side).
+Rows come from the unrecorded driver; the recorded primary run is below.
+
+v1 trades by H% bucket (descriptive, not a trial):
+
+| H% of broken edge | Trades | Gross bps | Net bps | OOS trades | OOS net bps |
+| --- | --- | --- | --- | --- | --- |
+| < 1.0 | 63 | +8.89 | -2.66 | 18 | +12.07 |
+| 1.0 - 1.5 | 242 | +3.38 | -8.17 | 109 | -8.79 |
+| 1.5 - 2.0 | 371 | +10.85 | -0.70 | 145 | -5.68 |
+| 2.0 - 2.5 | 301 | +7.39 | -4.16 | 88 | +0.77 |
+| >= 2.5 | 680 | +9.58 | -1.97 | 200 | -4.51 |
+
+The primary's improvement over v1 comes almost entirely from dropping the weak 1.0-1.5 bucket,
+not from a monotonic width effect, and no bucket is net positive both in total and out of sample
+with a usable sample.
+
+Placebo P1 (non-balance, H > 1.5 x ATR14) with the same H% >= 1.5 filter: 44,119 trades, gross
++2.38, net -9.17 (the filter removes almost nothing, non-balance ranges are already wide). Primary
+minus placebo: +7.06 bps gross, approx Welch t 2.34.
+
+Decision rule: net positive IS - fail; net positive OOS - fail; beats P1 under the same filter -
+pass. Overall: FAIL. The width lever is exhausted on this data; the cost gap (about 2 bps at best)
+remains.
+
+Recorded run: `runs/2026-10-28-multi-day-balance-breakout-v2.json` (strategy version v2, parent
+v1). 1,352 trades, gross +9.48 bps, net -2.06 bps, t -0.47 against hurdle 2.80, PF 0.97,
+expectancy -0.012R, max drawdown 54R, IS net -1.23 bps (919 trades). n_trials 9. Recorded with
+`--allow-dirty` (code_version `3d6424063-dirty`, reproducible false, not promotable).
+run_verdict INCONCLUSIVE. The small differences from the driver row (+9.44 / -2.11) are the same
+per-trade costing difference seen for v1.
