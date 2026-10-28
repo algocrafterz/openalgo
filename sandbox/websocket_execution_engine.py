@@ -11,6 +11,7 @@ Features:
 """
 
 import os
+import queue
 import sys
 import threading
 import time
@@ -82,6 +83,18 @@ class WebSocketExecutionEngine:
         self._fallback_thread: threading.Thread | None = None
         self._fallback_running = False
 
+        # Feed releases are sent by one worker, not on the thread that processed the fill:
+        # the proxy may take up to 10 s to acknowledge, and a fill must not wait for it.
+        self._unsubscribe_queue: queue.Queue = queue.Queue()
+        self._unsubscribe_thread: threading.Thread | None = None
+        self._unsubscribe_stats = {
+            "queued": 0,
+            "sent": 0,
+            "failed": 0,
+            "skipped_resubscribed": 0,
+            "max_release_seconds": 0.0,
+        }
+
         # Import execution engine for order processing and fallback
         from sandbox.execution_engine import ExecutionEngine
 
@@ -135,6 +148,10 @@ class WebSocketExecutionEngine:
                 logger.exception(f"Error unsubscribing from MarketDataService: {e}")
 
         self._subscriber_id = None
+
+        # Releases still queued are covered by _unsubscribe_all_ws() below, which walks every
+        # held reference; the worker only needs to exit.
+        self._stop_unsubscribe_worker()
 
         # Unsubscribe all WebSocket symbols for all users
         self._unsubscribe_all_ws()
@@ -324,7 +341,7 @@ class WebSocketExecutionEngine:
 
         if unsubscribe_user and unsubscribe_symbol:
             exchange, symbol = unsubscribe_symbol.split(":", 1)
-            self._unsubscribe_ws_symbols(unsubscribe_user, [(symbol, exchange)])
+            self._schedule_unsubscribe(unsubscribe_user, symbol, exchange)
 
     def notify_position_opened(self, user_id: str, symbol: str, exchange: str):
         """Hold a feed subscription for an open position (event-driven MTM).
@@ -377,7 +394,7 @@ class WebSocketExecutionEngine:
                 unsubscribe = self._decrement_user_symbol_refcount(user_id, symbol_key)
         if unsubscribe:
             logger.info(f"Position feed: releasing {symbol_key} (user {user_id}, flat)")
-            self._unsubscribe_ws_symbols(user_id, [(symbol, exchange)])
+            self._schedule_unsubscribe(user_id, symbol, exchange)
 
     def _on_market_data(self, data: dict):
         """
@@ -490,7 +507,7 @@ class WebSocketExecutionEngine:
 
         if unsubscribe_user and unsubscribe_symbol:
             exchange, symbol = unsubscribe_symbol.split(":", 1)
-            self._unsubscribe_ws_symbols(unsubscribe_user, [(symbol, exchange)])
+            self._schedule_unsubscribe(unsubscribe_user, symbol, exchange)
 
     def notify_gtt_placed(self, gtt):
         """Start watching a newly placed GTT without waiting for a rebuild.
@@ -703,10 +720,76 @@ class WebSocketExecutionEngine:
         except Exception as e:
             logger.exception(f"Error subscribing WebSocket symbols for user {user_id}: {e}")
 
-    def _unsubscribe_ws_symbols(self, user_id: str, symbols: list[tuple[str, str]]):
-        """Unsubscribe from LTP via WebSocket for the given user and symbols."""
+    def _schedule_unsubscribe(self, user_id: str, symbol: str, exchange: str):
+        """Queue a feed release for the worker. Returns at once; never waits for the proxy."""
+        with self._lock:
+            self._unsubscribe_stats["queued"] += 1
+            if self._unsubscribe_thread is None or not self._unsubscribe_thread.is_alive():
+                self._unsubscribe_thread = threading.Thread(
+                    target=self._unsubscribe_worker, daemon=True, name="WSExec-Unsubscribe"
+                )
+                self._unsubscribe_thread.start()
+        self._unsubscribe_queue.put((user_id, symbol, exchange, time.monotonic()))
+
+    def _unsubscribe_worker(self):
+        """Send queued feed releases one at a time, in the order they were made."""
+        while True:
+            item = self._unsubscribe_queue.get()
+            if item is None:
+                if self._running:
+                    continue  # the engine was started again after the stop was queued
+                return
+            user_id, symbol, exchange, queued_at = item
+            if not self._running:
+                continue  # stop() releases every held symbol itself
+            symbol_key = f"{exchange}:{symbol}"
+            with self._lock:
+                wanted_again = self._user_symbol_refcounts.get(user_id, {}).get(symbol_key, 0) > 0
+                if wanted_again:
+                    self._unsubscribe_stats["skipped_resubscribed"] += 1
+            if wanted_again:
+                logger.info(
+                    f"Position feed: release of {symbol_key} skipped, subscribed again "
+                    f"(user {user_id})"
+                )
+                continue
+            started = time.monotonic()
+            try:
+                ok = self._unsubscribe_ws_symbols(user_id, [(symbol, exchange)])
+            except Exception:
+                logger.exception(f"Position feed: release of {symbol_key} raised (user {user_id})")
+                ok = False
+            took = time.monotonic() - started
+            with self._lock:
+                self._unsubscribe_stats["sent" if ok else "failed"] += 1
+                self._unsubscribe_stats["max_release_seconds"] = max(
+                    self._unsubscribe_stats["max_release_seconds"], took
+                )
+            if not ok:
+                logger.warning(
+                    f"Position feed: release of {symbol_key} was not confirmed after {took:.1f}s "
+                    f"(user {user_id}, waited {started - queued_at:.1f}s in queue); the "
+                    "subscription may remain until the feed reconnects"
+                )
+
+    def _stop_unsubscribe_worker(self):
+        """Tell the release worker to exit. Items still queued are discarded by it."""
+        thread = self._unsubscribe_thread
+        if thread is not None and thread.is_alive():
+            self._unsubscribe_queue.put(None)
+
+    def stats(self) -> dict:
+        """Counts for feed releases: queued, sent, failed, skipped, slowest release."""
+        with self._lock:
+            return dict(self._unsubscribe_stats)
+
+    def _unsubscribe_ws_symbols(self, user_id: str, symbols: list[tuple[str, str]]) -> bool:
+        """Unsubscribe from LTP via WebSocket for the given user and symbols.
+
+        Returns True when the proxy confirmed the release, False when it did not.
+        """
         if not symbols:
-            return
+            return True
 
         try:
             from database.auth_db import get_api_key_for_tradingview, get_broker_name
@@ -714,7 +797,7 @@ class WebSocketExecutionEngine:
             api_key = get_api_key_for_tradingview(user_id)
             if not api_key:
                 logger.warning(f"WebSocket unsubscribe skipped: no API key for user {user_id}")
-                return
+                return False
             broker = get_broker_name(api_key) if api_key else None
             broker_name = broker or "unknown"
             if broker_name == "unknown":
@@ -728,8 +811,10 @@ class WebSocketExecutionEngine:
                 logger.warning(
                     f"WebSocket unsubscribe failed for user {user_id}: {response.get('message')} (status {status_code})"
                 )
+            return bool(success)
         except Exception as e:
             logger.exception(f"Error unsubscribing WebSocket symbols for user {user_id}: {e}")
+            return False
 
     def _unsubscribe_all_ws(self):
         """Unsubscribe all WebSocket symbols for all users."""
