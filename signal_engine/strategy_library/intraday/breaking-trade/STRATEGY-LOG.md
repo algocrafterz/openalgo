@@ -96,6 +96,64 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-10-28 04:30 — Acting the moment a label appears gains nothing; the guide's extra scans tested
+- **What changed:** Nothing in the strategy. Each label (tails, failed highs/lows, poor
+  highs/lows, open drive, the live single-print count) and each ready-made scan from the
+  vendor's guide that we do not run was tested from the FIRST poll at which it appeared, the
+  earliest we can act, and again 10 and 20 minutes later.
+- **Entry:** Not affected.
+- **Exit (SL):** Not affected.
+- **Exit (TP):** Not affected.
+- **Consideration:** By the time any label first shows, the stock has already moved 0.4% to
+  1.6% in that direction, and over the next 15 to 60 minutes it does no better than the average
+  stock. Entering 10 or 20 minutes later gives the same result, so polling every 2 minutes (the
+  site's own refresh) instead of every 5 to 15 would not gain points. None of the extra scans
+  beat costs in both periods.
+
+NOTE: `experiments/2026-10-mp-state-study/event_study.py` (direction per the guide,
+https://breakingtrade.com/scanner-guide, fetched 2026-10-28; site refresh every 2 min, TPO
+period 30 min). Signed excess vs the equal-weight universe; t clustered by day; P1 / P2:
+- Move already made at first appearance: tails +37 to +52 bps, open drive +66 to +69, live print
+  3-5 TPO +75 to +107, 6+ TPO +95 to +157.
+- After it, +15/+30/+60 min: within about +-3 bps for almost every label; to 14:45 within +-10.
+- Live print 6+ TPO, which the guide calls late: not worse than 3-5 (P1 +1.1 / P2 +9.3 up).
+- Scan 10 live print + Trend: P1 -25.8 / P2 +31.5 bps (26 / 33 events) - regime-flipping.
+- Scan 6 mirror (buy tail inside value on a Normal Variation up day, long): +7.2 (t 0.9) /
+  +7.5 (t 2.2) - the only consistent one, below a round trip of cost. Scan 6 itself (short):
+  +1.7 / +5.1.
+- Failed high (short, the guide's reading): P2 -6.1 (t -2.1), i.e. the price kept rising.
+- Scans 8 (poor high magnet) and 11 (range-day edge fade): too few events or within +-7 bps.
+  Scan 9 (single print refill) has no direction in the data and was not tested; scan 13 (sector
+  sweep) is a discretionary momentum/laggard choice and was not tested.
+
+### 2026-10-28 03:40 — Every Market Profile state in the snapshots tested early in the day: no usable edge
+- **What changed:** Nothing in the strategy. Every state the website reports (opening type,
+  open drive, tails, single prints, poor highs and lows, day type, position against value and
+  the prior day's range, volume pace) was tested on all ~230 F&O stocks at 09:35, 10:20 and
+  11:01, against how the stock moved for the rest of the day beyond the average stock.
+- **Entry:** Not affected.
+- **Exit (SL):** Not affected.
+- **Exit (TP):** Not affected.
+- **Consideration:** No state moved stocks by more than a round trip costs, in both periods.
+  The data describes the auction so far; it does not add information that the price has not
+  already used. A better edge needs our own multi-day profile levels, not more filters on these
+  columns. Three weak leads are listed in the note for a forward test, none proven.
+
+NOTE: `experiments/2026-10-mp-state-study/` (`state_study.py`, `volume_study.py`,
+`picks_by_volume.py`). Direction for each state fixed before running from auction theory; signed
+excess vs the equal-weight universe from the next minute's open; t clustered by day; P1
+2026-08-18..09-23 and P2 2026-09-24..10-27 (30-34 days with bars). Findings, to 14:45:
+- Open Test Drive in its direction, read at 10:20: P1 +12.9 bps (t 3.90), P2 +7.7 (t 0.91). The
+  only state positive and sizeable in both periods; still about one round trip of cost.
+- Initiative openings fade after the IB: Open Drive in its direction at 10:20 -14.1 / -5.3 bps;
+  opening above prior value -8.2 / -2.4; gap down -9.9 / -1.9 (t all under 1.6). Weak, but the
+  same sign in both periods: the textbook continuation reading does not hold here after 10:20.
+- Universe: a move since the open on LOW volume pace continued (10:20: P1 +4.5, t 1.64; P2 +11.3,
+  t 3.55); a move on HIGH pace did not (+0.4 / +3.0). Among the scanner's own picks the same split
+  showed nothing (all t under 1).
+- Day type, tails, poor highs/lows, single prints and position against value: signs flip between
+  periods or stay within about 10 bps.
+
 ### 2026-10-28 02:50 — The scanner's picks arrive after the move, not before it
 - **What changed:** Nothing in the strategy. A check of the stock selection alone, with no
   entry, stop or target rule, over 680 picks on 35 days (2026-08-18 to 2026-10-27). By the time
