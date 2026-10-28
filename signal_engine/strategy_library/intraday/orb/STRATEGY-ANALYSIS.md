@@ -954,3 +954,44 @@ rules were not changed, the TradingView script was not replaced and no shorts-on
 added. `strategy_profiles.ORB` and `blacklist.ORB` stay so that startup restore and the history
 remain intact. Guarded by `tests/test_config_validation.py::TestShippedOrbRetirement`. Rollback:
 set `enabled: true` again; it takes effect at the next engine start.
+
+### 2026-10-28 18:30 — Paper execution re-enabled as an observation run; regime gate tested, none found
+- **What changed:** ORB paper trading is switched back on by the owner's decision, to keep
+  watching its results day by day. A study (IDEA-035) then asked whether the state of the market
+  at the open could tell good ORB days from bad ones, using ten years of trades.
+- **Entry:** Paper entries resume at the next engine start. No entry rule changed.
+- **Exit (SL):** Not affected.
+- **Exit (TP):** Not affected.
+- **Consideration:** None of seven market-state tests (yesterday's move, gap, opening drive,
+  breadth, range, trend, volatility) picked out days where ORB makes money after costs on the
+  later years. Trading shorts only loses less than trading both sides but is still negative over
+  ten years; it looks good in the paper month only because the market fell. Treat paper results as
+  a measurement, not as a reason to trade real money. No size cut or stand-down rule is justified
+  by the evidence yet.
+
+NOTE: `config.yaml` `intraday-orb-analyze` `enabled: true`; the pin in
+`tests/test_config_validation.py` is now `TestShippedOrbChannels` (paper on, live off). Study:
+`research/ideas/idea-035-orb-regime-gate/` (`regime_study.py`, `results/`). 16 trials, hurdle
+t 2.7 on out-of-sample, none passed. The engine reads the config at start, so a restart is needed
+before the first paper trade.
+
+## Observation run, from 2026-10-29
+
+ORB paper trading is an observation run, not a candidate for live money. What to watch, and what
+would change the view:
+
+- **Evaluate daily** from `trades.db` (`paper-review` skill): net R by side at 2, 5 and 10 bps,
+  and the share closed by the no-progress rule. Judge cumulative results, never one day.
+- **Do not tune from the paper results.** The 67-trade month is the sample the shorts-only idea came
+  from, so it cannot confirm it. The shorts edge (+0.216 R, 27 trades) coincided with NIFTY falling
+  about 2.8%; the ten-year out-of-sample shorts-only result is -0.007 R per slot.
+- **Record, do not act.** The next step is shadow tracking: write the IDEA-035 features (F1-F7) and
+  the side on each ORB paper signal, then score "shorts only" and each gate on forward fills with no
+  extra orders. Not built yet.
+- **Revisit at 60 more ORB paper sessions.** A gate counts only if it meets the IDEA-035 bar
+  (positive net, majority of years positive, day-clustered t of at least 2.7) on trades made after
+  2026-10-28. If forward shorts stay positive in a flat or rising market, that is new evidence; if
+  they turn negative when the market stops falling, the paper month was the market.
+- **Known gap:** regime features stop at 2026-10-19 (end of the published dataset), so the feature
+  replay covered 42 of the 67 paper trades.
+

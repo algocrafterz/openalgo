@@ -6379,3 +6379,18 @@ refuses dates before the 2026-10-29 hold-out start. No schedule is installed.
 **In plain terms:** a new test of the balance-breakout idea now runs on paper, on days nobody has
 seen yet. It never sends an order; it writes down every signal and what a resting limit order
 would have done, so the result can be judged honestly after enough sessions.
+
+## ORB paper re-enabled and regime-gate study (2026-10-28)
+
+**Change.** `intraday-orb-analyze` is `enabled: true` again (owner decision, observation run). ORB
+live stays disabled. `tests/test_config_validation.py::TestShippedOrbChannels` replaces the
+retirement pin. Study IDEA-035 (`research/ideas/idea-035-orb-regime-gate/`) tested seven
+causal-at-entry market-state features per side on 86,967 ten-year trades (IS before 2023-11-08):
+no gate passes the pre-registered out-of-sample bar (t 2.7, positive net, majority of years), and
+shorts-only is still net negative out of sample. No variant is wired. Next: record the features
+per ORB paper signal and revisit after 60 more sessions.
+
+**In plain terms:** ORB paper-trades again. We checked whether a market mood at the open could
+tell us when to trade it or cut its size, and over ten years nothing did. A shorts-only rule looked
+good in the paper month only because the market was falling.
+

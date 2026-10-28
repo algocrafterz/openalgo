@@ -51,16 +51,20 @@ class TestBothPhasesEnabledIsRefused:
         assert any("both phases enabled" in p.lower() for p in problems)
 
 
-class TestShippedOrbRetirement:
-    """ORB paper execution stopped 2026-10-28. Its channels, profile and history stay."""
+class TestShippedOrbChannels:
+    """ORB paper execution was stopped 2026-10-28 and re-enabled the same day by owner decision.
+
+    Paper (-analyze) is on, live stays off until a deliberate promotion.
+    """
 
     def _orb_channels(self):
         return [ch for ch in settings.telegram_channels if ch.name.startswith("intraday-orb-")]
 
-    def test_both_orb_channels_are_kept_and_disabled(self):
+    def test_orb_paper_is_enabled_and_live_stays_disabled(self):
         channels = {ch.name: ch for ch in self._orb_channels()}
         assert set(channels) == {"intraday-orb-analyze", "intraday-orb-live"}
-        assert not any(ch.enabled for ch in channels.values())
+        assert channels["intraday-orb-analyze"].enabled
+        assert not channels["intraday-orb-live"].enabled
 
     def test_the_orb_pair_still_validates(self):
         assert validate_channels(tuple(self._orb_channels())) == []
