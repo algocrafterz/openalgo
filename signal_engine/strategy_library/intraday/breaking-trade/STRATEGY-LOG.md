@@ -96,6 +96,38 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-10-28 17:40 — A closer stop for BREAKINGTRADE-RI tested on past data: rejected, no new version
+- **What changed:** Nothing in either strategy, and no third paper version was started. The
+  first paper day showed that RI's stop sits at the bottom of the first hour's range even though
+  RI buys above its top, so every RI trade risks more than its first target pays. Two closer
+  stops were replayed on RI's own entries: the middle of the first hour's range, and just under
+  its top. Both looked better or equal on the recent weeks and clearly worse on the earlier
+  weeks, which is the pattern of a result that will not hold up.
+- **Entry:** Not affected.
+- **Exit (SL):** Not affected. RI keeps the stop at the far side of the first hour's range.
+- **Exit (TP):** Not affected.
+- **Consideration:** A closer stop gives bigger positions and is hit more often. On past data
+  that traded more without keeping more after costs. RI stays as it is; judge it against
+  BREAKINGTRADE on several weeks of paper results.
+
+NOTE: `experiments/2026-10-amt-replay/amt_replay.py` variants E17M (stop = IB midpoint -/+ 0.25
+ATR) and E17H (stop = broken IB edge -/+ 0.25 ATR), both on E17's entries (E17 = BREAKINGTRADE-RI).
+Expectancy in R per trade after Flattrade charges and 4 bps slippage per side (net4):
+
+| Variant | 2026-09-24 onward: n, net4 R (t) | 2026-08-18 to 09-23: n, net4 R (t) |
+|---|---|---|
+| B (BREAKINGTRADE) | 110, +0.021 (0.47) | 55, -0.099 (-1.56) |
+| E17 (RI, current) | 76, +0.013 (0.34) | 32, -0.026 (-0.39) |
+| E17M (IB midpoint stop) | 144, 0.000 (0.00) | 70, -0.118 (-1.64) |
+| E17H (IB edge stop) | 166, +0.089 (0.66) | 83, -0.345 (-3.77) |
+
+Look-ahead check passed on every run, and the E17 rule audit passed on all three. E17H's recent
+gain comes from shorts in a falling October (113 shorts, +0.148R) while its longs lost; in the
+earlier period both sides lost (longs -0.473R, t -4.48). The earlier period was already used
+as a holdout (2026-10-28 02:10), so it is a second sample here, not a clean out-of-sample
+test. Nothing passes both periods, consistent with the 02:50 finding that selection, not
+exits or stops, is the limit.
+
 ### 2026-10-28 17:17 — Two engine fixes from the first BREAKINGTRADE-RI paper day
 - **What changed:** Two record-keeping and closing faults found in the 2026-10-28 paper review
   were fixed in the engine. Both apply to every strategy, not only BreakingTrade. (1) After a

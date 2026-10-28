@@ -2,7 +2,7 @@
 
 Usage, from the openalgo checkout:
     uv run python <this dir>/amt_replay.py <VARIANT> [FROM TO]
-    VARIANT: B E1 E2 E3 E4 E5 E6 E7 E17          FROM/TO: ISO dates, TO exclusive
+    VARIANT: B E1 E2 E3 E4 E5 E6 E7 E17 E17M E17H   FROM/TO: ISO dates, TO exclusive
 Default period 2026-09-24 onward. Writes results/amt_<VARIANT>_<FROM>.csv.
 
 Rebuilds the live entry path (scan pick -> entry_watch confirmation -> order at the next scanner
@@ -24,7 +24,9 @@ Variants (each one change against B):
   E1   the trigger close must also be beyond the IB edge in the trade's direction, the IB as it
        stood before the trigger bar opened (unfinished before 10:15)
   E7   no trigger bar starting before 10:15 (the IB must be complete)
-  E17  E1 and E7 together: the candidate
+  E17  E1 and E7 together: the candidate (BREAKINGTRADE-RI)
+  E17M E17 with the stop at the IB midpoint -/+ 0.25 x ATR (2026-10-28 paper review DESIGN-1)
+  E17H E17 with the stop at the broken IB edge -/+ 0.25 x ATR (E3's stop on E17's entries)
   E2   trigger = a completed 30-min period closing beyond the (complete) IB edge
   E3   stop = the broken IB edge -/+ 0.25 x ATR when the entry is beyond it
   E4   TP1 = nearest AMT reference beyond entry (1.5x/2x IB extension, PDH/PDL, prior VAH/VAL/POC)
@@ -49,7 +51,8 @@ B = sqlite3.connect(f"file:{R.ROOT}/signal_engine/data/breakingtrade.db?mode=ro"
 WINDOW = dt.timedelta(hours=2)
 IB_END = dt.time(10, 15)
 LAST_ENTRY = dt.time(14, 45)
-VARIANTS = ("B", "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E17")
+VARIANTS = ("B", "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E17", "E17M", "E17H")
+RI_FAMILY = ("E17", "E17M", "E17H")  # E17 entries; only the stop differs
 SCAN_WINDOWS = {  # scans.SCANS, documented windows
     "The Runaway": ("09:20", "10:30"),
     "The Breakdown": ("09:20", "10:30"),
@@ -207,9 +210,9 @@ def find_trigger(pk, df1, b5, sig_bar, poll_list):
             end = end_of(day, bar.start, 5)
             if s * (bar.close - level) <= 0:
                 continue
-            if VARIANT in ("E7", "E17") and bar.start < IB_END:
+            if VARIANT in ("E7", *RI_FAMILY) and bar.start < IB_END:
                 continue
-            if VARIANT in ("E1", "E17"):
+            if VARIANT in ("E1", *RI_FAMILY):
                 # The IB as it stood before this bar opened (a bar cannot close beyond a high
                 # that includes its own); before 10:15 that IB is still forming.
                 ibh, ibl = ib_as_of(df1, bar.start)
@@ -254,6 +257,11 @@ def decide(pk, df1):
     if VARIANT == "E3":
         cand = ibh - 0.25 * a if s > 0 else ibl + 0.25 * a
         if s * (sig_entry - cand) >= R.MIN_SL_PCT * sig_entry:
+            stop, changed = cand, True
+    if VARIANT in ("E17M", "E17H"):
+        level = (ibh + ibl) / 2 if VARIANT == "E17M" else (ibh if s > 0 else ibl)
+        cand = level - 0.25 * a if s > 0 else level + 0.25 * a
+        if s * (sig_entry - cand) > 0:
             stop, changed = cand, True
     if VARIANT == "E4":
         pdx = prior_day(pk["sym"], day)
@@ -418,7 +426,7 @@ if __name__ == "__main__":
     if VARIANT not in VARIANTS:
         sys.exit(f"variant must be one of {VARIANTS}")
     rows, skipped = build()
-    if VARIANT == "E17":
+    if VARIANT in RI_FAMILY:
         audit_e17(rows)
     d = evaluate(rows)
     d.to_csv(f"{R.OUT}/amt_{VARIANT}_{FROM}.csv", index=False)
