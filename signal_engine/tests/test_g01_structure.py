@@ -34,6 +34,14 @@ STRATEGIES = {
             "paper_live": "pipeline/strategies/ema_vwap_early.py",
         },
     },
+    # IDEA-034 v3: a forward recorder that places no orders, so not a pipeline (paper_live) strategy.
+    "BalanceBreakout": {
+        "core": "balance_breakout",
+        "adapters": {
+            "backtest": "backtest/strategies/balance_breakout.py",
+            "paper_record": "analysis/idea034_paper.py",
+        },
+    },
 }
 EXIT_ADAPTERS = {"pipeline/exit_driver.py": "exits", "pipeline/trail_driver.py": "ema_vwap_early"}
 #: What a core may import from this package: itself, the shared features and the clock.

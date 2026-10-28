@@ -1,0 +1,151 @@
+{
+  "idea": "IDEA-034",
+  "version": "v3",
+  "frozen_ist": "2026-10-28T15:54:10+05:30",
+  "holdout_start": "2026-10-29",
+  "fingerprint": "3f55a9888c1136959f91d312609e1eeab388a5e9db1c010ebe945ec9608dad88",
+  "params": {
+    "balance_days": 5,
+    "atr_max_multiple": 1.5,
+    "value_area_pct": 70.0,
+    "bin_pct_of_price": 0.05,
+    "min_va_overlap": 0.5,
+    "atr_len": 14,
+    "stop_buffer_atr": 0.25,
+    "min_session_bars": 60,
+    "trigger": "p30",
+    "stop_mode": "edge",
+    "placebo": "none",
+    "min_height_pct": 1.5
+  },
+  "entry": {
+    "type": "limit at the broken edge",
+    "window_min": 15
+  },
+  "costs": {
+    "statutory": "india_intraday NSE flattrade",
+    "slip_bps_market_leg": 4.0
+  },
+  "notional": 100000.0,
+  "max_concurrent": 10,
+  "criteria": {
+    "min_sessions": 40,
+    "min_signals": 100,
+    "min_fills": 40,
+    "fill_rate_min": 0.3,
+    "fill_rate_max": 0.55,
+    "kill_after_signals": 50,
+    "max_data_gap_share": 0.1
+  },
+  "universe_sha256": "9efdf41aff09e17cc0b4f6b7473f5d49703b6a376fa7811c5429f6e4a61f43e5",
+  "reference": {
+    "source": "limit-order-study/results/sample_a.csv, v2 (h_pct >= 1.5), L1w15, unfilled = 0",
+    "signals": 1319,
+    "fill_rate": 0.4094,
+    "net_per_signal_bps": 2.916,
+    "net_per_fill_bps": 7.123,
+    "bootstrap": {
+      "paths": 20000,
+      "seed": 34,
+      "unit": "bps of the Rs 1,00,000 notional"
+    },
+    "bands": {
+      "25": {
+        "mean_p5": -16.995,
+        "mean_p95": 26.666,
+        "dd_p95": 507.3,
+        "dd_p99": 650.8
+      },
+      "50": {
+        "mean_p5": -11.395,
+        "mean_p95": 19.239,
+        "dd_p95": 733.9,
+        "dd_p99": 947.8
+      },
+      "75": {
+        "mean_p5": -8.892,
+        "mean_p95": 16.045,
+        "dd_p95": 899.2,
+        "dd_p99": 1164.0
+      },
+      "100": {
+        "mean_p5": -7.509,
+        "mean_p95": 14.294,
+        "dd_p95": 1057.2,
+        "dd_p99": 1368.5
+      },
+      "125": {
+        "mean_p5": -6.41,
+        "mean_p95": 13.123,
+        "dd_p95": 1176.5,
+        "dd_p99": 1512.9
+      },
+      "150": {
+        "mean_p5": -5.582,
+        "mean_p95": 12.152,
+        "dd_p95": 1281.5,
+        "dd_p99": 1630.9
+      },
+      "175": {
+        "mean_p5": -5.063,
+        "mean_p95": 11.481,
+        "dd_p95": 1376.2,
+        "dd_p99": 1787.6
+      },
+      "200": {
+        "mean_p5": -4.648,
+        "mean_p95": 11.001,
+        "dd_p95": 1463.3,
+        "dd_p99": 1878.0
+      },
+      "225": {
+        "mean_p5": -4.142,
+        "mean_p95": 10.294,
+        "dd_p95": 1556.5,
+        "dd_p99": 2005.2
+      },
+      "250": {
+        "mean_p5": -3.787,
+        "mean_p95": 9.959,
+        "dd_p95": 1602.1,
+        "dd_p99": 2086.4
+      },
+      "275": {
+        "mean_p5": -3.494,
+        "mean_p95": 9.775,
+        "dd_p95": 1671.1,
+        "dd_p99": 2144.7
+      },
+      "300": {
+        "mean_p5": -3.244,
+        "mean_p95": 9.323,
+        "dd_p95": 1753.9,
+        "dd_p99": 2228.7
+      },
+      "325": {
+        "mean_p5": -2.901,
+        "mean_p95": 9.1,
+        "dd_p95": 1790.9,
+        "dd_p99": 2280.8
+      },
+      "350": {
+        "mean_p5": -2.754,
+        "mean_p95": 8.891,
+        "dd_p95": 1869.9,
+        "dd_p99": 2410.9
+      },
+      "375": {
+        "mean_p5": -2.627,
+        "mean_p95": 8.72,
+        "dd_p95": 1912.5,
+        "dd_p99": 2491.1
+      },
+      "400": {
+        "mean_p5": -2.355,
+        "mean_p95": 8.483,
+        "dd_p95": 1962.9,
+        "dd_p99": 2537.2
+      }
+    }
+  }
+}

@@ -6340,3 +6340,26 @@ by flag and by scan, net of charges and a slippage allowance:
 
 **In plain terms:** a stricter copy of the BreakingTrade strategy now trades on paper next to the original, so the
 two can be compared day by day, and every signal records which scan found the stock.
+
+## IDEA-034 v3 forward paper recorder (2026-10-28)
+
+**Change.** IDEA-034 v3 (the v2 multi-day balance breakout with a 15-minute limit entry at the
+broken edge) is recorded forward by `analysis/idea034_paper.py`. It is a separate process that
+places no orders and does not touch the engine, its strategies or their risk slots. The rules
+moved from `backtest/strategies/balance_breakout.py` into `strategy_core/balance_breakout.py`,
+which both the backtest adapter and the recorder call (G0.1; the adapter's output was checked
+identical on real data). The core also gains `simulate_limit` and `simulate_market`, the v3 fill
+and exit model on 1m bars.
+
+**Recording.** Once per session after the Historify refresh:
+`uv run python -m signal_engine.analysis.idea034_paper --day YYYY-MM-DD`. Every eligible signal,
+filled or not, goes to `data/idea034_paper.db` with its modelled fill, exits, Flattrade costs, the
+market-entry counterfactual and IB% (information only). `--report` gives per-signal and per-fill
+results and a status against the acceptance criteria frozen in
+`research/ideas/idea-034-multi-day-balance-breakout/PAPER-PLAN.md`. The recorder refuses to run
+when the code, parameters, universe, criteria or reference differ from `paper/FROZEN.json`, and it
+refuses dates before the 2026-10-29 hold-out start. No schedule is installed.
+
+**In plain terms:** a new test of the balance-breakout idea now runs on paper, on days nobody has
+seen yet. It never sends an order; it writes down every signal and what a resting limit order
+would have done, so the result can be judged honestly after enough sessions.

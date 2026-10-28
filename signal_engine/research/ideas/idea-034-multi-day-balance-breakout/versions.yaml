@@ -9,3 +9,10 @@
   created_ist: '2026-10-28T15:00:47+05:30'
   note: 'v2 wider balance: min_height_pct 1.5 (H at least 1.5 percent of the broken
     edge), pre-registered primary; hold-out already seen by v1'
+- version: v3
+  strategy_fingerprint: 03c4d98fa3e921ccc34182baaffe4a14eeb4121b77a448053cad0577fe0e3a82
+  parent: v2
+  created_ist: '2026-10-28T16:00:00+05:30'
+  note: 'v3 forward paper: v2 primary with a 15-minute limit at the broken edge (strict
+    one-tick-through fill); rules in PAPER-PLAN.md, fingerprint of its Frozen rules section
+    and the parameters; recorded forward from 2026-10-29, no backtest run of its own'

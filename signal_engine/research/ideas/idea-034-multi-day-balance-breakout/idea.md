@@ -11,7 +11,7 @@ source:
   author: Owner (auction market theory)
   ref: _inbox/multi-day-balance-breakout.txt
   captured: 2026-10-28
-result: Gross +8.6 bps (t 3.2) beats both placebos but not the 11.55 bps cost; net -3.0 bps, fails G1.2. v2 wider balance (H >= 1.5 percent) net -2.1 bps, IS and OOS negative, fails too.
+result: Gross +8.6 bps (t 3.2) beats both placebos but not the 11.55 bps cost; net -3.0 bps, fails G1.2. v2 wider balance (H >= 1.5 percent) net -2.1 bps, IS and OOS negative, fails too. v3 (15-minute limit at the broken edge) is recorded forward from 2026-10-29 by a no-order paper recorder; see PAPER-PLAN.md.
 summary: Find stocks whose last N completed sessions form a balance (overlapping 70 percent value areas, composite range narrow versus daily ATR14), then trade the first accepted breakout of the composite range after 10:15 and before 13:00. Stop back inside balance, target one balance height from the broken edge, time exit 14:45.
 backtest_module: backtest/strategies/balance_breakout.py
 revisit_when: 'A cheaper execution path than 11.55 bps round trip exists, or a point-in-time universe or 1m data allows a materially different balance definition; the pre-registered grid is exhausted.'
@@ -129,6 +129,19 @@ measured-move target is large relative to price should keep more of its gross ed
   (min_height_pct 1.5); min_height_pct 0.0 reproduces v1. The v1 run's own frozen spec has no
   such parameter, so `--reproduce` of the v1 run now fails parameter binding.
 
+## v3 forward paper (frozen 2026-10-28)
+
+v3 = the v2 primary with a limit entry at the broken edge, live 15 minutes, filled only when a 1m
+bar trades one tick through it (the limit-order study's L1 15m). Its rules, acceptance criteria
+and monitoring are frozen in `PAPER-PLAN.md`; `paper/FROZEN.json` holds the fingerprint the
+recorder checks. The recorder (`analysis/idea034_paper.py`) places no orders: it records every
+eligible signal, filled or not, with its modelled fill and exits, into its own ledger.
+
+Stage stays `backtest`: the registry allows `paper` only with a promoted run, and v3 has none.
+The forward record is the hold-out, from 2026-10-29. The years before it were already examined by
+v1, v2 and the limit-order study and are not prospective evidence. IB% is recorded as information
+only. A PASS on the frozen criteria permits only a separately approved sandbox-order stage.
+
 ## Analysis and backtest
 
 See `RESULTS.md` in this folder. Recorded run: `runs/2026-10-28-multi-day-balance-breakout-v1.json` (non-reproducible, dirty tree). Gross +8.6 bps, net -3.0 bps, t -0.99; fails G1.2.
@@ -138,3 +151,4 @@ See `RESULTS.md` in this folder. Recorded run: `runs/2026-10-28-multi-day-balanc
 - 2026-10-28: onboarded and pre-registered before any backtest.
 - 2026-10-28: run and evaluated. Gross edge real but below cost; fails G1.2. research_state weak_evidence. No paper test.
 - 2026-10-28: v2 wider balance (min_height_pct 1.5, trials 2.0 and 2.5) pre-registered and run. Net -2.11 bps (IS -1.30, OOS -3.83); fails the v2 decision rule. n_trials 9. No paper test.
+- 2026-10-28: owner approved v3 forward paper preparation. Rules, acceptance criteria and monitoring frozen in PAPER-PLAN.md before any hold-out session; rules moved to strategy_core/balance_breakout.py (backtest output unchanged); recorder analysis/idea034_paper.py places no orders. Hold-out from 2026-10-29. No tuning during the test.

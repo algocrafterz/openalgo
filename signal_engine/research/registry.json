@@ -2882,7 +2882,7 @@
         "trials_sum": 15
       },
       "research_state": "weak_evidence",
-      "result": "Gross +8.6 bps (t 3.2) beats both placebos but not the 11.55 bps cost; net -3.0 bps, fails G1.2. v2 wider balance (H >= 1.5 percent) net -2.1 bps, IS and OOS negative, fails too.",
+      "result": "Gross +8.6 bps (t 3.2) beats both placebos but not the 11.55 bps cost; net -3.0 bps, fails G1.2. v2 wider balance (H >= 1.5 percent) net -2.1 bps, IS and OOS negative, fails too. v3 (15-minute limit at the broken edge) is recorded forward from 2026-10-29 by a no-order paper recorder; see PAPER-PLAN.md.",
       "revisit_when": "A cheaper execution path than 11.55 bps round trip exists, or a point-in-time universe or 1m data allows a materially different balance definition; the pre-registered grid is exhausted.",
       "runs": [
         {
