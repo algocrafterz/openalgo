@@ -35,7 +35,10 @@ class Quotes(Resource):
 
             # Call the service function to get quotes data with API key
             success, response_data, status_code = get_quotes(
-                symbol=symbol, exchange=exchange, api_key=api_key
+                symbol=symbol,
+                exchange=exchange,
+                api_key=api_key,
+                max_age_seconds=quotes_data.get("max_age_seconds"),
             )
 
             return make_response(jsonify(response_data), status_code)

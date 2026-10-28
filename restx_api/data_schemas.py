@@ -42,6 +42,11 @@ class QuotesSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     symbol = fields.Str(required=True)  # Single symbol
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (e.g., NSE, BSE)
+    # Optional: accept the live-feed price when its last tick is no older than this many
+    # seconds, otherwise ask the broker as usual. Omit it for the unchanged behaviour.
+    max_age_seconds = fields.Float(
+        required=False, validate=validate.Range(min=0, max=10)
+    )
 
 
 class SymbolExchangePair(Schema):

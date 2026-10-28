@@ -179,6 +179,9 @@ def check(captured_at: datetime) -> int:
     were sent this poll, across both strategies."""
     today = captured_at.strftime("%Y-%m-%d")
     sent = 0
+    # One quote per symbol per pass: two strategies often hold the same name, and every quote
+    # spends the broker data window shared with the rest of the platform.
+    quotes: dict[str, float | None] = {}
     for strategy, kind in _WATCHED_STRATEGIES:
         positions = flip_watch._open_positions(today, strategy=strategy)
         for symbol, pos in positions.items():
@@ -187,7 +190,9 @@ def check(captured_at: datetime) -> int:
             if level is None:
                 continue  # already booked out at the final target
 
-            ltp = eod_summary.fetch_ltp(symbol)
+            if symbol not in quotes:
+                quotes[symbol] = eod_summary.fetch_ltp(symbol)
+            ltp = quotes[symbol]
             if ltp is None:
                 continue
 

@@ -157,6 +157,13 @@ def get_quotes_with_auth(
         return False, {"status": "error", "message": str(e)}, 500
 
 
+def _feed_quote(symbol: str, exchange: str, max_age: float) -> dict[str, Any] | None:
+    """The live-feed price for a symbol, or None when the feed cannot be trusted right now."""
+    from sandbox.feed_price import feed_quote
+
+    return feed_quote(symbol, exchange, max_age)
+
+
 def get_quotes(
     symbol: str,
     exchange: str,
@@ -164,6 +171,7 @@ def get_quotes(
     auth_token: str | None = None,
     feed_token: str | None = None,
     broker: str | None = None,
+    max_age_seconds: float | None = None,
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Get real-time quotes for a symbol.
@@ -176,6 +184,9 @@ def get_quotes(
         auth_token: Direct broker authentication token (for internal calls)
         feed_token: Direct broker feed token (for internal calls)
         broker: Direct broker name (for internal calls)
+        max_age_seconds: Optional, API-key calls only. When above zero, answer from the live
+            feed if it is healthy and the symbol's last tick is at most this old; the answer
+            then carries only the last price. Otherwise the broker is asked as usual.
 
     Returns:
         Tuple containing:
@@ -190,6 +201,26 @@ def get_quotes(
         )
         if AUTH_TOKEN is None:
             return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+        if max_age_seconds and max_age_seconds > 0:
+            # After authentication, so the feed never answers a caller the broker path refuses.
+            try:
+                fresh = _feed_quote(symbol, exchange, float(max_age_seconds))
+            except Exception:
+                logger.debug(f"Feed quote unavailable for {exchange}:{symbol}", exc_info=True)
+                fresh = None
+            if fresh:
+                return (
+                    True,
+                    {
+                        "status": "success",
+                        "data": {
+                            "ltp": fresh["ltp"],
+                            "source": "feed",
+                            "age_seconds": round(fresh["age"], 2),
+                        },
+                    },
+                    200,
+                )
         return get_quotes_with_auth(AUTH_TOKEN, FEED_TOKEN, broker_name, symbol, exchange)
 
     # Case 2: Direct internal call with auth_token and broker

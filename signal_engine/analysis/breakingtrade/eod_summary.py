@@ -31,18 +31,30 @@ from signal_engine.analysis.breakingtrade import alerts
 
 _QUOTES_TIMEOUT = 10
 
+# Ask the platform to answer from its live feed when the symbol's last tick is at most this
+# many seconds old, and from the broker otherwise. The feed already carries every open
+# position, so this saves the broker data window the quote would have spent. The caller reads
+# the last price either way.
+FEED_MAX_AGE_SECONDS = 2
+
 
 def fetch_ltp(symbol: str, exchange: str = "NSE") -> float | None:
     """Best-effort last traded price via OpenAlgo. None on any failure - a summary missing one
-    price is still worth sending; failing the whole report over one bad fetch is not."""
+    price is still worth sending; failing the whole report over one bad fetch is not.
+
+    Asks for a feed price no older than FEED_MAX_AGE_SECONDS. A platform that predates the
+    option rejects it with HTTP 400; the request is then repeated without it, so the order in
+    which the two sides are restarted cannot leave this blind."""
     from signal_engine.config import settings
 
+    url = f"{settings.openalgo_base_url}/api/v1/quotes"
+    payload = {"apikey": settings.openalgo_api_key, "symbol": symbol, "exchange": exchange}
     try:
         response = httpx.post(
-            f"{settings.openalgo_base_url}/api/v1/quotes",
-            json={"apikey": settings.openalgo_api_key, "symbol": symbol, "exchange": exchange},
-            timeout=_QUOTES_TIMEOUT,
+            url, json={**payload, "max_age_seconds": FEED_MAX_AGE_SECONDS}, timeout=_QUOTES_TIMEOUT
         )
+        if response.status_code == 400:
+            response = httpx.post(url, json=payload, timeout=_QUOTES_TIMEOUT)
         response.raise_for_status()
         ltp = response.json().get("data", {}).get("ltp")
         return float(ltp) if ltp else None

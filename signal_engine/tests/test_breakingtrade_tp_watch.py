@@ -339,3 +339,137 @@ class TestMessageParsesCorrectly:
         assert signal.strategy == "BREAKINGTRADE-WATCHLIST"
         assert signal.symbol == "PFC"
         assert signal.tp_level == "TP1"
+
+
+def test_a_symbol_held_by_two_strategies_is_quoted_once_per_pass(tmp_path, monkeypatch):
+    """BREAKINGTRADE and BREAKINGTRADE-RI often hold the same name. The quote comes from the
+    broker data window shared with every other consumer, so one pass must ask once per symbol."""
+    db = str(tmp_path / "trades.db")
+    _make_trades_db(
+        db,
+        [
+            ("BREAKINGTRADE", "LONG", "APOLLOHOSP", 8038.0, 8000.0, 8076.0, "SUCCESS",
+             "2026-10-28 10:47:18"),
+            ("BREAKINGTRADE-RI", "LONG", "APOLLOHOSP", 8035.5, 8000.0, 8071.0, "SUCCESS",
+             "2026-10-28 10:50:11"),
+        ],
+    )
+    monkeypatch.setattr("signal_engine.analysis.breakingtrade.flip_watch._TRADES_DB", db)
+    calls = []
+    monkeypatch.setattr(eod_summary, "fetch_ltp", lambda symbol: calls.append(symbol) or 8040.0)
+
+    tp_watch.check(datetime(2026, 10, 28, 11, 0, 0))
+
+    assert calls == ["APOLLOHOSP"]
+
+
+class _Response:
+    def __init__(self, status_code, body):
+        self.status_code = status_code
+        self._body = body
+
+    def json(self):
+        return self._body
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            import httpx
+
+            raise httpx.HTTPStatusError(
+                "error", request=None, response=self  # type: ignore[arg-type]
+            )
+
+
+class TestFetchLtpFeedFirst:
+    """tp_watch quotes through fetch_ltp. It asks the platform to answer from its live feed when
+    the last tick is fresh and from the broker otherwise. The price it gets back is the only
+    thing the TP trigger reads, so the trigger logic does not depend on the source."""
+
+    def test_the_request_asks_for_a_fresh_feed_price(self, monkeypatch):
+        sent = []
+
+        def fake_post(url, json, timeout):
+            sent.append(json)
+            return _Response(200, {"status": "success", "data": {"ltp": 101.5, "source": "feed"}})
+
+        monkeypatch.setattr(eod_summary.httpx, "post", fake_post)
+        assert eod_summary.fetch_ltp("TCS") == 101.5
+        assert sent[0]["max_age_seconds"] == eod_summary.FEED_MAX_AGE_SECONDS == 2
+        assert sent[0]["symbol"] == "TCS" and sent[0]["exchange"] == "NSE"
+
+    def test_a_broker_shaped_answer_is_read_the_same_way(self, monkeypatch):
+        monkeypatch.setattr(
+            eod_summary.httpx,
+            "post",
+            lambda url, json, timeout: _Response(
+                200, {"status": "success", "data": {"ltp": 77.0, "open": 70.0, "high": 80.0}}
+            ),
+        )
+        assert eod_summary.fetch_ltp("TCS") == 77.0
+
+    def test_a_server_without_the_option_is_asked_again_without_it(self, monkeypatch):
+        sent = []
+
+        def fake_post(url, json, timeout):
+            sent.append(dict(json))
+            if "max_age_seconds" in json:
+                return _Response(400, {"status": "error", "message": {"max_age_seconds": ["Unknown"]}})
+            return _Response(200, {"status": "success", "data": {"ltp": 55.0}})
+
+        monkeypatch.setattr(eod_summary.httpx, "post", fake_post)
+        assert eod_summary.fetch_ltp("TCS") == 55.0
+        assert len(sent) == 2 and "max_age_seconds" not in sent[1]
+
+    def test_a_server_error_is_one_call_and_none(self, monkeypatch):
+        sent = []
+
+        def fake_post(url, json, timeout):
+            sent.append(json)
+            return _Response(500, {"status": "error"})
+
+        monkeypatch.setattr(eod_summary.httpx, "post", fake_post)
+        assert eod_summary.fetch_ltp("TCS") is None
+        assert len(sent) == 1
+
+    @pytest.mark.parametrize("shape", ["feed", "broker"])
+    def test_exits_are_identical_whichever_source_supplied_the_price(
+        self, tmp_path, monkeypatch, shape
+    ):
+        """The same prices, answered by the feed or by the broker, send the same exit alert."""
+        db = str(tmp_path / "trades.db")
+        _make_trades_db(
+            db,
+            [
+                ("BREAKINGTRADE", "LONG", "TCS", 2283.1, 2270.0, 2296.1, "SUCCESS",
+                 "2026-10-28 10:00:00"),
+            ],
+        )
+        monkeypatch.setattr("signal_engine.analysis.breakingtrade.flip_watch._TRADES_DB", db)
+        sent = []
+        monkeypatch.setattr(
+            alerts, "send", lambda text, kind=None, monospace=False: sent.append(text) or (True, 1)
+        )
+        prices = iter([2290.0, 2296.1, 2300.0])
+
+        def fake_post(url, json, timeout):
+            ltp = next(prices)
+            data = {"ltp": ltp, "source": "feed"} if shape == "feed" else {"ltp": ltp, "open": 1.0}
+            return _Response(200, {"status": "success", "data": data})
+
+        monkeypatch.setattr(eod_summary.httpx, "post", fake_post)
+        hits = [tp_watch.check(datetime(2026, 10, 28, 10, 30, 0)) for _ in range(3)]
+
+        assert hits == [0, 1, 0]
+        assert sent == [
+            "\n".join(
+                [
+                    "BREAKINGTRADE EXIT",
+                    "Symbol: TCS",
+                    "Entry: 0.0",
+                    "SL: 0.0",
+                    "TP: 2296.1",
+                    "TPLevel: TP1",
+                    "ExitQtyPct: 50.0",
+                ]
+            )
+        ]
