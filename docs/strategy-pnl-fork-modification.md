@@ -577,3 +577,27 @@ propose back to `marketcalls/openalgo` as a PR — doing so would eliminate the
 upgrade-conflict risk in this checklist entirely rather than managing it
 indefinitely. Not done as of 2026-09-25; revisit if merge conflicts on these
 files become a recurring cost.
+
+## Execution-contention changes, 2026-10-28 (Stage 1)
+
+Core files changed so that background reads cannot queue ahead of orders and strategy data.
+Read this before merging a newer `upstream/main`.
+
+- `broker/flattrade/api/rate_limit.py`: `SlidingWindowLimiter` gains optional lanes (orders,
+  background), a bounded background wait and per-class metrics. All lane settings are unset by
+  default, so behaviour is unchanged. Env keys: `FLATTRADE_DATA_RESERVE_PER_SECOND`,
+  `FLATTRADE_DATA_RESERVE_PER_MINUTE`, `FLATTRADE_DATA_BACKGROUND_PER_SECOND`,
+  `FLATTRADE_DATA_BACKGROUND_PER_MINUTE`, `FLATTRADE_BACKGROUND_MAX_WAIT_SECONDS`.
+- `broker/flattrade/api/data.py`: records latency and timeouts; sets `PACES_OWN_HISTORY = True`.
+- `utils/broker_priority.py` (new): carries a call's priority to the limiter.
+- `services/history_service.py`: skips the fixed 0.35 s spacer for a broker that sets
+  `PACES_OWN_HISTORY`; identical overlapping history requests share one broker call.
+- `sandbox/execution_engine.py`, `sandbox/position_manager.py`: quote calls are tagged critical
+  (order pricing) or background (position valuation).
+- `sandbox/websocket_execution_engine.py`: feed releases run on one worker, not on the fill path.
+- `sandbox/order_manager.py`: order IDs are milliseconds since IST midnight, unique in-process.
+- `restx_api/quotes.py`, `restx_api/data_schemas.py`, `services/quotes_service.py`,
+  `sandbox/feed_price.py` (new): opt-in `max_age_seconds` answers a quote from the live feed.
+  Sandbox order pricing does not use it.
+- `services/strategy_performance_service.py`, `database/strategy_book_db.py`: the P&L page shows
+  the current trading session only.

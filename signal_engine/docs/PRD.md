@@ -6394,3 +6394,16 @@ per ORB paper signal and revisit after 60 more sessions.
 tell us when to trade it or cut its size, and over ten years nothing did. A shorts-only rule looked
 good in the paper month only because the market was falling.
 
+
+## Execution-contention fixes, Stage 1 (2026-10-28)
+
+- BreakingTrade `tp_watch` asks for each open symbol's quote once per pass, from the platform's
+  live feed when the last tick is at most 2 s old and from the broker otherwise
+  (`eod_summary.fetch_ltp`, `FEED_MAX_AGE_SECONDS`). The TP trigger logic is unchanged; a test
+  shows identical exit alerts for either source.
+- Platform side: Flattrade history is paced by the broker limiter only, not by an extra
+  0.35 s spacer, so a 40-symbol EVWAP fetch no longer spends about 13 s in that spacer.
+  Overlapping identical history requests share one broker call. Broker bars stay the source.
+- Limiter lanes and background bounds exist but are unset. Stage 2 enables them only after one
+  measured session and a tracker staleness guard.
+- Open: the cause of the whole-app stalls (py-spy dump) is not found.
