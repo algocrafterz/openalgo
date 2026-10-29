@@ -157,3 +157,37 @@ expectancy -0.012R, max drawdown 54R, IS net -1.23 bps (919 trades). n_trials 9.
 `--allow-dirty` (code_version `3d6424063-dirty`, reproducible false, not promotable).
 run_verdict INCONCLUSIVE. The small differences from the driver row (+9.44 / -2.11) are the same
 per-trade costing difference seen for v1.
+
+## v3 historical replay (2026-10-29)
+
+Observation, not a verdict change. The frozen v3 recorder's own `record_day` was replayed over
+history with `dry_run=True` and only the bar loaders swapped (rows identical to the recorder on 10
+test days, 2018-2026). Full method, data-gap accounting and tables: `replay/README.md`. Nothing was
+written to the hold-out ledger and no frozen file changed.
+
+| Source (stocks listed that day only) | Signals | Fill rate | Net per signal (t) | Market, same signals | Max drawdown | Recorder status |
+| --- | --- | --- | --- | --- | --- | --- |
+| Historify raw 1m (the recorder's source) | 1,450 | 40.2% | +0.02 bps (0.38) | -6.02 bps | Rs 33,103 | KILL (drawdown beyond the 99th percentile) |
+| Published adjusted 5m, fills on raw 1m | 1,009 | 40.6% | +2.32 bps (1.50) | -2.83 bps | Rs 20,533 | PAUSED_DATA (13% gap sessions) |
+
+- The limit entry beats a market entry on identical signals in every run; the strategy itself is
+  about breakeven on raw data. Stress 8 bps: -1.59 (raw) / +0.70 (adjusted). Raw-data shorts +4.16,
+  longs -4.61. Raw-data years: 2017 +4.3, 2018 +3.2, 2019 -1.9, 2020 +3.3, 2021 -7.8, 2022 -7.0,
+  2023 +1.6, 2024 +0.2, 2025 +1.5, 2026 +8.3 bps per signal.
+- The two sources agree on the 855 signals both produce (+0.9 vs +1.2 bps, 99.4% same fill
+  outcome). The gap comes from source-only signals (574 raw-only at -1.3 bps, 154 adjusted-only at
+  +8.6 bps), so the frozen +2.9 bps reference leans on sessions raw data does not reproduce.
+- Data handling: the frozen 90% day-coverage rule counts not-yet-listed stocks as missing, so a
+  strict replay loses most sessions before 2021 (raw) or 2024 (adjusted); the listed-only runs pass
+  `record_day` only stocks listed that day. Real gaps stay separate (2 whole raw days, 46 signals
+  with no 1m bars in the fill window, 142 adjusted signals more than two ticks off the raw price
+  basis), never counted as no-signal.
+- Evidence class: every session from 2017-01-02 to 2026-10-19 was examined during development, so
+  this replay validates the implementation and robustness only. The only unexamined history is
+  2016-Q4 raw data (17 signals). Sessions from 2026-10-29 remain the only clean test.
+- Defect noted, not fixed (frozen code): when the OpenAlgo app holds the Historify write lock, the
+  recorder's `_historify5` raises a duckdb IOException it does not catch, so the run fails instead
+  of writing a DATA_GAP row. Re-run that day later. A fix needs a new freeze.
+- Implication: on its own data source v3 shows no edge and its frozen KILL rule would already have
+  fired. The forward record can only be run by hand (`--day`, idempotent, from 2026-10-29); no
+  schedule is installed.

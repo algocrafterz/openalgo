@@ -3737,35 +3737,77 @@
       "summary": "Find stocks whose last N completed sessions form a balance (overlapping 70 percent value areas, composite range narrow versus daily ATR14), then trade the first accepted breakout of the composite range after 10:15 and before 13:00. Stop back inside balance, target one balance height from the broken edge, time exit 14:45.",
       "title": "Multi-day balance breakout (auction market theory, intraday)",
       "verdict": "inconclusive"
+    },
+    {
+      "analysis_doc": "strategy_library/intraday/orb/STRATEGY-ANALYSIS.md",
+      "backtest_module": "backtest/strategies/orb.py",
+      "classification": {
+        "direction": null,
+        "market": null,
+        "strategy_category": "Breakout",
+        "strategy_tags": [
+          "orb",
+          "regime",
+          "gate",
+          "opening-range"
+        ],
+        "timeframe": null,
+        "trading_style": null
+      },
+      "folder": "idea-035-orb-regime-gate",
+      "horizon": "intraday",
+      "id": "IDEA-035",
+      "last_reviewed": "2026-10-28",
+      "research_state": "evidence_against_edge",
+      "revisit_when": "A regime feature passes the pre-registered out-of-sample test below, or 60 more ORB paper sessions exist for a forward check.",
+      "runs": [],
+      "source": {
+        "author": "Owner",
+        "captured": "2026-10-28",
+        "ref": "owner request 2026-10-28 (re-enable ORB paper, study a regime gate)",
+        "type": "self"
+      },
+      "stage": "inbox",
+      "status": "inbox",
+      "strategy_category": "Breakout",
+      "strategy_tags": [
+        "orb",
+        "regime",
+        "gate",
+        "opening-range"
+      ],
+      "summary": "Test whether simple, causal-at-entry market-regime features separate ORB days that work from days that do not, selected on in-sample years and judged out of sample. Then replay gate, side and size variants on the 67 ORB paper trades and on the 87,279-trade ten-year population.",
+      "title": "ORB market-regime gate and variant study",
+      "verdict": "none"
     }
   ],
   "summary": {
     "by_category": {
-      "Breakout": 2,
+      "Breakout": 3,
       "Mean Reversion": 1,
       "Momentum": 1,
       "Other": 2,
       "Statistical / Quantitative": 2
     },
     "by_horizon": {
-      "intraday": 6,
+      "intraday": 7,
       "swing": 2
     },
     "by_status": {
       "backtested": 1,
       "evaluating": 2,
-      "inbox": 2,
+      "inbox": 3,
       "rejected": 3
     },
     "by_verdict": {
       "inconclusive": 1,
       "marginal": 1,
       "no-edge": 2,
-      "none": 4
+      "none": 5
     },
     "ideas_with_runs": 4,
     "last_reviewed": "2026-10-28",
-    "total": 8,
+    "total": 9,
     "total_runs": 10
   }
 }
