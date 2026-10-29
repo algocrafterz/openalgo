@@ -72,6 +72,15 @@ function chargesHint(
   return `charges ${amount} = ${d.charges_pct_of_gross.toFixed(1)}% of gross profit${note}`
 }
 
+/** "measured from N of M trades" - slippage is already in the P&L, so it is information only. */
+function slippageHint(d: {
+  slippage_covered?: number
+  slippage_total?: number
+}): string | undefined {
+  if (!d.slippage_total) return undefined
+  return `already in P&L, measured on ${d.slippage_covered ?? 0} of ${d.slippage_total} trades`
+}
+
 /** Colour for a charges-to-profit share: half the profit is a warning, all of it a loss. */
 function chargesDragClass(pct: number | null | undefined): string {
   if (pct == null) return 'text-muted-foreground'
@@ -636,6 +645,15 @@ export default function StrategyDailyPerformance() {
                 hint={chargesHint(daily, formatCurrency)}
               />
               <MetricCard
+                label="Entry slippage"
+                value={daily.entry_slippage == null ? '—' : formatCurrency(daily.entry_slippage)}
+                hint={
+                  daily.entry_slippage_bps == null
+                    ? slippageHint(daily)
+                    : `${daily.entry_slippage_bps.toFixed(1)} bps, ${slippageHint(daily)}`
+                }
+              />
+              <MetricCard
                 label="Wins / Losses"
                 value={`${daily.winning_trades ?? 0} / ${daily.losing_trades ?? 0}`}
                 hint={`${daily.trades_count ?? 0} trades, ${(daily.win_rate ?? 0).toFixed(0)}% win`}
@@ -672,6 +690,15 @@ export default function StrategyDailyPerformance() {
                 positive={(daily.net_after_costs ?? 0) > 0}
                 negative={(daily.net_after_costs ?? 0) < 0}
                 hint={chargesHint(daily, formatCurrency)}
+              />
+              <MetricCard
+                label="Entry slippage"
+                value={daily.entry_slippage == null ? '—' : formatCurrency(daily.entry_slippage)}
+                hint={
+                  daily.entry_slippage_bps == null
+                    ? slippageHint(daily)
+                    : `${daily.entry_slippage_bps.toFixed(1)} bps, ${slippageHint(daily)}`
+                }
               />
               <MetricCard label="Win Rate" value={`${(daily.win_rate ?? 0).toFixed(1)}%`} />
               <MetricCard label="Profit Factor" value={fmtRatio(daily.profit_factor)} />

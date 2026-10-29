@@ -113,6 +113,11 @@ export interface StrategyDailyPerformance {
   total_r?: number | null
   r_covered?: number
   r_total?: number
+  /** Measured entry slippage in rupees (fill against signal price); already inside the P&L. */
+  entry_slippage?: number | null
+  entry_slippage_bps?: number | null
+  slippage_covered?: number
+  slippage_total?: number
   by_symbol?: SymbolPnl[]
   trades?: PerformanceTrade[]
 }

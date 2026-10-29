@@ -182,18 +182,32 @@ def _match_stop(trade: dict, index: dict) -> tuple[float, float] | None:
     return next(iter(near)) if len(near) == 1 else None
 
 
+def _entry_slippage(trade: dict, signal_entry: float) -> float:
+    """Adverse entry slippage in rupees: the fill against the signal's alert price.
+
+    Positive means the fill was worse than the alert (a LONG bought higher, a SHORT sold
+    lower), negative means better. It is already inside the realized P&L, so it is
+    reported, never deducted again.
+    """
+    per_share = float(trade["entry_price"]) - signal_entry
+    if trade.get("direction") == "SHORT":
+        per_share = -per_share
+    return round(per_share * float(trade["closed_quantity"]), 2)
+
+
 def enrich_trades(
     trades: list[dict], start_date: str, end_date: str, db_path: Path | None = None
 ) -> list[dict]:
-    """Copies of `trades` with `cost`, `risk_amount` and `r_multiple` added
-    (each None when it cannot be determined)."""
+    """Copies of `trades` with `cost`, `risk_amount`, `r_multiple` and `entry_slippage`
+    added (each None when it cannot be determined)."""
     index = _load_signal_stops(start_date, end_date, db_path)
     costs = estimate_trade_costs(trades)
     enriched = []
     for trade, cost in zip(trades, costs, strict=True):
         stop = _match_stop(trade, index) if index else None
-        risk_amount = r_multiple = None
+        risk_amount = r_multiple = entry_slippage = None
         if stop is not None:
+            entry_slippage = _entry_slippage(trade, stop[0])
             risk_per_share = abs(stop[0] - stop[1])
             risk_amount = round(risk_per_share * float(trade["closed_quantity"]), 2)
             if risk_amount > 0:
@@ -206,6 +220,7 @@ def enrich_trades(
                 "cost": cost,
                 "risk_amount": risk_amount,
                 "r_multiple": r_multiple,
+                "entry_slippage": entry_slippage,
             }
         )
     return enriched
@@ -288,11 +303,37 @@ def summarize_costs(trades: list[dict]) -> dict:
     return _charge_metrics(trades, estimate_trade_costs(trades))
 
 
+def _slippage_metrics(enriched: list[dict]) -> dict:
+    """Measured entry slippage over the trades whose signal could be matched.
+
+    Informational: the fills the P&L is built on already carry it. The basis in basis points
+    is the entry turnover of the same covered trades, so a partial match is not diluted by
+    trades that have no figure.
+    """
+    measured = [t for t in enriched if t.get("entry_slippage") is not None]
+    if not measured:
+        return {
+            "entry_slippage": None,
+            "entry_slippage_bps": None,
+            "slippage_covered": 0,
+            "slippage_total": len(enriched),
+        }
+    total = sum(t["entry_slippage"] for t in measured)
+    entry_value = sum(float(t["entry_price"]) * float(t["closed_quantity"]) for t in measured)
+    return {
+        "entry_slippage": round(total, 2),
+        "entry_slippage_bps": round(10000.0 * total / entry_value, 2) if entry_value > 0 else None,
+        "slippage_covered": len(measured),
+        "slippage_total": len(enriched),
+    }
+
+
 def summarize_enrichment(enriched: list[dict]) -> dict:
     """Estimated charges, net-after-charges and expectancy in R, with coverage."""
     r_values = [t["r_multiple"] for t in enriched if t["r_multiple"] is not None]
     return {
         **_charge_metrics(enriched, [t["cost"] for t in enriched]),
+        **_slippage_metrics(enriched),
         "expectancy_r": round(sum(r_values) / len(r_values), 2) if r_values else None,
         "total_r": round(sum(r_values), 2) if r_values else None,
         "r_covered": len(r_values),

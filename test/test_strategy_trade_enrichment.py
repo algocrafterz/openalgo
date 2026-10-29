@@ -411,3 +411,57 @@ class TestFeeAttention:
     def test_unrecorded_broker_says_so(self):
         row = summarize_costs([_trade()])["by_broker"][0]
         assert "not recorded" in row["attention"]
+
+
+class TestEntrySlippage:
+    """Measured entry slippage: the recorded fill against the signal's alert price.
+
+    It is already inside the P&L (the fill is what the book was priced on), so it is
+    reported, never deducted again.
+    """
+
+    def test_short_filled_below_the_signal_is_adverse(self, signals_db):
+        _signal(signals_db, "ORB", "INFY", "SHORT", 987.0, 995.0, "2026-09-29T09:45:00")
+        [t] = enrich_trades(
+            [_trade(direction="SHORT", entry_price=986.0, closed_quantity=45.0)],
+            "2026-09-29", "2026-09-29", db_path=signals_db,
+        )
+        assert t["entry_slippage"] == pytest.approx(45.0)  # 1.00 per share x 45
+
+    def test_long_filled_above_the_signal_is_adverse(self, signals_db):
+        _signal(signals_db, "ORB", "INFY", "LONG", 986.0, 980.0, "2026-09-29T09:45:00")
+        [t] = enrich_trades(
+            [_trade(direction="LONG", entry_price=986.5, closed_quantity=10.0)],
+            "2026-09-29", "2026-09-29", db_path=signals_db,
+        )
+        assert t["entry_slippage"] == pytest.approx(5.0)
+
+    def test_a_better_fill_is_negative_not_clamped(self, signals_db):
+        _signal(signals_db, "ORB", "INFY", "LONG", 986.0, 980.0, "2026-09-29T09:45:00")
+        [t] = enrich_trades(
+            [_trade(direction="LONG", entry_price=985.5, closed_quantity=10.0)],
+            "2026-09-29", "2026-09-29", db_path=signals_db,
+        )
+        assert t["entry_slippage"] == pytest.approx(-5.0)
+
+    def test_no_matching_signal_means_no_figure(self, signals_db):
+        [t] = enrich_trades([_trade()], "2026-09-29", "2026-09-29", db_path=signals_db)
+        assert t["entry_slippage"] is None
+
+    def test_summary_reports_total_bps_and_coverage(self):
+        rows = [
+            {**_trade(entry_price=1000.0, closed_quantity=10.0), "cost": 1.0,
+             "risk_amount": None, "r_multiple": None, "entry_slippage": 10.0},
+            {**_trade(entry_price=500.0, closed_quantity=20.0), "cost": 1.0,
+             "risk_amount": None, "r_multiple": None, "entry_slippage": None},
+        ]
+        s = summarize_enrichment(rows)
+        assert s["entry_slippage"] == pytest.approx(10.0)
+        assert s["entry_slippage_bps"] == pytest.approx(10.0)  # 10 / (1000 x 10) x 10000
+        assert (s["slippage_covered"], s["slippage_total"]) == (1, 2)
+
+    def test_summary_without_any_measured_trade_is_none(self):
+        s = summarize_enrichment(
+            [{**_trade(), "cost": 1.0, "risk_amount": None, "r_multiple": None}]
+        )
+        assert s["entry_slippage"] is None and s["entry_slippage_bps"] is None
