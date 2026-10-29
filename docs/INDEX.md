@@ -60,7 +60,7 @@ need → drill into the specific file. Don't load everything at once.
 | System design (frontend, backend, DB, UI) | [design/README.md](design/README.md) |
 | Product requirements — Flow, Python strategies, Strategy module & RMS, Sandbox, Historify, MCP, event bus, websocket proxy | [prd/README.md](prd/README.md) · [prd/PRD.md](prd/PRD.md) |
 | BDD feature specs (Gherkin `.feature`) | [bdd/README.md](bdd/README.md) |
-| WebSocket architecture & quote feed | [websocket-architecture.md](websocket-architecture.md) · [websocket-quote-feed.md](websocket-quote-feed.md) |
+| WebSocket architecture & quote feed | [websocket-architecture.md](websocket-architecture.md) · [websocket-quote-feed.md](websocket-quote-feed.md) · [flattrade-websocket-drops-upstream-issue.md](flattrade-websocket-drops-upstream-issue.md) |
 | Security audits | [audit/README.md](audit/README.md) |
 | CI/CD | [prd/ci-cd.md](prd/ci-cd.md) |
 | Benchmarks | [benchmarks/](benchmarks/) |

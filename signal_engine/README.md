@@ -13,6 +13,7 @@ repo `CLAUDE.md`; idea status lives in `research/REGISTRY.md`; change history li
 | Backtest engine | `backtest/` | Engine, data, metrics, validation suite; `backtest/strategies/` holds one adapter per strategy |
 | Reporting code | `analysis/` | EOD and weekly review code and the BreakingTrade tooling |
 | Generated reports | `reports/` | Output of `analysis/eod.sh` and `analysis/weekly.sh` (gitignored) |
+| Shadow comparison | `shadow/` | Read-only recorder and report comparing WebSocket-built candles with broker history; see `docs/SHADOW-TICK-CANDLES.md` |
 | Operations | `scripts/` | Service control, scheduler, cron wrappers |
 | Runtime state | `data/`, `logs/` | Databases, sessions, logs (gitignored) |
 | Design and history | `docs/` | PRD, HOW-IT-WORKS, REFACTOR-LOG, reviews, restrictions |

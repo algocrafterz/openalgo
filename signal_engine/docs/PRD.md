@@ -6433,3 +6433,9 @@ good in the paper month only because the market was falling.
   connections cause history errors (`APP_MODE=standalone` would disable HTTP/2, not applied).
 - Paper-trade window study (12 to 19 days per strategy): no entry-window or open-position
   restriction is supported by the data; EVWAP-EARLY-PY is negative after charges in every window.
+
+## Shadow comparison of WebSocket-built candles (2026-10-29)
+
+- `signal_engine/shadow/` records Quote-mode ticks from the WebSocket proxy and compares 5-minute bars built from them with Flattrade history. Read-only: no strategy reads these bars and no order path is touched.
+- Purpose: the runner spends 40 history calls per 5-minute boundary against the account's 110 per minute cap. Whether tick-built bars could replace them is decided only by the acceptance criteria in `docs/SHADOW-TICK-CANDLES.md` over at least 5 sessions.
+- Status: tooling and unit tests done; no trading session recorded yet.
