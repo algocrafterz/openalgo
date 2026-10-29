@@ -96,6 +96,40 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-10-29 15:51 — Hypothesis recorded, not acted on: trades paying at least 1:1 may do better
+- **What changed:** Nothing in either strategy. On 2026-10-29 the runner refused all 22 signals
+  because each paid less than 0.75 for every 1 risked. Replaying every signal since 2026-10-01
+  as if there were no such rule showed no clear difference between the trades the rule lets in
+  and the ones it blocks. One group stood out: trades paying at least 1 for every 1 risked
+  averaged +0.27 of the amount risked per trade after costs, against roughly zero for the rest.
+  That group is too thin to trust, so it is written down here as a question to test on new days.
+  The minimum stays at 0.75 and no third paper version is started.
+- **Entry:** Not affected. The minimum reward-to-risk of 0.75 stays as it is.
+- **Exit (SL):** Not affected.
+- **Exit (TP):** Not affected.
+- **Consideration:** Of the 27 trades in that group, 10 came from one day (2026-10-28, a sharp
+  recovery day) and made +0.70 each. The other 17 averaged +0.03, which is no different from
+  zero. Raising the minimum to 1.0 would remove about three quarters of all signals, so a wrong
+  guess costs a lot of trades. Do not change the rule on this evidence.
+
+NOTE: Hypothesis H1, fixed before more data arrives: signals with signalled R:R >= 1.0 earn a
+higher net R per trade than signals with R:R < 1.0. Only this one cut-off is tested; no other
+bucket edges or side splits are to be tried on the same data, so the test counts as one trial.
+Evidence so far (206 baseline signals, 18 days, 2026-10-01..10-29, 1m Historify bars, stop and
+first target as signalled, stop wins a tie within a minute, open trades exit at the 14:45 bar
+open, Rs 1,000 risk per trade, Flattrade charges + 4 bps slippage per side, no position caps):
+buckets <0.50 n=48 +0.039R, 0.50-0.75 n=86 +0.056R, 0.75-1.00 n=45 +0.031R, >=1.00 n=27
++0.274R (t=1.8); passes-0.75 n=72 +0.122R, rejected n=134 +0.050R. Excluding 2026-10-28 the
+>=1.0 group is n=17, +0.026R, t=0.2. Re-test on days from 2026-10-30 only, 2026-10-28
+excluded from any pooled figure. Run it when at least 40 fresh signals at R:R >= 1.0 exist
+across at least 15 days, or at the planned re-evaluation after about 20 paper sessions,
+whichever is later. Pass: the >=1.0 group's net R per trade is above the < 1.0 group's, its
+mean is positive, and its t-statistic is at least 2.0 with trades grouped by day. Fail or
+inconclusive: drop H1, keep min_rr at 0.75. Only on a pass, raise `risk.min_rr` or add a
+per-strategy gate (`validator.py` has one global `min_rr`, so a per-strategy value is a code
+change). The replay script of 2026-10-29 lives only in the session scratchpad
+(`rr_bucket_replay.py`) and is not in the repository; rebuild it from the rules above.
+
 ### 2026-10-29 12:45 — A stock first flagged after a quiet morning was being ignored: fixed
 - **What changed:** The scanner remembers which stocks it has already flagged today, so it does
   not alert twice. It also skips alerts on the very first check of the day, because everything
