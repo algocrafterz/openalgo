@@ -1080,7 +1080,5 @@ strategy_profiles:
     min_sl_pct: 0.002
     min_entry_price: 0
     max_entry_price: 0
-  RSI-TP-MR:
-    product: MIS
-    tp_levels:
-      TP1: 1.0                   # Exit 100% at TP1 (single TP for RSI mean reversion)
+  # RSI-TP-MR profile removed 2026-10-29: the strategy is not running and has no engine channel.
+  # Left in, it was listed as an MIS strategy and the 14:55 squareoff sent cancel/close requests for it.
