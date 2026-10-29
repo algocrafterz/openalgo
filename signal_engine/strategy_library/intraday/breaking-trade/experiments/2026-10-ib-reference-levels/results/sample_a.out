@@ -1,0 +1,88 @@
+annotated 45778 of 45778 trades
+look-ahead mismatches (60 sampled trades): 0
+
+######## V1_N5_k1.5_p30_edge: 1657 trades, IB/ATR tercile edges (IS) [0.427 0.603]
+all: gross +8.53 net -3.02
+
+-- H1 IB width
+bucket  IS_n  IS_gross  IS_net  IS_t  OOS_n  OOS_gross  OOS_net  OOS_t
+   mid   365     10.23   -1.31 -0.41    191       6.73    -4.82  -0.75
+narrow   366     19.59    8.04  1.24    127       6.82    -4.72  -0.69
+  wide   366     -2.28  -13.83 -2.89    242       7.92    -3.63   0.33
+bucket  L_n  L_gross  L_net  S_n  S_gross  S_net
+   mid  232     9.03  -2.52  324     9.03  -2.52
+narrow  206    10.41  -1.14  287    20.53   8.98
+  wide  332     2.00  -9.55  276     1.51 -10.04
+
+-- H2 open vs prior VA
+         bucket  IS_n  IS_gross  IS_net  IS_t  OOS_n  OOS_gross  OOS_net  OOS_t
+         inside   545      9.78   -1.76 -0.16    292       9.01    -2.53  -0.07
+outside_against   138     17.55    6.00  0.51     76       1.48   -10.07  -1.09
+   outside_with   414      5.59   -5.96 -1.24    192       6.89    -4.66   0.09
+         bucket  L_n  L_gross  L_net  S_n  S_gross  S_net
+         inside  363     4.17  -7.38  474    13.61   2.06
+outside_against   73    13.25   1.70  141    11.11  -0.44
+   outside_with  334     7.25  -4.29  272     4.47  -7.08
+
+-- H3 naked POC
+     bucket  IS_n  IS_gross  IS_net  IS_t  OOS_n  OOS_gross  OOS_net  OOS_t
+       both     7      1.42  -10.13 -0.31      1     -35.08   -46.63    NaN
+       none   914      7.54   -4.00 -1.32    479       4.98    -6.57  -0.86
+  stop_side    27     46.97   35.42  1.43     18      10.96    -0.59  -0.03
+target_side   149     12.72    1.17  0.04     62      24.54    12.99   0.98
+     bucket  L_n  L_gross  L_net  S_n  S_gross  S_net
+       both    5    -7.88 -19.43    3     4.75  -6.80
+       none  665     5.58  -5.97  728     7.65  -3.90
+  stop_side   23    17.32   5.77   22    48.51  36.96
+target_side   77    10.83  -0.72  134    19.27   7.72
+
+-- H4 entry vs prior/composite POC
+     bucket  IS_n  IS_gross  IS_net  IS_t  OOS_n  OOS_gross  OOS_net  OOS_t
+beyond_both  1097      9.18   -2.37 -1.16    560       7.26    -4.28   0.02
+     bucket  L_n  L_gross  L_net  S_n  S_gross  S_net
+beyond_both  770     6.37  -5.18  887    10.41  -1.14
+
+######## P1_non_balance: 44121 trades, IB/ATR tercile edges (IS) [0.504 0.715]
+all: gross +2.38 net -9.17
+
+-- H1 IB width
+bucket  IS_n  IS_gross  IS_net  IS_t  OOS_n  OOS_gross  OOS_net  OOS_t
+   mid  9048      2.73   -8.82 -5.50   5857       2.23    -9.32  -7.01
+narrow  9048      5.07   -6.48 -4.71   5372       3.83    -7.72  -4.86
+  wide  9049     -4.70  -16.25 -8.56   5747       7.52    -4.03  -5.76
+bucket  L_n  L_gross  L_net  S_n  S_gross  S_net
+   mid 7988    -2.30 -13.85 6917     8.11  -3.44
+narrow 7607    -2.31 -13.85 6813    12.32   0.78
+  wide 7996    -6.23 -17.77 6800     7.42  -4.12
+
+-- H2 open vs prior VA
+         bucket  IS_n  IS_gross  IS_net  IS_t  OOS_n  OOS_gross  OOS_net  OOS_t
+         inside 13769      2.40   -9.15 -7.90   8810       4.99    -6.56  -6.09
+outside_against  3332      5.97   -5.58 -5.68   2191       7.86    -3.69  -2.69
+   outside_with 10044     -2.48  -14.03 -7.40   5975       2.63    -8.92  -5.16
+         bucket   L_n  L_gross  L_net   S_n  S_gross  S_net
+         inside 11628    -3.92 -15.47 10951    11.19  -0.36
+outside_against  2297    -2.20 -13.75  3226    13.07   1.52
+   outside_with  9666    -3.63 -15.17  6353     4.07  -7.48
+
+-- H3 naked POC
+     bucket  IS_n  IS_gross  IS_net  IS_t  OOS_n  OOS_gross  OOS_net  OOS_t
+       both    84    -16.91  -28.45 -2.62     46       8.03    -3.52  -0.38
+       none 23200      1.28  -10.27 -9.93  14604       4.54    -7.01  -7.18
+  stop_side   738     -1.31  -12.86 -2.21    452      -2.18   -13.72  -2.57
+target_side  3123      0.23  -11.32 -5.88   1874       5.95    -5.60  -3.17
+     bucket   L_n  L_gross  L_net   S_n  S_gross  S_net
+       both    80   -23.44 -34.99    50    16.49   4.94
+       none 20514    -3.15 -14.69 17290     9.28  -2.26
+  stop_side   762    -6.09 -17.64   428     6.29  -5.26
+target_side  2235    -6.55 -18.10  2762     9.60  -1.95
+
+-- H4 entry vs prior/composite POC
+     bucket  IS_n  IS_gross  IS_net   IS_t  OOS_n  OOS_gross  OOS_net  OOS_t
+beyond_both 27132      1.04  -10.51 -10.82  16974       4.52    -7.03   -7.6
+ beyond_one    13    -16.83  -28.40  -1.75      1     158.52   146.97    NaN
+ value_side     0       NaN     NaN    NaN      1     -59.24   -70.78    NaN
+     bucket   L_n  L_gross  L_net   S_n  S_gross  S_net
+beyond_both 23587    -3.63 -15.18 20519     9.29  -2.26
+ beyond_one     3   -16.54 -28.06    11    -0.97 -12.55
+ value_side     1   -59.24 -70.78     0      NaN    NaN
