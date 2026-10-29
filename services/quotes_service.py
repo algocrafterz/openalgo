@@ -1,11 +1,14 @@
+import hashlib
 import importlib
 from typing import Any
 
 from database.auth_db import get_auth_token_broker
 from database.token_db import get_token
 from services.broker_busy import BrokerBusyError, broker_busy_result
+from utils import broker_priority
 from utils.constants import VALID_EXCHANGES
 from utils.logging import get_logger
+from utils.single_flight import SingleFlight
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -239,7 +242,41 @@ def get_quotes(
         )
 
 
+# Flattrade and similar brokers have no batch quote call, so a multi-quote of N symbols costs N
+# broker requests. Identical requests that overlap (a page and an engine polling the same
+# symbols, or one caller retrying) now share one fetch instead of booking N requests each
+# against the broker's rate limit. The account enters the key as a hash and the caller's
+# broker priority enters it as is, so another account or another priority lane never shares
+# a flight. The join window is short because these are prices.
+_flights = SingleFlight(join_window=5.0, wait_timeout=60.0)
+
+
+def _multiquotes_flight_key(auth_token: str, broker: str, symbols: list):
+    """Key for one multi-quote request, or None when the symbol list is not a plain list of dicts."""
+    if not isinstance(symbols, list) or not all(isinstance(s, dict) for s in symbols):
+        return None
+    tag = hashlib.sha256(str(auth_token).encode()).hexdigest()[:12]
+    try:
+        names = tuple((s.get("symbol"), s.get("exchange")) for s in symbols)
+        hash(names)
+    except TypeError:
+        return None
+    return (tag, broker, broker_priority.current(), names)
+
+
 def get_multiquotes_with_auth(
+    auth_token: str, feed_token: str | None, broker: str, symbols: list
+) -> tuple[bool, dict[str, Any], int]:
+    """Get real-time quotes for multiple symbols; overlapping identical requests share one fetch."""
+    key = _multiquotes_flight_key(auth_token, broker, symbols)
+
+    def fetch():
+        return _get_multiquotes_with_auth(auth_token, feed_token, broker, symbols)
+
+    return fetch() if key is None else _flights.do(key, fetch)
+
+
+def _get_multiquotes_with_auth(
     auth_token: str, feed_token: str | None, broker: str, symbols: list
 ) -> tuple[bool, dict[str, Any], int]:
     """
