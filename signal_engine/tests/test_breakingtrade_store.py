@@ -161,6 +161,29 @@ def test_symbol_still_matching_is_not_reported_again():
     assert new == {}
 
 
+def test_has_snapshot_before_is_scoped_to_the_same_day():
+    store.save_snapshot(_snapshot(datetime(2026, 9, 3, 9, 20), ["VEDL"]))
+    assert store.has_snapshot_before(datetime(2026, 9, 3, 9, 25)) is True
+    assert store.has_snapshot_before(datetime(2026, 9, 3, 9, 20)) is False
+    assert store.has_snapshot_before(datetime(2026, 9, 4, 9, 20)) is False
+
+
+def test_first_hits_after_an_empty_morning_are_new_when_an_earlier_poll_ran():
+    """2026-10-29 regression: polls 09:20-10:15 matched nothing, so the 10:20 poll looked like
+    a cold start (no hits earlier today) and its matches were stored as not new. They never
+    reached the alert or entry path. A stored snapshot earlier today IS the baseline."""
+    store.record_hits([_FakeResult("X", [])], datetime(2026, 9, 3, 9, 20), baseline_exists=False)
+    new = store.record_hits(
+        [_FakeResult("X", ["VEDL"])], datetime(2026, 9, 3, 10, 20), baseline_exists=True
+    )
+    assert new == {"X": ["VEDL"]}
+
+
+def test_baseline_exists_false_still_suppresses_the_cold_start_burst():
+    results = [_FakeResult("X", ["VEDL", "ZYDUSLIFE"])]
+    assert store.record_hits(results, datetime(2026, 9, 3, 9, 20), baseline_exists=False) == {}
+
+
 def test_a_symbol_that_leaves_and_returns_SAME_DAY_does_not_count_as_new_again():
     """2026-09-17 regression: comparing only against the immediately preceding poll let a
     symbol that flickered out and back in re-qualify as "new" every time, firing a duplicate

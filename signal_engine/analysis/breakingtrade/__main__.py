@@ -280,10 +280,11 @@ def _fetch_and_report(
 
     new_by_scan = {}
     if store_it:
+        baseline_exists = store.has_snapshot_before(captured_at)
         store.save_snapshot(mp_snapshot)
         if vol_snapshot is not None:
             store.save_snapshot(vol_snapshot)
-        new_by_scan = store.record_hits(results, captured_at)
+        new_by_scan = store.record_hits(results, captured_at, baseline_exists=baseline_exists)
 
         # Alert-only: does any currently-open BREAKINGTRADE position's own setup now read the
         # other way? Runs every real poll, independent of whether this poll produced any new

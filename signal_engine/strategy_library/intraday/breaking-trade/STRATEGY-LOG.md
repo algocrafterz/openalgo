@@ -96,6 +96,30 @@ buying and selling within the day. High delivery suggests real buyers, not day-t
 
 ## Log
 
+### 2026-10-29 12:45 — A stock first flagged after a quiet morning was being ignored: fixed
+- **What changed:** The scanner remembers which stocks it has already flagged today, so it does
+  not alert twice. It also skips alerts on the very first check of the day, because everything
+  looks new then. It decided "first check of the day" by "nothing flagged yet today", not by "no
+  check has run yet today". On 2026-10-29 nothing was flagged from 09:20 to 10:15, so the 10:20
+  check was treated as the first of the day and its two stocks (PIDILITIND long, CHOLAFIN short)
+  were silently dropped: no alert and no entry check. The scanner now counts any earlier check
+  today, even an empty one, as the starting point.
+- **Entry:** Changes which stocks reach the entry check. A stock first flagged after a quiet
+  stretch is now alerted and can become a trade, as it always should have been. Nothing else
+  about how an entry is confirmed changes.
+- **Exit (SL):** Not affected.
+- **Exit (TP):** Not affected.
+- **Consideration:** The first check of the day is still silent, so there is no burst of alerts
+  at startup. A pick that passes the entry check can still be refused by the runner's minimum
+  reward-to-risk of 0.75 (`risk.min_rr`), which stays unchanged; 169 of 256 signals since
+  2026-10-01 were refused that way, and all 16 on 2026-10-29.
+
+NOTE: `store.record_hits(results, captured_at, baseline_exists=None)`; `__main__._watch` passes
+`baseline_exists=store.has_snapshot_before(captured_at)`, true when any snapshot is stored
+earlier that calendar day. `None` keeps the older rule (no hits earlier today) for the backfill.
+Tests: `test_breakingtrade_store.py` (empty morning, cold start, same-day scoping). The poller
+was restarted at 11:28:58 to load the fix; the two 10:20 stocks are not recoverable.
+
 ### 2026-10-28 17:40 — A closer stop for BREAKINGTRADE-RI tested on past data: rejected, no new version
 - **What changed:** Nothing in either strategy, and no third paper version was started. The
   first paper day showed that RI's stop sits at the bottom of the first hour's range even though

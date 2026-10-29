@@ -197,15 +197,32 @@ def previous_hits(before: datetime) -> dict:
     return previous
 
 
-def record_hits(results, captured_at: datetime) -> dict:
+def has_snapshot_before(before: datetime) -> bool:
+    """Whether any poll was stored earlier on `before`'s calendar day, hit or no hit."""
+    day_start = before.replace(hour=0, minute=0, second=0, microsecond=0)
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM snapshots WHERE captured_at >= ? AND captured_at < ? LIMIT 1",
+            (_iso(day_start), _iso(before)),
+        ).fetchone()
+    return row is not None
+
+
+def record_hits(results, captured_at: datetime, baseline_exists: bool | None = None) -> dict:
     """Store this poll's scan matches and return {scan_name: [newly appeared symbols]}.
 
-    "New" means the symbol was not matching that same scan in the previous stored poll. The
-    first ever poll reports nothing as new - with no baseline, everything would look like an
-    event, which would fire a burst of false alerts on startup.
+    "New" means the symbol was not matching that same scan earlier today. The first poll of
+    the day reports nothing as new - with no baseline, everything would look like an event,
+    which would fire a burst of false alerts on startup.
+
+    `baseline_exists` says whether an earlier poll was stored today (see
+    has_snapshot_before). A poll that found nothing is still a baseline: without it, the first
+    poll that DOES find something after an empty morning looked like a cold start and every
+    match was stored as not new (2026-10-29, 10:20). None keeps the older rule, "no hits
+    earlier today", for callers that have no snapshot history (the backfill).
     """
     previous = previous_hits(captured_at)
-    is_first_poll = not previous
+    is_first_poll = (not previous) if baseline_exists is None else (not baseline_exists)
     stamp = _iso(captured_at)
 
     new_by_scan: dict = {}
