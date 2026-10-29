@@ -3,7 +3,7 @@
 import asyncio
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
 from loguru import logger
@@ -147,6 +147,22 @@ class BookEntry:
     quantity: int
     ltp: float
     realised: "float | None" = None
+    #: True when this open position's price has not changed for _STALE_PRICE_SECONDS, so it
+    #: may be a refresh the sandbox refused rather than a market that stood still. Set by
+    #: PositionTracker._mark_stale_prices(); never by the positionbook itself.
+    stale: bool = False
+
+
+#: How long an open position's price may stay exactly unchanged before the tracker stops trusting
+#: it. The sandbox keeps its last stored price when a valuation refresh is refused and the
+#: positionbook carries no timestamp, so a frozen price is the only visible symptom. A liquid F&O
+#: stock repeating one price for two minutes in session is not a market, it is a missed refresh.
+#:
+#: TEMPORARY SAFEGUARD, not true feed-freshness detection. It cannot tell a refused refresh from a
+#: price that genuinely did not change, and it only notices after the full window. It exists
+#: because OpenAlgo's positionbook exposes no price timestamp. Replace it when core exposes one
+#: (or when a timestamped price source is added); do not tune it to chase other problems.
+_STALE_PRICE_SECONDS = 120.0
 
 
 def _index_positionbook(book) -> dict:
@@ -337,6 +353,14 @@ class PositionTracker:
         #: positions have all closed gets an explicit 0.0 rather than keeping a stale figure
         #: that would go on throttling it. See _push_unrealised().
         self._reported_unrealised: set = set()
+        #: symbol -> (price, time.monotonic() when that price last changed). See
+        #: _mark_stale_prices().
+        self._price_seen: dict[str, tuple[float, float]] = {}
+        #: Symbols already reported stale, so a freeze is logged once, not every 5s poll.
+        self._stale_reported: set[str] = set()
+        #: position key -> that leg's last unrealised loss computed from a fresh price. A leg
+        #: on a stale price keeps this figure. See _push_unrealised().
+        self._leg_loss: dict[str, float] = {}
         #: Consecutive failed positionbook polls, and whether the outage has been reported.
         #: See _POSITIONBOOK_OUTAGE_POLLS.
         self._positionbook_failures = 0
@@ -865,22 +889,67 @@ class PositionTracker:
         closed is explicitly zeroed, so a stale figure can never keep throttling it.
         """
         losses: dict[str, float] = dict.fromkeys(self._reported_unrealised, 0.0)
-        for pos in self._positions.values():
+        leg_loss: dict[str, float] = {}
+        for key, pos in self._positions.items():
             losses.setdefault(pos.strategy, 0.0)
             book_entry = book_data.get(pos.symbol)
+            if book_entry is not None and book_entry.stale:
+                # A frozen price may be a refresh the sandbox refused. Keep what the last fresh
+                # price said about this leg: it is never better than what was last confirmed.
+                held = self._leg_loss.get(key, 0.0)
+                leg_loss[key] = held
+                losses[pos.strategy] += held
+                continue
             ltp = book_entry.ltp if book_entry else 0.0
             base = pos.fill_price or pos.entry_price
             if not ltp or not base:
                 continue  # no usable mark - skip this leg rather than invent one
             move = (ltp - base) if pos.direction == Direction.LONG else (base - ltp)
-            if move < 0:
-                losses[pos.strategy] += abs(move) * abs(pos.quantity)
+            loss = abs(move) * abs(pos.quantity) if move < 0 else 0.0
+            leg_loss[key] = loss
+            losses[pos.strategy] += loss
+        self._leg_loss = leg_loss
 
         for strategy, loss in losses.items():
             self._risk_engine.update_unrealised(loss, strategy)
         self._reported_unrealised = {
             s for s in losses if s in {p.strategy for p in self._positions.values()}
         }
+
+    def _mark_stale_prices(self, book_data: dict, now: float | None = None) -> dict:
+        """Return book_data with `stale` set on each open position whose price has frozen.
+
+        Only an open position (quantity != 0) with a usable price (> 0) is judged: a closed
+        row's price is a fixed execution price by design, and a zero price is already unusable.
+        A symbol seen for the first time, or after leaving the book, starts fresh, so a freeze
+        that began before a restart is only caught after a further _STALE_PRICE_SECONDS.
+        """
+        now = time.monotonic() if now is None else now
+        out: dict = {}
+        seen: dict[str, tuple[float, float]] = {}
+        for sym, entry in book_data.items():
+            if entry.quantity == 0 or entry.ltp <= 0:
+                out[sym] = entry
+                continue
+            prev = self._price_seen.get(sym)
+            changed_at = prev[1] if prev is not None and prev[0] == entry.ltp else now
+            seen[sym] = (entry.ltp, changed_at)
+            stale = (now - changed_at) > _STALE_PRICE_SECONDS
+            out[sym] = replace(entry, stale=True) if stale else entry
+            if stale and sym not in self._stale_reported:
+                self._stale_reported.add(sym)
+                logger.warning(
+                    f"{sym}: price {entry.ltp:.2f} unchanged for {now - changed_at:.0f}s while held;"
+                    " treating it as unconfirmed (no no-progress exit, unrealised loss held at"
+                    " its last confirmed figure) until it moves"
+                )
+        for sym in list(self._stale_reported):
+            if sym not in out or not out[sym].stale:
+                self._stale_reported.discard(sym)
+                if sym in out:
+                    logger.info(f"{sym}: price is moving again; resuming normal use")
+        self._price_seen = seen
+        return out
 
     async def _check_mode_flip(self) -> None:
         """Notice a mid-session OpenAlgo mode change and alert on it.
@@ -940,7 +1009,7 @@ class PositionTracker:
             return
         await self._note_positionbook_success()
 
-        book_data = _index_positionbook(book)
+        book_data = self._mark_stale_prices(_index_positionbook(book))
         self._push_unrealised(book_data)
         await self._check_mode_flip()
         closed_keys = []
@@ -1591,6 +1660,8 @@ class PositionTracker:
         ltp = np_entry.ltp if np_entry else 0.0
         if ltp <= 0:
             return None
+        if np_entry.stale:
+            return None  # a frozen price must never open an exit; see _mark_stale_prices()
 
         if pos.direction == Direction.LONG:
             progress = (ltp - progress_base) / tp_distance

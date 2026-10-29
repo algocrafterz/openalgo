@@ -6407,3 +6407,29 @@ good in the paper month only because the market was falling.
 - Limiter lanes and background bounds exist but are unset. Stage 2 enables them only after one
   measured session and a tracker staleness guard.
 - Open: the cause of the whole-app stalls (py-spy dump) is not found.
+
+## Stage 2: limiter lanes on, stale-price guard, daily execution-health check (2026-10-29)
+
+- Measured 2026-10-29 (sandbox, Flattrade feed): while the platform feed is stale the sandbox
+  polls prices twice over REST (stop-trigger loop and position valuation), about 24 calls a
+  minute per held symbol against a 110 a minute data cap. Order price lookups queued behind that
+  for 5 to 19 s, past the 5 s client timeout: 11 order timeouts, 4 EXIT UNCERTAIN (all resolved by
+  the recovery path, no duplicate order), 18 positionbook failures.
+- `.env` (not in git): `FLATTRADE_MAX_PER_SECOND=7`, data lanes reserve 2/s and 10/min, background
+  1/s and 20/min, background wait bound 3 s. Needs an app restart to load.
+- Tracker stale-price guard (`tracker._mark_stale_prices`): an open position whose positionbook
+  price is unchanged for 120 s is marked stale. A stale price never opens a no-progress exit, and
+  a stale leg keeps its last confirmed unrealised loss. Protective stops, the time exit and the
+  trailing exit do not read that price. This is a temporary safeguard, not true feed-freshness
+  detection (the positionbook has no price timestamp); replace it when core exposes one.
+- Trading behaviour: only the no-progress exit and the unrealised-loss figure change, and only
+  while a price is frozen. Timeouts, positionbook retries and stop logic are unchanged.
+- `signal_engine/analysis/execution_health.py` and the `execution-health` skill report the
+  day's rate-limit, timeout, UNCERTAIN, positionbook, history and websocket incidents and how
+  incident-touched trades compare with the rest. Weekdays 16:10 IST via cron; it is read-only.
+- Open, for follow-up: the websocket resubscribes before the login is acknowledged, so ticks can
+  stay silent for minutes after a reconnect (needs an upstream OpenAlgo fix); Flattrade rejections
+  of 11 to 14 calls in one second despite a local cap of 9 are unexplained; HTTP/2 shared
+  connections cause history errors (`APP_MODE=standalone` would disable HTTP/2, not applied).
+- Paper-trade window study (12 to 19 days per strategy): no entry-window or open-position
+  restriction is supported by the data; EVWAP-EARLY-PY is negative after charges in every window.
