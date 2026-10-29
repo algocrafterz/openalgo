@@ -616,3 +616,36 @@ class TestSLCancelledOnBrokerDetectedClose:
 
         mock_cancel.assert_awaited_once_with("SL-M-STILL-LIVE", ORB)
         assert tracker.tracked_count == 0
+
+
+class TestFilledSLIsNotCancelled:
+    """A normal SL-HIT close: the stop itself filled, so cancelling it only makes OpenAlgo log
+    "Cannot cancel order in complete status" on every stop-out."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status,expect_cancel", [("complete", False), ("open", True), ("", True)])
+    async def test_cancel_only_when_sl_not_complete(self, status, expect_cancel):
+        engine = _make_engine()
+        engine._state(ORB).open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 0.0
+        pos = _make_position(
+            symbol="SBIN", fill_price=800.0, sl_order_id="SL-M-1", entry_time=_AGED,
+        )
+        tracker.register(pos)
+        book = [{"symbol": "SBIN", "quantity": 0, "ltp": 790.0, "today_realized_pnl": -100.0}]
+
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=book),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=-100.0),
+            patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value=status),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel,
+            patch("signal_engine.tracker.notifier.notify_position_closed", new_callable=AsyncMock),
+            patch("signal_engine.tracker.db.save_tracker_exit"),
+            patch.object(tracker, "_position_too_young", return_value=False),
+            patch.object(tracker, "_maybe_send_day_summary", new_callable=AsyncMock),
+        ):
+            await tracker.check_positions()
+
+        assert mock_cancel.await_count == (1 if expect_cancel else 0)
+        assert tracker.tracked_count == 0

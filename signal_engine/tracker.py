@@ -1492,7 +1492,12 @@ class PositionTracker:
         ("Refusing to release ... only 0.00 is reserved"), because the margin had already been
         freed by the earlier out-of-band settlement.
         """
+        sl_filled = False
         if pos.sl_order_id:
+            # A normal SL-HIT close means the stop itself just filled. OpenAlgo refuses to
+            # cancel a completed order and logs an error each time, so skip the call then.
+            sl_filled = (await fetch_order_status(pos.sl_order_id, pos.strategy)).lower() == "complete"
+        if pos.sl_order_id and not sl_filled:
             try:
                 cancelled = await cancel_order(pos.sl_order_id, pos.strategy)
             except Exception as e:  # noqa: BLE001 - a cancel failure must not block booking the close
