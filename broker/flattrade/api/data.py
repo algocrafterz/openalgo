@@ -160,11 +160,19 @@ def get_api_response(endpoint, auth, method="POST", payload=None, retry_count=0)
     except httpx.TimeoutException:
         DATA_LIMITER.record_timeout()
         raise
+    except (httpx.RemoteProtocolError, httpx.ReadError):
+        # Flattrade closes idle pooled connections; the next request on one fails at once
+        # (server disconnected, stream reset, SSL EOF). These endpoints only read, so retry
+        # once on a fresh connection instead of failing the caller.
+        if retry_count >= 1:
+            raise
+        logger.warning(f"Flattrade connection dropped on {endpoint}; retrying once")
+        return get_api_response(endpoint, auth, method, payload, retry_count + 1)
     DATA_LIMITER.record_latency(time.perf_counter() - started)
     data = response.text
 
     # Print raw response for debugging
-    logger.info(f"Raw Response: {data}")
+    logger.debug(f"Raw Response: {data}")
 
     try:
         parsed = json.loads(data)
