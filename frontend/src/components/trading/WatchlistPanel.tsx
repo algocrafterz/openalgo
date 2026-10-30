@@ -383,6 +383,7 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
     enabled: priceable.length > 0,
     useMultiQuotesFallback: true,
     multiQuotesRefreshInterval: SNAPSHOT_REFRESH_MS,
+    pollWhenSocketLive: true,
     pauseWhenHidden: true,
   })
 

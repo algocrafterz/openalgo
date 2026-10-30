@@ -34,6 +34,13 @@ export interface UseLivePriceOptions {
   multiQuotesRefreshInterval?: number
   /** Pause WebSocket and polling when tab is hidden (default: true) */
   pauseWhenHidden?: boolean
+  /**
+   * Keep polling MultiQuotes while the live feed delivers every symbol (default: false).
+   * By default MultiQuotes is a fallback, so the periodic poll stands down while every item has a
+   * fresh live price. Set it for a caller that reads the snapshot itself (open, high, low,
+   * previous close), which the live LTP feed does not carry.
+   */
+  pollWhenSocketLive?: boolean
   /** Time in ms to wait before pausing when hidden (default: 5000) */
   pauseDelay?: number
 }
@@ -86,6 +93,7 @@ export function useLivePrice<T extends PriceableItem>(
     useMultiQuotesFallback = true,
     multiQuotesRefreshInterval = 30000,
     pauseWhenHidden = true,
+    pollWhenSocketLive = false,
   } = options
 
   const { apiKey } = useAuthStore()
@@ -109,6 +117,22 @@ export function useLivePrice<T extends PriceableItem>(
     [items]
   )
 
+  // The polling below follows the set of symbols, never the identity of `items`. Callers rebuild
+  // the array on every refetch of their own data, and a poll tied to that identity restarts (and
+  // fetches immediately) each time. Every MultiQuotes request is one broker request per symbol on
+  // brokers without a batch quote call, so the extra fetches come out of the order budget.
+  const itemsRef = useRef(items)
+  itemsRef.current = items
+  const symbolKey = useMemo(
+    () =>
+      items
+        .map((item) => `${item.exchange}:${item.symbol}`)
+        .sort()
+        .join('|'),
+    [items]
+  )
+  const inFlightRef = useRef(false)
+
   // WebSocket market data - connect when enabled, with visibility awareness
   const {
     data: marketData,
@@ -124,14 +148,36 @@ export function useLivePrice<T extends PriceableItem>(
   // Effective live status
   const isLive = wsConnected && anyMarketOpen && !wsPaused
 
+  // Read at poll time, not render time: a feed that goes quiet causes no re-render, so a value
+  // frozen at the last render would claim the symbols were covered long after they stopped.
+  const marketDataRef = useRef(marketData)
+  marketDataRef.current = marketData
+  const isMarketOpenRef = useRef(isMarketOpen)
+  isMarketOpenRef.current = isMarketOpen
+  const socketCoversAll = useCallback(() => {
+    const current = itemsRef.current
+    if (current.length === 0) return false
+    const now = Date.now()
+    return current.every((item) => {
+      if (!isMarketOpenRef.current(item.exchange)) return false
+      const live = marketDataRef.current.get(`${item.exchange}:${item.symbol}`)
+      return Boolean(live?.data?.ltp && live.lastUpdate && now - live.lastUpdate < staleThreshold)
+    })
+  }, [staleThreshold])
+
   /**
    * Fetch MultiQuotes data from API
    */
   const fetchMultiQuotes = useCallback(async () => {
-    if (!apiKey || items.length === 0 || !useMultiQuotesFallback) return
+    const current = itemsRef.current
+    if (!apiKey || current.length === 0 || !useMultiQuotesFallback) return
+    // One request at a time: responses can take tens of seconds when the broker is busy, and a
+    // poll that starts before the last one returned only deepens the queue.
+    if (inFlightRef.current) return
+    inFlightRef.current = true
 
     try {
-      const symbolsList = items.map((item) => ({
+      const symbolsList = current.map((item) => ({
         symbol: item.symbol,
         exchange: item.exchange,
       }))
@@ -150,36 +196,42 @@ export function useLivePrice<T extends PriceableItem>(
       }
     } catch {
       // Silently fail - MultiQuotes is a fallback mechanism
+    } finally {
+      inFlightRef.current = false
     }
-  }, [apiKey, items, useMultiQuotesFallback])
+  }, [apiKey, useMultiQuotesFallback])
 
   // Fetch MultiQuotes on mount and when items change
   // Visibility-aware: pause polling when tab is hidden
   useEffect(() => {
-    if (!enabled || items.length === 0 || !useMultiQuotesFallback) return
+    if (!enabled || symbolKey === '' || !useMultiQuotesFallback) return
 
     // Don't poll when hidden (if pauseWhenHidden is true)
     if (pauseWhenHidden && !isVisible) return
 
-    // Initial fetch
-    fetchMultiQuotes()
-    lastFetchRef.current = Date.now()
-
-    // Set up periodic refresh
-    const interval = setInterval(() => {
+    const poll = () => {
+      if (!pollWhenSocketLive && socketCoversAll()) return
       fetchMultiQuotes()
       lastFetchRef.current = Date.now()
-    }, multiQuotesRefreshInterval)
+    }
+
+    // Initial fetch
+    poll()
+
+    // Set up periodic refresh
+    const interval = setInterval(poll, multiQuotesRefreshInterval)
 
     return () => clearInterval(interval)
   }, [
     enabled,
-    items.length,
+    symbolKey,
     useMultiQuotesFallback,
     fetchMultiQuotes,
     multiQuotesRefreshInterval,
     pauseWhenHidden,
     isVisible,
+    pollWhenSocketLive,
+    socketCoversAll,
   ])
 
   // Refresh MultiQuotes immediately when tab becomes visible after being hidden
