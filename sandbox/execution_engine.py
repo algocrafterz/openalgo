@@ -41,6 +41,44 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# A fill that spends this long in _update_position (waiting for the position lock or working in
+# it) is logged with the split, so a slow burst of orders can be traced to its cause.
+_SLOW_FILL_LOG_MS = 1000.0
+
+
+class _FillTimer:
+    """Time a fill spends waiting for the position lock, and in each step while holding it."""
+
+    def __init__(self):
+        self.start = self._last = time.perf_counter()
+        self.lock_wait_ms = 0.0
+        self.steps = []
+
+    def lock_acquired(self):
+        now = time.perf_counter()
+        self.lock_wait_ms = (now - self.start) * 1000
+        self._last = now
+
+    def mark(self, step):
+        now = time.perf_counter()
+        self.steps.append((step, (now - self._last) * 1000))
+        self._last = now
+
+    def held_ms(self):
+        return (time.perf_counter() - self.start) * 1000 - self.lock_wait_ms
+
+    def summary(self):
+        parts = " ".join(f"{name}={ms:.0f}ms" for name, ms in self.steps)
+        return f"lock_wait={self.lock_wait_ms:.0f}ms held={self.held_ms():.0f}ms {parts}".rstrip()
+
+    def log_if_slow(self, symbol, orderid, threshold_ms=_SLOW_FILL_LOG_MS):
+        total = self.lock_wait_ms + self.held_ms()
+        if total >= threshold_ms:
+            logger.warning(
+                f"Slow sandbox fill {symbol} {orderid}: total={total:.0f}ms {self.summary()}"
+            )
+
+
 #: Order statuses in which an order still rests and can be filled, cancelled
 #: or modified. Every transition out of them is a conditional UPDATE on this
 #: set, so exactly one of a fill, a cancel and a trigger release wins an order.
@@ -880,7 +918,9 @@ class ExecutionEngine:
         # losing one increment. The lock is released even when the function
         # raises or rolls back its transaction.
         feed_change = None
+        timer = _FillTimer()
         self._position_lock.acquire()
+        timer.lock_acquired()
         try:
             fund_manager = FundManager(order.user_id)
 
@@ -1148,6 +1188,7 @@ class ExecutionEngine:
                     )
 
             db_session.commit()
+            timer.mark("update_commit")
 
             # Event-driven MTM: keep the WS engine's position-feed refs in
             # sync with the position book. After any fill, either the symbol
@@ -1161,6 +1202,7 @@ class ExecutionEngine:
 
             # Validate margin consistency after position update
             is_consistent, discrepancy = validate_margin_consistency(order.user_id)
+            timer.mark("margin_check")
             if not is_consistent:
                 logger.warning(
                     f"Margin inconsistency detected after position update for {order.symbol}: "
@@ -1168,6 +1210,7 @@ class ExecutionEngine:
                 )
                 # Auto-reconcile to prevent margin leaks
                 reconcile_margin(order.user_id, auto_fix=True)
+                timer.mark("reconcile")
 
         except Exception as e:
             db_session.rollback()
@@ -1175,6 +1218,7 @@ class ExecutionEngine:
             raise
         finally:
             self._position_lock.release()
+            timer.log_if_slow(order.symbol, order.orderid)
             if feed_change is not None:
                 self._apply_position_feed_change(order, *feed_change)
 
