@@ -26,11 +26,17 @@ export interface WorkflowCheckResult {
   checks: WorkflowCheck[]
 }
 
+export interface WorkflowVerdict {
+  verdict: 'GREEN' | 'AMBER' | 'RED'
+  line: string
+}
+
 export interface WorkflowDay {
   day: string
   phases: WorkflowPhase[]
   checks: Record<string, WorkflowCheckResult>
   reports: string[]
+  verdict: WorkflowVerdict | null
 }
 
 interface WorkflowResponse {
@@ -59,7 +65,7 @@ export const opsWorkflowApi = {
       })
       return {
         days: res.data.days ?? [],
-        data: res.data.data ?? { day: '', phases: [], checks: {}, reports: [] },
+        data: res.data.data ?? { day: '', phases: [], checks: {}, reports: [], verdict: null },
       }
     } catch (error) {
       throw new Error(errorMessage(error, 'The workflow status could not be loaded.'))

@@ -45,3 +45,15 @@ def test_reports_are_whitelisted_file_names_only(tmp_path):
         "",
     ):
         assert read_report(name, str(tmp_path)) is None
+
+
+def test_the_close_day_verdict_line_is_read_from_the_review(tmp_path):
+    _seed(tmp_path)
+    (tmp_path / "eod-2026-10-30-claude-review.md").write_text(
+        'text\n```close-day-verdict\n{"verdict": "RED", "line": "Net -2,149 after charges."}\n```\n'
+    )
+    assert day_view("2026-10-30", str(tmp_path))["verdict"] == {
+        "verdict": "RED",
+        "line": "Net -2,149 after charges.",
+    }
+    assert day_view("2026-11-02", str(tmp_path))["verdict"] is None

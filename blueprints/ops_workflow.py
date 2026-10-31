@@ -34,6 +34,7 @@ _DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _REPORT = re.compile(
     r"^[a-z][a-z0-9-]*-\d{4}-\d{2}-\d{2}(-to-\d{4}-\d{2}-\d{2})?(-claude-review)?\.md$"
 )
+_VERDICT = re.compile(r"```close-day-verdict\s*\n(.*?)```", re.S)
 _STATUS = re.compile(r"^(open-day|liveness|close-day)-(\d{4}-\d{2}-\d{2})-status\.tsv$")
 
 
@@ -66,6 +67,22 @@ def _checked(name: str, day: str, folder: str) -> dict | None:
         return json.load(handle)
 
 
+def close_day_verdict(day: str, folder: str = REPORTS_DIR) -> dict | None:
+    """The close-day review's verdict block ({"verdict", "line"}), or None when it has none."""
+    path = os.path.join(folder, f"eod-{day}-claude-review.md")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        blocks = _VERDICT.findall(handle.read())
+    try:
+        data = json.loads(blocks[-1])
+    except (IndexError, ValueError):
+        return None
+    if data.get("verdict") not in ("GREEN", "AMBER", "RED"):
+        return None
+    return {"verdict": data["verdict"], "line": str(data.get("line", ""))[:400]}
+
+
 def day_view(day: str, folder: str = REPORTS_DIR) -> dict:
     phases = [{"phase": p, "steps": _steps(p, day, folder)} for p in PHASES]
     checks = {name: data for name in CHECKED if (data := _checked(name, day, folder))}
@@ -74,7 +91,13 @@ def day_view(day: str, folder: str = REPORTS_DIR) -> dict:
         if os.path.isdir(folder)
         else []
     )
-    return {"day": day, "phases": phases, "checks": checks, "reports": reports}
+    return {
+        "day": day,
+        "phases": phases,
+        "checks": checks,
+        "reports": reports,
+        "verdict": close_day_verdict(day, folder),
+    }
 
 
 def read_report(name: str, folder: str = REPORTS_DIR) -> str | None:
@@ -99,7 +122,11 @@ def workflow():
         day = request.args.get("day") or (days[0] if days else "")
         if day and not _DAY.match(day):
             return jsonify({"status": "error", "message": "Pick a day from the list."}), 400
-        data = day_view(day) if day else {"day": "", "phases": [], "checks": {}, "reports": []}
+        data = (
+            day_view(day)
+            if day
+            else {"day": "", "phases": [], "checks": {}, "reports": [], "verdict": None}
+        )
         return jsonify({"status": "success", "days": days, "data": data}), 200
     except Exception:
         logger.exception("Could not read the ops workflow reports")
