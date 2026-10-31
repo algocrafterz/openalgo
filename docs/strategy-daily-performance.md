@@ -144,14 +144,17 @@ the failure mode that rule exists to prevent.)
 Both under the existing `blueprints/strategy_pnl.py` (session-authed, UI-only,
 same rate-limit pattern as `/api/strategy-pnl`):
 
-- `GET /api/strategy-pnl/daily?strategy=<name>&period=1d|7d|30d|90d|ytd|all` — full
+- `GET /api/strategy-pnl/daily?strategy=<name>&period=1d|7d|15d|30d|90d|ytd|all|custom` (custom adds `&start=YYYY-MM-DD&end=YYYY-MM-DD`) — full
   metrics table + daily P&L series + equity curve for one strategy, or the
   whole portfolio if `strategy` is omitted. Also returns `est_costs`,
   `net_after_costs`, `expectancy_r`, `total_r`, `r_covered`/`r_total` and
-  `by_symbol` (see "2026-09-29 additions"); for `period=1d` only, a `trades`
-  list of that day's closed trades, newest first.
+  `by_symbol` (see "2026-09-29 additions"); when the resolved range is a single
+  day (1D, or a one-day custom range), a `trades` list of that day's closed
+  trades, newest first.
 - `GET /api/strategy-pnl/compare?period=...` — the same metrics, condensed,
-  for every strategy in the current mode side by side.
+  for every strategy in the current mode side by side, plus the resolved
+  `start_date`/`end_date`. One ledger read per request, grouped by strategy.
+- `GET /api/strategy-pnl/trades/export?period=&start=&end=&strategy=` — the enriched closed trades in range as a CSV file (`strategy-trades-<start>_<end>.csv`).
 
 ## Frontend
 
@@ -336,3 +339,71 @@ What is automatic is the warning: a trade whose broker has no entry in `portfoli
 default, logged once by name, shown as "[assumed broker rates]" on the Performance cards and in the broker card with the
 reason, and flagged in the nightly `pages_vs_fills` report. A verified schedule also asks for a re-check after 180 days.
 `uncovered_brokers()` lists the plugin brokers still lacking a verified entry.
+
+## 2026-10-31 additions
+
+**1D is the last traded session, not the calendar day.** On a weekend or
+holiday `resolve_period("1d")` returns the most recent `trade_date` (within
+`LEDGER_RELIABLE_SINCE`..today) that has a closed trade in the current mode,
+across all strategies, so the strategy view and the comparison table name the
+same day. With no trades at all it is today. The page shows the resolved date
+("Showing 30 Oct 2026 (last traded session)").
+
+**15D and Custom periods.** 15D is a rolling 15 calendar days. Custom takes
+`start`/`end`; the server rejects a missing, malformed or reversed range, or
+one that starts in the future, with a 400 and a plain message, and clamps the
+start to `LEDGER_RELIABLE_SINCE` and the end to today. The page keeps period,
+range and strategy in the URL (`?period=custom&start=..&end=..&strategy=..`),
+so a refresh or a shared link reopens the same view.
+
+**Last session on the P&L page.** `/api/strategy-pnl` returns `last_session` = {date, strategies: {name: realized}, total, trades_count} from the closed-trade ledger for the current mode, or null. The P&L page shows a "Last session" card when that date is not today (IST) and no strategy has realized P&L today, with a link to the Performance page's 1D view.
+
+**Breakdowns.** The daily response has `by_hour` (bucketed by EXIT hour from `closed_at`; the ledger stores no entry time) and `by_weekday`. The page shows them in a "When trades close" card.
+
+**Net equity curve.** `equity_curve_net` is cumulative daily gross P&L minus that day's estimated charges. A trade with no cost estimate counts as 0. `equity_net_cost_coverage` {covered, total} says how many trades were priced. The chart draws it as a dashed "After est. charges" line.
+
+**MAE/MFE.** Single-day views only. Each trade gets `mfe` and `mae` in rupees times quantity, or null. Entry time comes from the matching signal in `signal_engine/data/trades.db` (same match rule as R). Prices come from Historify 1-minute bars between entry and `closed_at`, using full-bar highs and lows, so the values are an upper estimate. `excursion_covered`/`excursion_total` give coverage. Results for past sessions are cached in-process for 6 hours (`LockedTTLCache`). Today's results are recomputed on each request because bars may still be arriving.
+
+**Heatmap click-through.** Clicking a day in the calendar heatmap opens that day as a one-day custom range.
+
+**CSV export.** `GET /api/strategy-pnl/trades/export?period=&start=&end=&strategy=` returns the enriched closed trades in range as `strategy-trades-<start>_<end>.csv`. Text cells that start with `=`, `+`, `-` or `@` get a leading quote, so a spreadsheet cannot run them as formulas. The page has an "Export CSV" button.
+
+**Strategy list.** `/api/strategy-pnl/compare` returns `all_strategies`: every strategy with a closed trade in the current mode since the reliable ledger date. The dropdown no longer drops a strategy that has no trades in the selected range.
+
+**Entry time (`opened_at`).** `strategy_positions.opened_at` is set when a leg
+opens from flat or flips through zero; adding to or reducing a position keeps
+it. Every `strategy_closed_trades` row carries the leg's `opened_at` from
+before the closing fill, so a partial exit is timed from when the whole
+position opened. `apply_fill(..., filled_at=)` takes the fill's own time (the
+reconciler passes the order-book timestamp); both `opened_at` and `closed_at`
+use that clock. `upgrade/migrate_strategy_opened_at.py` adds the columns and
+backfills Analyze-mode rows from `sandbox_trades` (latest opening-side fill
+within 0.5% of the entry price, up to 10 days before the close). Live rows
+before the column existed stay NULL.
+
+**Holding-time analytics.** The daily response adds `hold_stats` (avg,
+median, p90, winners' and losers' average hold, coverage), `by_entry_hour`
+and `by_hold_bucket` (<15 min, 15-60 min, 1-3 h, 3 h+ same day, Overnight);
+comparison rows add `avg_hold_min` and `median_hold_min`. MAE/MFE use the
+trade's own `opened_at` and fall back to the signal match only when it is
+missing.
+
+**Edge check.** Per-trade net P&L (realized minus estimated charges, unknown
+charges counted as 0) gives `net_expectancy`, `expectancy_ci95`, `t_stat`.
+Because trades on one day share that day's market, the same net P&L summed
+per trading day gives `day_t_stat` over `edge_days`. `edge_verdict` needs at
+least 30 trades and 10 trading days ("too few trades" / "too few days"
+otherwise) and both t-stats past 2 in the same direction for "likely real" or
+"likely negative"; anything else is "not distinguishable from zero". It is a
+screening statistic, not an acceptance gate.
+
+**P&L page session view.** `/strategy-pnl` always shows the current session,
+or the last traded session when nothing has traded today: the same summary
+cards, holding-time row and trade table the Performance page shows for 1D.
+
+**CSV export columns** (INR and minutes, timestamps ISO 8601 with +05:30):
+trade_date, opened_at, closed_at, hold_min, entry_hour, weekday, mode,
+strategy, broker, symbol, exchange, product, direction, closed_quantity,
+entry_price, exit_price, sl_price, realized_pnl, est_cost, net_pnl,
+return_pct, r_multiple, entry_slippage, mfe, mae. MFE/MAE are left empty for a
+range over 2000 trades.

@@ -121,11 +121,13 @@ def replay_missed_fills(mode: str, orders: list[dict]) -> int:
         filled = _to_float(order.get("filled_quantity"))
         if filled - float(tag.applied_quantity or 0) <= 0:
             continue
+        order_time = _parse_timestamp(order.get("timestamp"))
         result = apply_fill(
             orderid=str(order["orderid"]),
             filled_quantity=filled,
             average_price=_to_float(order.get("average_price")),
             action=str(order.get("action", "")).upper(),
+            filled_at=None if order_time == datetime.min else order_time,
         )
         if result:
             replayed += 1

@@ -95,6 +95,7 @@ MIGRATIONS = [
     ("migrate_qty_freeze_oct_2026.py", "NSE Index Freeze Limits (5 October 2026)"),
     ("migrate_strategy_book_mode.py", "Strategy Book Live/Paper Mode Separation"),
     ("migrate_strategy_book_broker.py", "Strategy Book Per-Broker Trade Attribution"),
+    ("migrate_strategy_opened_at.py", "Strategy Book Entry Time (opened_at)"),
 ]
 
 # Legacy migrations historically used non-zero exits for best-effort warnings,

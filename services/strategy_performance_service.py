@@ -20,6 +20,7 @@ from database.settings_db import get_analyze_mode
 from database.strategy_book_db import StrategyBookUnavailable, get_strategy_legs
 from services.holdings_service import get_holdings
 from services.positionbook_service import get_positionbook
+from services.strategy_daily_performance_service import get_last_session
 from services.strategy_pnl_service import pnl_from_book
 from utils.logging import get_logger
 from utils.session import get_trading_session_date
@@ -141,6 +142,7 @@ def get_strategy_performance(
             "mode": current_mode,
             "strategies": strategies,
             "count": len(strategies),
+            "last_session": get_last_session(current_mode),
         },
         200,
     )

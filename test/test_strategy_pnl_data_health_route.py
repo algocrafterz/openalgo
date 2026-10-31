@@ -63,7 +63,7 @@ def client(monkeypatch):
 
 def test_daily_performance_includes_data_health_and_schedules_reconcile(client, monkeypatch):
     monkeypatch.setattr(
-        module, "get_daily_performance", lambda s, p: (True, {"status": "success"}, 200)
+        module, "get_daily_performance", lambda s, p, **kw: (True, {"status": "success"}, 200)
     )
 
     body = client.get("/api/strategy-pnl/daily?period=7d").get_json()
@@ -77,7 +77,7 @@ def test_daily_performance_includes_data_health_and_schedules_reconcile(client, 
 
 def test_compare_includes_data_health(client, monkeypatch):
     monkeypatch.setattr(
-        module, "get_strategy_comparison", lambda p: (True, {"status": "success"}, 200)
+        module, "get_strategy_comparison", lambda p, **kw: (True, {"status": "success"}, 200)
     )
 
     body = client.get("/api/strategy-pnl/compare?period=7d").get_json()
@@ -97,7 +97,7 @@ def test_strategy_pnl_includes_data_health(client, monkeypatch):
 
 def test_error_responses_carry_no_data_health(client, monkeypatch):
     monkeypatch.setattr(
-        module, "get_daily_performance", lambda s, p: (False, {"status": "error"}, 400)
+        module, "get_daily_performance", lambda s, p, **kw: (False, {"status": "error"}, 400)
     )
 
     body = client.get("/api/strategy-pnl/daily?period=bad").get_json()
@@ -111,7 +111,7 @@ def test_health_failure_never_breaks_the_page(client, monkeypatch):
 
     monkeypatch.setattr(module, "get_data_health", boom)
     monkeypatch.setattr(
-        module, "get_daily_performance", lambda s, p: (True, {"status": "success"}, 200)
+        module, "get_daily_performance", lambda s, p, **kw: (True, {"status": "success"}, 200)
     )
 
     response = client.get("/api/strategy-pnl/daily?period=7d")

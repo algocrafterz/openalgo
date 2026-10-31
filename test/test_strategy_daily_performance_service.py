@@ -62,3 +62,80 @@ def test_charge_drag_is_in_the_summary_and_the_comparison_row(monkeypatch):
     assert row["est_costs"] == pytest.approx(r["est_costs"])
     assert row["net_after_costs"] == pytest.approx(r["net_after_costs"])
     assert row["charges_pct_of_gross"] == pytest.approx(r["charges_pct_of_gross"])
+
+
+def _session_trades():
+    return [
+        _t("OLD", 30.0, "2026-10-29T10:00:00", trade_date="2026-10-29"),
+        _t("AAA", 100.0, "2026-10-30T10:00:00", trade_date="2026-10-30"),
+        {**_t("XYZ", -40.0, "2026-10-30T11:00:00", trade_date="2026-10-30"), "strategy": "VWAP"},
+    ]
+
+
+def test_one_day_on_a_non_trading_day_shows_the_last_session(monkeypatch):
+    monkeypatch.setattr(svc, "get_closed_trades", lambda **kw: _session_trades())
+    monkeypatch.setattr(svc, "_today", lambda: date(2026, 11, 1))
+    ok, r, _ = svc.get_daily_performance(None, "1d")
+    assert ok
+    assert r["start_date"] == r["end_date"] == "2026-10-30"
+    assert r["trades_count"] == 2
+    assert {t["symbol"] for t in r["trades"]} == {"AAA", "XYZ"}
+
+
+def test_one_day_for_one_strategy_uses_the_portfolio_session(monkeypatch):
+    """The session date stays the same whichever strategy is selected, so
+    the strategy view and the comparison table describe the same day."""
+    trades = _session_trades()
+    trades[-1] = {**trades[-1], "trade_date": "2026-10-31"}
+    monkeypatch.setattr(svc, "get_closed_trades", lambda **kw: list(trades))
+    monkeypatch.setattr(svc, "_today", lambda: date(2026, 11, 1))
+    ok, r, _ = svc.get_daily_performance("ORB", "1d")
+    assert ok and r["start_date"] == "2026-10-31"
+    assert r["trades_count"] == 0
+
+
+def test_custom_range_filters_trades(monkeypatch):
+    monkeypatch.setattr(svc, "get_closed_trades", lambda **kw: _session_trades())
+    monkeypatch.setattr(svc, "_today", lambda: date(2026, 11, 1))
+    ok, r, _ = svc.get_daily_performance(None, "custom", start="2026-10-29", end="2026-10-29")
+    assert ok and r["trades_count"] == 1 and r["net_profit"] == 30.0
+    assert r["period"] == "custom"
+
+
+def test_custom_range_is_rejected_when_invalid():
+    ok, r, code = svc.get_daily_performance(None, "custom", start="2026-10-30", end="2026-10-01")
+    assert not ok and code == 400 and r["status"] == "error"
+
+
+def test_fifteen_day_period_is_accepted():
+    ok, r, _ = svc.get_daily_performance(None, "15d")
+    assert ok and r["calendar_days"] == 15
+
+
+def test_comparison_groups_one_query_by_strategy(monkeypatch):
+    calls = []
+
+    def fake(**kw):
+        calls.append(kw)
+        return _session_trades()
+
+    monkeypatch.setattr(svc, "get_closed_trades", fake)
+    monkeypatch.setattr(svc, "list_strategies", lambda: ["ORB", "VWAP"])
+    monkeypatch.setattr(svc, "_today", lambda: date(2026, 11, 1))
+    ok, r, _ = svc.get_strategy_comparison("1d")
+    assert ok and len(calls) == 1
+    assert {row["strategy"]: row["net_profit"] for row in r["strategies"]} == {
+        "ORB": 100.0,
+        "VWAP": -40.0,
+    }
+    assert r["start_date"] == r["end_date"] == "2026-10-30"
+
+
+def test_comparison_custom_range(monkeypatch):
+    monkeypatch.setattr(svc, "get_closed_trades", lambda **kw: _session_trades())
+    monkeypatch.setattr(svc, "list_strategies", lambda: ["ORB", "VWAP"])
+    monkeypatch.setattr(svc, "_today", lambda: date(2026, 11, 1))
+    ok, r, _ = svc.get_strategy_comparison("custom", start="2026-10-29", end="2026-10-29")
+    assert ok and [row["strategy"] for row in r["strategies"]] == ["ORB"]
+    ok, _, code = svc.get_strategy_comparison("custom", start="bad", end="2026-10-29")
+    assert not ok and code == 400

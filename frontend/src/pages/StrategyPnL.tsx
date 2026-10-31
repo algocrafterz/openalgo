@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { type UseQueryResult, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
   ChevronDown,
@@ -12,9 +12,18 @@ import {
   TrendingUp,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { type StrategyLeg, type StrategyPnl, strategyPnlApi } from '@/api/strategyPnl'
+import { Link } from 'react-router'
+import {
+  type StrategyDailyPerformance,
+  type StrategyLeg,
+  type StrategyPnl,
+  strategyPnlApi,
+} from '@/api/strategyPnl'
 import { DataHealthBanner } from '@/components/DataHealthBanner'
 import { StrategyModeBadge } from '@/components/StrategyModeBadge'
+import { HoldStatsRow } from '@/components/strategy-pnl/HoldStats'
+import { SessionSummary } from '@/components/strategy-pnl/SessionSummary'
+import { SessionTrades } from '@/components/strategy-pnl/SessionTrades'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -30,6 +39,7 @@ import {
 import { useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { applyLivePrices, legPriceKey, openLegItems, visibleLegs } from '@/lib/strategyPnlLive'
+import { fmtDate, todayIst } from '@/lib/strategyPnlView'
 import { cn, makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -294,6 +304,58 @@ function StrategyList({
   )
 }
 
+function SessionDetail({
+  query,
+  formatCurrency,
+}: {
+  query: UseQueryResult<StrategyDailyPerformance>
+  formatCurrency: (value: number) => string
+}) {
+  const daily = query.data
+  const day = daily?.start_date
+  const heading = day
+    ? `Session - ${fmtDate(day)}${day === todayIst() ? '' : ' (last traded session)'}`
+    : 'Session trades'
+  const error = daily?.status === 'error' ? daily.message : null
+  const empty = !query.isLoading && !error && (!daily || (daily.trades_count ?? 0) === 0)
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-lg font-semibold">{heading}</h2>
+        <Link
+          to="/strategy-pnl/daily?period=1d"
+          className="text-sm text-primary underline-offset-4 hover:underline"
+        >
+          Open in Performance
+        </Link>
+      </div>
+      {query.isLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-6 w-6 animate-spin" />
+        </div>
+      ) : error ? (
+        <div className="text-center py-8 text-muted-foreground">{error}</div>
+      ) : empty || !daily ? (
+        <div className="text-center py-8 text-muted-foreground">
+          No closed trades yet. Trades appear here once a strategy exits a position.
+        </div>
+      ) : (
+        <>
+          <SessionSummary daily={daily} formatCurrency={formatCurrency} />
+          {daily.hold_stats && <HoldStatsRow stats={daily.hold_stats} />}
+          <SessionTrades
+            trades={daily.trades ?? []}
+            sessionDate={daily.start_date}
+            excursionCovered={daily.excursion_covered ?? 0}
+            excursionTotal={daily.excursion_total ?? 0}
+            formatCurrency={formatCurrency}
+          />
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function StrategyPnL() {
   const { user } = useAuthStore()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
@@ -307,10 +369,19 @@ export default function StrategyPnL() {
     refetchOnWindowFocus: true,
   })
 
-  const refresh = useCallback(
-    () => queryClient.invalidateQueries({ queryKey: ['strategy-pnl'] }),
-    [queryClient]
-  )
+  // Portfolio session detail: 1d is today when something traded today, else the
+  // last traded session.
+  const sessionQuery = useQuery({
+    queryKey: ['strategy-pnl-session'],
+    queryFn: () => strategyPnlApi.daily(null, '1d'),
+    refetchInterval: POLL_MS,
+    refetchOnWindowFocus: true,
+  })
+
+  const refresh = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['strategy-pnl'] })
+    queryClient.invalidateQueries({ queryKey: ['strategy-pnl-session'] })
+  }, [queryClient])
 
   // Fills change realized P&L and open quantity; refetch on the same order
   // events OrderBook/TradeBook already listen for.
@@ -392,7 +463,7 @@ export default function StrategyPnL() {
           </div>
           <p className="text-muted-foreground">
             Today's realized and unrealized P&L per strategy, tracked from the strategy tag on each
-            order. Live and paper (Analyze mode) trades are tracked separately. For historical,
+            order. Live and Sandbox (Analyze mode) trades are tracked separately. For historical,
             multi-day performance, see the Performance page.
           </p>
         </div>
@@ -444,6 +515,8 @@ export default function StrategyPnL() {
           )}
         </CardContent>
       </Card>
+
+      <SessionDetail query={sessionQuery} formatCurrency={formatCurrency} />
     </div>
   )
 }

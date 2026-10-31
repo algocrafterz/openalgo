@@ -14,6 +14,7 @@ means no R for that trade.
 
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from database.engine_factory import create_db_engine
 from portfolio.broker_fees import attention_for, fees_for
 from portfolio.costs import india_delivery, india_intraday
 from utils.logging import get_logger
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
@@ -31,6 +33,7 @@ SIGNAL_TRADES_DB = Path(__file__).resolve().parent.parent / "signal_engine" / "d
 # A ledger entry is the sandbox/broker fill; the signal's entry is the alert
 # price. They differ by slippage, never by anything near this.
 _PRICE_MATCH_TOLERANCE = 0.005
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 _engines: dict[str, Any] = {}
 
@@ -81,9 +84,7 @@ def estimate_trade_cost(trade: dict) -> float | None:
         buy_value, sell_value = entry_value, exit_value
     else:
         buy_value, sell_value = exit_value, entry_value
-    return round(
-        schedule.charge(buy_value, sell_value, orders=2) + _dp_charge(trade, schedule), 2
-    )
+    return round(schedule.charge(buy_value, sell_value, orders=2) + _dp_charge(trade, schedule), 2)
 
 
 def _entry_order_charge(trade: dict, schedule) -> float:
@@ -198,15 +199,17 @@ def _entry_slippage(trade: dict, signal_entry: float) -> float:
 def enrich_trades(
     trades: list[dict], start_date: str, end_date: str, db_path: Path | None = None
 ) -> list[dict]:
-    """Copies of `trades` with `cost`, `risk_amount`, `r_multiple` and `entry_slippage`
+    """Copies of `trades` with `cost`, `risk_amount`, `r_multiple`, `entry_slippage` and
+    `signal_sl` (the matched signal stop price)
     added (each None when it cannot be determined)."""
     index = _load_signal_stops(start_date, end_date, db_path)
     costs = estimate_trade_costs(trades)
     enriched = []
     for trade, cost in zip(trades, costs, strict=True):
         stop = _match_stop(trade, index) if index else None
-        risk_amount = r_multiple = entry_slippage = None
+        risk_amount = r_multiple = entry_slippage = signal_sl = None
         if stop is not None:
+            signal_sl = stop[1]
             entry_slippage = _entry_slippage(trade, stop[0])
             risk_per_share = abs(stop[0] - stop[1])
             risk_amount = round(risk_per_share * float(trade["closed_quantity"]), 2)
@@ -221,6 +224,7 @@ def enrich_trades(
                 "risk_amount": risk_amount,
                 "r_multiple": r_multiple,
                 "entry_slippage": entry_slippage,
+                "signal_sl": signal_sl,
             }
         )
     return enriched
@@ -289,9 +293,13 @@ def _charge_metrics(trades: list[dict], costs: list[float | None]) -> dict:
         ),
         "turnover": round(turnover, 2),
         "charges_pct_of_turnover": (
-            round(100.0 * est_costs / turnover, 4) if est_costs is not None and turnover > 0 else None
+            round(100.0 * est_costs / turnover, 4)
+            if est_costs is not None and turnover > 0
+            else None
         ),
-        "avg_charge_per_trade": round(est_costs / len(trades), 2) if est_costs is not None else None,
+        "avg_charge_per_trade": round(est_costs / len(trades), 2)
+        if est_costs is not None
+        else None,
         "by_broker": _by_broker(trades, costs),
         # True when any trade was priced on a stand-in schedule rather than its broker's own
         "fee_basis_assumed": any(fees_for(t.get("broker")).assumed for t in trades),
@@ -357,3 +365,349 @@ def symbol_breakdown(trades: list[dict]) -> list[dict]:
     ]
     rows.sort(key=lambda r: r["net_pnl"], reverse=True)
     return rows
+
+
+_WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def _bucket_row(key: str, label, pnls: list[float]) -> dict:
+    return {
+        key: label,
+        "trades": len(pnls),
+        "net_pnl": round(sum(pnls), 2),
+        "win_rate": round(100.0 * sum(1 for p in pnls if p > 0) / len(pnls), 2),
+    }
+
+
+def hour_breakdown(trades: list[dict]) -> list[dict]:
+    """Trades, net P&L and win rate by EXIT hour (IST, from closed_at), hour ascending.
+
+    Trades with no parseable closed_at are left out. See entry_hour_breakdown for entry hour.
+    """
+    buckets: dict[int, list[float]] = {}
+    for t in trades:
+        closed_at = t.get("closed_at") or ""
+        try:
+            hour = int(closed_at[11:13])
+        except ValueError:
+            continue
+        if not 0 <= hour <= 23:
+            continue
+        buckets.setdefault(hour, []).append(float(t["realized_pnl"]))
+    return [_bucket_row("hour", h, buckets[h]) for h in sorted(buckets)]
+
+
+def weekday_breakdown(trades: list[dict]) -> list[dict]:
+    """Trades, net P&L and win rate by weekday of trade_date, Mon first, present days only."""
+    buckets: dict[int, list[float]] = {}
+    for t in trades:
+        try:
+            wd = date.fromisoformat(t["trade_date"]).weekday()
+        except (ValueError, TypeError, KeyError):
+            continue
+        buckets.setdefault(wd, []).append(float(t["realized_pnl"]))
+    return [_bucket_row("weekday", _WEEKDAYS[w], buckets[w]) for w in sorted(buckets)]
+
+
+def _parse_naive(value) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(value).replace(" ", "T")[:19])
+    except (ValueError, TypeError):
+        return None
+
+
+def hold_minutes(trade: dict) -> float | None:
+    """Minutes between opened_at and closed_at; None when either is missing,
+    unparseable, or the result is negative."""
+    opened, closed = _parse_naive(trade.get("opened_at")), _parse_naive(trade.get("closed_at"))
+    if opened is None or closed is None:
+        return None
+    minutes = (closed - opened).total_seconds() / 60.0
+    return round(minutes, 2) if minutes >= 0 else None
+
+
+def with_hold_minutes(trades: list[dict]) -> list[dict]:
+    """Copies of `trades` with `hold_min` added (None when it cannot be determined)."""
+    return [{**t, "hold_min": hold_minutes(t)} for t in trades]
+
+
+def _percentile(sorted_values: list[float], q: float) -> float:
+    """Linear-interpolated percentile (q in 0..1) of an ascending, non-empty list."""
+    pos = q * (len(sorted_values) - 1)
+    low = int(pos)
+    high = min(low + 1, len(sorted_values) - 1)
+    return sorted_values[low] + (sorted_values[high] - sorted_values[low]) * (pos - low)
+
+
+def _mean_or_none(values: list[float]) -> float | None:
+    return round(sum(values) / len(values), 1) if values else None
+
+
+def hold_stats(trades: list[dict]) -> dict:
+    """Holding-time summary in minutes over trades that have an entry time.
+
+    Winners are realized_pnl > 0, losers < 0. Every figure is None when no trade is covered."""
+    holds = [(hold_minutes(t), float(t["realized_pnl"])) for t in trades]
+    holds = [(m, p) for m, p in holds if m is not None]
+    minutes = sorted(m for m, _ in holds)
+    stats = {
+        "avg_min": None,
+        "median_min": None,
+        "p90_min": None,
+        "winners_avg_min": _mean_or_none([m for m, p in holds if p > 0]),
+        "losers_avg_min": _mean_or_none([m for m, p in holds if p < 0]),
+        "covered": len(minutes),
+        "total": len(trades),
+    }
+    if minutes:
+        stats["avg_min"] = _mean_or_none(minutes)
+        stats["median_min"] = round(_percentile(minutes, 0.5), 1)
+        stats["p90_min"] = round(_percentile(minutes, 0.9), 1)
+    return stats
+
+
+def entry_hour_breakdown(trades: list[dict]) -> list[dict]:
+    """Trades, net P&L, win rate and average hold by ENTRY hour (from opened_at), ascending.
+    Trades without an entry time are left out."""
+    buckets: dict[int, list[dict]] = {}
+    for t in trades:
+        opened = _parse_naive(t.get("opened_at"))
+        if opened is not None:
+            buckets.setdefault(opened.hour, []).append(t)
+    rows = []
+    for hour in sorted(buckets):
+        group = buckets[hour]
+        row = _bucket_row("hour", hour, [float(t["realized_pnl"]) for t in group])
+        row["avg_hold_min"] = _mean_or_none(
+            [m for m in (hold_minutes(t) for t in group) if m is not None]
+        )
+        rows.append(row)
+    return rows
+
+
+HOLD_BUCKETS = ("<15 min", "15-60 min", "1-3 h", "3 h+ same day", "Overnight")
+
+
+def _hold_bucket(trade: dict) -> str | None:
+    minutes = hold_minutes(trade)
+    if minutes is None:
+        return None
+    if _parse_naive(trade["opened_at"]).date() != _parse_naive(trade["closed_at"]).date():
+        return "Overnight"
+    if minutes < 15:
+        return HOLD_BUCKETS[0]
+    if minutes < 60:
+        return HOLD_BUCKETS[1]
+    if minutes < 180:
+        return HOLD_BUCKETS[2]
+    return HOLD_BUCKETS[3]
+
+
+def hold_bucket_breakdown(trades: list[dict]) -> list[dict]:
+    """Trades, net P&L, win rate and average P&L by holding-time bucket, in fixed order,
+    only buckets with trades. Overnight means the entry and exit dates differ."""
+    buckets: dict[str, list[float]] = {}
+    for t in trades:
+        name = _hold_bucket(t)
+        if name is not None:
+            buckets.setdefault(name, []).append(float(t["realized_pnl"]))
+    rows = []
+    for name in HOLD_BUCKETS:
+        if name in buckets:
+            row = _bucket_row("bucket", name, buckets[name])
+            row["avg_pnl"] = round(sum(buckets[name]) / len(buckets[name]), 2)
+            rows.append(row)
+    return rows
+
+
+def net_equity_curve(
+    equity_curve: list[dict], enriched: list[dict]
+) -> tuple[list[dict], dict[str, int]]:
+    """Cumulative gross P&L minus estimated charges, on the same dates as `equity_curve`.
+
+    A trade whose cost is None counts as zero cost; coverage reports how many
+    trades had a cost estimate.
+    """
+    cost_by_day: dict[str, float] = {}
+    covered = 0
+    for t in enriched:
+        if t.get("cost") is not None:
+            covered += 1
+            cost_by_day[t["trade_date"]] = cost_by_day.get(t["trade_date"], 0.0) + float(t["cost"])
+    curve = []
+    cum_cost = 0.0
+    prev_gross = 0.0
+    net = 0.0
+    for point in equity_curve:
+        cum_cost += cost_by_day.get(point["date"], 0.0)
+        gross_day = point["value"] - prev_gross
+        prev_gross = point["value"]
+        net += gross_day - cost_by_day.get(point["date"], 0.0)
+        curve.append({"date": point["date"], "value": round(net, 2)})
+    return curve, {"covered": covered, "total": len(enriched)}
+
+
+def _load_signal_entries(
+    start_date: str, end_date: str, db_path: Path | None
+) -> dict[tuple, set[tuple[float, str]]]:
+    """(strategy, symbol, direction, mode, date) -> {(entry, executed_at), ...}."""
+    path = Path(db_path) if db_path else SIGNAL_TRADES_DB
+    if not path.exists():
+        return {}
+    with _engine_for(path).connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT strategy, symbol, direction, trade_mode, substr(executed_at, 1, 10), "
+                "entry, executed_at FROM trades "
+                "WHERE status = 'SUCCESS' AND direction IN ('LONG', 'SHORT') "
+                "AND entry IS NOT NULL AND entry > 0 AND executed_at IS NOT NULL "
+                "AND substr(executed_at, 1, 10) BETWEEN :s AND :e"
+            ),
+            {"s": start_date, "e": end_date},
+        ).all()
+    index: dict[tuple, set[tuple[float, str]]] = {}
+    for strategy, symbol, direction, mode, day, entry, executed_at in rows:
+        index.setdefault((strategy, symbol, direction, mode, day), set()).add(
+            (float(entry), str(executed_at))
+        )
+    return index
+
+
+def _match_entry_time(trade: dict, index: dict) -> str | None:
+    key = (
+        trade["strategy"],
+        trade["symbol"],
+        trade["direction"],
+        trade["mode"],
+        trade["trade_date"],
+    )
+    entry_price = float(trade["entry_price"])
+    near = {
+        e
+        for e in index.get(key, set())
+        if entry_price > 0 and abs(e[0] - entry_price) / entry_price <= _PRICE_MATCH_TOLERANCE
+    }
+    return next(iter(near))[1] if len(near) == 1 else None
+
+
+def _to_epoch(naive_ist: str) -> int:
+    parsed = datetime.fromisoformat(naive_ist.replace(" ", "T")[:19])
+    return int(parsed.replace(tzinfo=_IST).timestamp())
+
+
+def _default_bar_reader(symbol: str, exchange: str, start_ts: int, end_ts: int):
+    from database.historify_db import get_ohlcv
+
+    return get_ohlcv(symbol, exchange, "1m", start_ts, end_ts)
+
+
+# A closed session's excursions never change, and the single-session view polls.
+_EXCURSION_CACHE = LockedTTLCache(maxsize=5000, ttl=6 * 3600)
+
+
+def _trade_excursion(trade: dict, executed_at: str, bar_reader) -> tuple[float, float] | None:
+    entry_ts = _to_epoch(executed_at) // 60 * 60  # the entry minute's bar overlaps the entry
+    exit_ts = _to_epoch(trade["closed_at"])
+    if exit_ts < entry_ts:
+        return None
+    bars = bar_reader(trade["symbol"], trade["exchange"], entry_ts, exit_ts)
+    if bars is None or len(bars) == 0:
+        return None
+    high, low = float(bars["high"].max()), float(bars["low"].min())
+    entry_price, qty = float(trade["entry_price"]), float(trade["closed_quantity"])
+    if trade.get("direction") == "SHORT":
+        mfe, mae = entry_price - low, high - entry_price
+    else:
+        mfe, mae = high - entry_price, entry_price - low
+    return round(max(mfe, 0.0) * qty, 2), round(max(mae, 0.0) * qty, 2)
+
+
+def add_excursions(
+    trades: list[dict],
+    start_date: str,
+    end_date: str,
+    db_path: Path | None = None,
+    bar_reader=None,
+) -> tuple[list[dict], int, int]:
+    """Copies of `trades` with `mfe` and `mae` in rupees (times closed quantity).
+
+    Upper bound, not exact: the path is every 1-minute Historify bar overlapping
+    [entry time, closed_at], where entry time is the trade's own opened_at, or the
+    signal executed_at when opened_at is missing, and full-bar highs and lows are used, so
+    ticks before the real fill or after the real exit within the edge bars are
+    included. LONG: mfe = max high - entry, mae = entry - min low; SHORT mirrored;
+    both floored at 0. A trade with no unique signal match, no bars or any error
+    gets None for both. Never raises; one exception is logged per call.
+    Returns (trades, covered, total).
+    """
+    reader = bar_reader or _default_bar_reader
+    # Only the real reader is cached: an injected one (tests) must see every call.
+    cache = _EXCURSION_CACHE if bar_reader is None else None
+    today = date.today().isoformat()
+    try:
+        index = _load_signal_entries(start_date, end_date, db_path)
+    except Exception:
+        logger.exception("Could not read signal entry times for excursions")
+        index = {}
+    out, covered, logged = [], 0, False
+    for trade in trades:
+        mfe = mae = None
+        try:
+            # The trade's own entry time wins; the signal-db match is the fallback.
+            executed_at = trade.get("opened_at") or (
+                _match_entry_time(trade, index) if index else None
+            )
+            if executed_at and trade.get("closed_at"):
+                key = (
+                    trade["symbol"],
+                    trade["exchange"],
+                    trade.get("direction"),
+                    executed_at,
+                    str(trade["closed_at"]),
+                    float(trade["entry_price"]),
+                    float(trade["closed_quantity"]),
+                )
+                result = cache.get(key) if cache is not None else None
+                if result is None:
+                    result = _trade_excursion(trade, executed_at, reader)
+                    # A past session's bars are final; today's may still be arriving.
+                    if result is not None and cache is not None and trade["trade_date"] < today:
+                        cache[key] = result
+                if result is not None:
+                    mfe, mae = result
+                    covered += 1
+        except Exception:
+            if not logged:
+                logger.exception("Could not compute trade excursion")
+                logged = True
+        out.append({**trade, "mfe": mfe, "mae": mae})
+    return out, covered, len(out)
+
+
+def with_export_fields(trades: list[dict]) -> list[dict]:
+    """Copies of enriched `trades` with the derived CSV columns added: `net_pnl`
+    (realized - cost, None when cost unknown), `return_pct` (realized over entry
+    notional, 4 dp), `sl_price`, `entry_hour` (IST) and `weekday`. The timestamps
+    become ISO 8601 with an explicit +05:30 offset."""
+    out = []
+    for t in trades:
+        pnl = float(t["realized_pnl"])
+        cost = t.get("cost")
+        notional = float(t["entry_price"]) * float(t["closed_quantity"])
+        opened, closed = _parse_naive(t.get("opened_at")), _parse_naive(t.get("closed_at"))
+        day = _parse_naive(t.get("trade_date"))
+        out.append(
+            {
+                **t,
+                "opened_at": opened.isoformat() + "+05:30" if opened else None,
+                "closed_at": closed.isoformat() + "+05:30" if closed else None,
+                "net_pnl": round(pnl - float(cost), 2) if cost is not None else None,
+                "return_pct": round(pnl / notional * 100.0, 4) if notional > 0 else None,
+                "sl_price": round(float(t["signal_sl"]), 4)
+                if t.get("signal_sl") is not None
+                else None,
+                "entry_hour": opened.hour if opened else None,
+                "weekday": _WEEKDAYS[day.weekday()] if day else None,
+            }
+        )
+    return out

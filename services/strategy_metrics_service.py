@@ -41,6 +41,9 @@ TRADING_DAYS_PER_YEAR = 252
 # just never as a default or in an aggregate/comparison view.
 LEDGER_RELIABLE_SINCE = date(2026, 9, 25)
 
+# Rolling windows, in calendar days including today.
+FIXED_WINDOW_DAYS = {"7d": 7, "15d": 15, "30d": 30, "90d": 90}
+
 
 def _daily_pnl_series(closed_trades: list[dict], start_date: str, end_date: str) -> pd.Series:
     """One realized-PnL total per calendar day across [start_date, end_date],
@@ -92,36 +95,168 @@ def _finite(value: float) -> float | None:
     return round(value, 2)
 
 
+def last_session_date(closed_trades: list[dict], today: date) -> date | None:
+    """Most recent trade_date with a closed trade, on or before today and inside
+    the reliable ledger window; None when there is none."""
+    floor, ceiling = LEDGER_RELIABLE_SINCE.isoformat(), today.isoformat()
+    dates = [t["trade_date"] for t in closed_trades if floor <= t["trade_date"] <= ceiling]
+    return date.fromisoformat(max(dates)) if dates else None
+
+
+def _last_session(closed_trades: list[dict], today: date) -> date:
+    """Most recent trade_date with a closed trade, on or before today and
+    inside the reliable ledger window; today when there is none."""
+    floor, ceiling = LEDGER_RELIABLE_SINCE.isoformat(), today.isoformat()
+    dates = [t["trade_date"] for t in closed_trades if floor <= t["trade_date"] <= ceiling]
+    return date.fromisoformat(max(dates)) if dates else today
+
+
+def _parse_iso_date(value: str | None, name: str) -> date:
+    if not value:
+        raise ValueError(f"Choose a {name} date for the custom range.")
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"The {name} date must be YYYY-MM-DD.") from exc
+
+
+def _custom_range(start: str | None, end: str | None, today: date) -> tuple[date, date]:
+    start_d = _parse_iso_date(start, "start")
+    end_d = _parse_iso_date(end, "end")
+    if start_d > end_d:
+        raise ValueError("The start date must be on or before the end date.")
+    if start_d > today:
+        raise ValueError("The custom range starts in the future.")
+    return start_d, min(end_d, today)
+
+
 def resolve_period(
-    period: str, closed_trades: list[dict], today: date | None = None
+    period: str,
+    closed_trades: list[dict],
+    today: date | None = None,
+    start: str | None = None,
+    end: str | None = None,
 ) -> tuple[str, str]:
-    """Maps a period keyword ("1d"/"7d"/"30d"/"90d"/"ytd"/"all") to an ISO
-    [start_date, end_date] range.
+    """Maps a period keyword ("1d"/"7d"/"15d"/"30d"/"90d"/"ytd"/"all"/"custom")
+    to an ISO [start_date, end_date] range.
+
+    "1d" is the last traded session, not the calendar day: on a weekend or a
+    holiday it is the most recent day with a closed trade.
 
     "all" is bounded by the earliest closed trade, not a fixed lookback -
     forward-only tracking (see docs/strategy-daily-performance.md point 2)
     means there is nothing to show before this feature's own deploy date.
+
+    "custom" takes `start`/`end` (YYYY-MM-DD) and raises ValueError when they
+    are missing, malformed, reversed or wholly in the future.
     """
     today = today or datetime.now().date()
+    end_d = today
     if period == "1d":
-        start = today
-    elif period == "7d":
-        start = today - timedelta(days=6)
-    elif period == "90d":
-        start = today - timedelta(days=89)
+        start_d = end_d = _last_session(closed_trades, today)
+    elif period == "custom":
+        start_d, end_d = _custom_range(start, end, today)
     elif period == "ytd":
-        start = today.replace(month=1, day=1)
+        start_d = today.replace(month=1, day=1)
     elif period == "all":
         if closed_trades:
-            start = min(
-                datetime.strptime(t["trade_date"], "%Y-%m-%d").date() for t in closed_trades
-            )
+            start_d = min(date.fromisoformat(t["trade_date"]) for t in closed_trades)
         else:
-            start = today
-    else:  # default: 30d
-        start = today - timedelta(days=29)
-    start = max(start, LEDGER_RELIABLE_SINCE)
-    return start.isoformat(), today.isoformat()
+            start_d = today
+    else:
+        days = FIXED_WINDOW_DAYS.get(period, FIXED_WINDOW_DAYS["30d"])
+        start_d = today - timedelta(days=days - 1)
+    start_d = max(start_d, LEDGER_RELIABLE_SINCE)
+    # A custom range wholly before the reliable ledger collapses to its floor.
+    end_d = max(end_d, start_d)
+    return start_d.isoformat(), end_d.isoformat()
+
+
+EDGE_MIN_TRADES = 30
+EDGE_T_THRESHOLD = 2.0
+EDGE_Z_95 = 1.96
+# Trades on one day share that day's market, so they are not independent; the
+# day-level check treats each trading day as one observation.
+EDGE_MIN_DAYS = 10
+
+
+def _t(values: np.ndarray) -> float | None:
+    if len(values) < 2:
+        return None
+    std = float(values.std(ddof=1))
+    return None if std == 0 else float(values.mean()) / (std / float(np.sqrt(len(values))))
+
+
+def edge_stats(
+    net_pnls: list[float],
+    costed: int | None = None,
+    trade_dates: list[str] | None = None,
+) -> dict:
+    """Is the per-trade average distinguishable from luck? Inputs are per-trade
+    NET P&L values (realized minus estimated charges; an unknown cost counts as
+    0 and `costed` reports how many trades had a known cost).
+
+    t_stat = mean / (sample std / sqrt(n)); None for n < 2 or zero spread.
+    expectancy_ci95 = mean +/- 1.96 standard errors; None for n < 2.
+    Verdict: fewer than 30 trades is "too few trades"; else t >= 2 is
+    "likely real", t <= -2 "likely negative", otherwise "not distinguishable
+    from zero". A normal-approximation screen, not a proof.
+
+    With `trade_dates` (one per trade) the per-trade t is also checked at the
+    day level: net P&L summed per trading day, t over those days
+    (`day_t_stat`, `edge_days`). A verdict then needs at least EDGE_MIN_DAYS
+    trading days and both t-stats past the threshold in the same direction;
+    same-day trades are correlated, so the per-trade t alone overstates it.
+    """
+    n = len(net_pnls)
+    base = {
+        "edge_trades": n,
+        "edge_cost_coverage": costed if costed is not None else n,
+        "net_expectancy": None,
+        "net_pnl_std": None,
+        "t_stat": None,
+        "expectancy_ci95": None,
+        "edge_verdict": "too few trades",
+        "edge_days": None,
+        "day_t_stat": None,
+    }
+    if n == 0:
+        return base
+    arr = np.asarray(net_pnls, dtype=float)
+    mean = float(arr.mean())
+    base["net_expectancy"] = round(mean, 2)
+    if n < 2:
+        return base
+    std = float(arr.std(ddof=1))
+    base["net_pnl_std"] = round(std, 2)
+    stderr = std / float(np.sqrt(n))
+    base["expectancy_ci95"] = [
+        round(mean - EDGE_Z_95 * stderr, 2),
+        round(mean + EDGE_Z_95 * stderr, 2),
+    ]
+    if std == 0:
+        return base
+    t_stat = mean / stderr
+    base["t_stat"] = round(t_stat, 2)
+    t_values = [t_stat]
+    enough = n >= EDGE_MIN_TRADES
+    if trade_dates is not None:
+        by_day = pd.Series(arr).groupby(pd.Series(list(trade_dates))).sum().to_numpy()
+        day_t = _t(by_day)
+        base["edge_days"] = len(by_day)
+        base["day_t_stat"] = None if day_t is None else round(day_t, 2)
+        t_values.append(day_t if day_t is not None else 0.0)
+        if enough and len(by_day) < EDGE_MIN_DAYS:
+            base["edge_verdict"] = "too few days"
+            return base
+    if enough:
+        if min(t_values) >= EDGE_T_THRESHOLD:
+            base["edge_verdict"] = "likely real"
+        elif max(t_values) <= -EDGE_T_THRESHOLD:
+            base["edge_verdict"] = "likely negative"
+        else:
+            base["edge_verdict"] = "not distinguishable from zero"
+    return base
 
 
 def compute_metrics(closed_trades: list[dict], start_date: str, end_date: str) -> dict:
@@ -140,12 +275,12 @@ def compute_metrics(closed_trades: list[dict], start_date: str, end_date: str) -
     avg_win = (gross_profit / len(wins)) if wins else 0.0
     avg_loss = (gross_loss / len(losses)) if losses else 0.0
     profit_factor = (
-        (gross_profit / gross_loss) if gross_loss > 0 else (float("inf") if gross_profit > 0 else 0.0)
+        (gross_profit / gross_loss)
+        if gross_loss > 0
+        else (float("inf") if gross_profit > 0 else 0.0)
     )
     expectancy = win_rate * avg_win - (1 - win_rate) * avg_loss
-    payoff_ratio = (
-        (avg_win / avg_loss) if avg_loss > 0 else (float("inf") if avg_win > 0 else 0.0)
-    )
+    payoff_ratio = (avg_win / avg_loss) if avg_loss > 0 else (float("inf") if avg_win > 0 else 0.0)
 
     daily_std = float(daily_pnl.std(ddof=0))
     daily_mean = float(daily_pnl.mean()) if len(daily_pnl) else 0.0
@@ -165,7 +300,9 @@ def compute_metrics(closed_trades: list[dict], start_date: str, end_date: str) -
 
     annualized_pnl = daily_mean * TRADING_DAYS_PER_YEAR
     calmar = (
-        (annualized_pnl / abs(max_dd)) if max_dd < 0 else (float("inf") if annualized_pnl > 0 else 0.0)
+        (annualized_pnl / abs(max_dd))
+        if max_dd < 0
+        else (float("inf") if annualized_pnl > 0 else 0.0)
     )
 
     best_win_streak, best_loss_streak = _consecutive_streaks(daily_pnl)
@@ -198,7 +335,8 @@ def compute_metrics(closed_trades: list[dict], start_date: str, end_date: str) -
         "trading_days": int((daily_pnl != 0).sum()),
         "calendar_days": len(daily_pnl),
         "daily_pnl": [
-            {"date": d.strftime("%Y-%m-%d"), "pnl": round(float(v), 2)} for d, v in daily_pnl.items()
+            {"date": d.strftime("%Y-%m-%d"), "pnl": round(float(v), 2)}
+            for d, v in daily_pnl.items()
         ],
         "equity_curve": [
             {"date": d.strftime("%Y-%m-%d"), "value": round(float(v), 2)} for d, v in equity.items()

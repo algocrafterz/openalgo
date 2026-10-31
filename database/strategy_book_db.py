@@ -165,6 +165,11 @@ class StrategyPosition(Base):
     realized_pnl = Column(Float, nullable=False, default=0.0)
     today_realized_pnl = Column(Float, nullable=False, default=0.0)
     trade_date = Column(String(10), nullable=True)
+    # When the current open position was entered: set when the quantity goes from flat
+    # to non-zero, or when a fill flips through zero. Adding to, or reducing, the
+    # position keeps it. Nullable: legs that predate the column, or live legs with no
+    # local fill record, stay NULL. See upgrade/migrate_strategy_opened_at.py.
+    opened_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
 
 
@@ -216,6 +221,9 @@ class StrategyClosedTrade(Base):
     # computed and reported per broker (see portfolio/broker_fees.py). Nullable for rows that
     # predate the column; read back as "unknown".
     broker = Column(String(40), nullable=True)
+    # The leg's opened_at as it was BEFORE this closing fill (partial exits and the
+    # closed part of a flip included). Nullable for rows that predate the column.
+    opened_at = Column(DateTime, nullable=True)
 
 
 def init_strategy_book_db() -> None:
@@ -298,6 +306,22 @@ def _add_broker_columns(inspector) -> None:
         logger.info(f"Strategy book DB: added {table}.broker column")
 
 
+def _add_opened_at_columns(inspector) -> None:
+    """Nullable `opened_at` on the position book and the closed-trade ledger. Plain ADD
+    COLUMN, so it is safe as a startup self-heal; upgrade/migrate_strategy_opened_at.py
+    also backfills."""
+    from sqlalchemy import text
+
+    for table in ("strategy_positions", "strategy_closed_trades"):
+        if table not in inspector.get_table_names():
+            continue
+        if "opened_at" in {c["name"] for c in inspector.get_columns(table)}:
+            continue
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN opened_at DATETIME"))
+        logger.info(f"Strategy book DB: added {table}.opened_at column")
+
+
 def _migrate_add_columns():
     """Add columns introduced after the table's first release (idempotent).
 
@@ -310,6 +334,7 @@ def _migrate_add_columns():
 
         inspector = inspect(engine)
         _add_broker_columns(inspector)
+        _add_opened_at_columns(inspector)
         if "strategy_order_tags" not in inspector.get_table_names():
             return
         existing = {c["name"] for c in inspector.get_columns("strategy_order_tags")}
@@ -592,6 +617,7 @@ def apply_fill(
     filled_quantity: float,
     average_price: float,
     action: str,
+    filled_at: datetime | None = None,
 ) -> dict | None:
     """Book the unseen portion of a fill against its strategy's position.
 
@@ -614,7 +640,7 @@ def apply_fill(
     with _fill_lock:
         db_session.expire_all()
         try:
-            return _apply_fill_locked(orderid, filled_quantity, average_price, action)
+            return _apply_fill_locked(orderid, filled_quantity, average_price, action, filled_at)
         finally:
             db_session.remove()
 
@@ -624,6 +650,7 @@ def _apply_fill_locked(
     filled_quantity: float,
     average_price: float,
     action: str,
+    filled_at: datetime | None = None,
 ) -> dict | None:
     tag = get_order_tag(orderid)
     if tag is None:
@@ -646,6 +673,8 @@ def _apply_fill_locked(
     price = incremental_notional / delta if delta else float(average_price or 0)
     signed = delta if str(action).upper() == "BUY" else -delta
     today = _session_date()
+    # The fill's own timestamp when the caller has one, else the same clock closed_at uses.
+    fill_time = filled_at or datetime.now()
 
     tag_mode = tag.mode or "unknown"
 
@@ -685,10 +714,13 @@ def _apply_fill_locked(
             total = abs(qty) + abs(signed)
             leg.average_price = ((avg * abs(qty)) + (price * abs(signed))) / total
             leg.quantity = qty + signed
+            if abs(qty) < 1e-9:
+                leg.opened_at = fill_time
         else:
             closing = min(abs(signed), abs(qty))
             direction = 1.0 if qty > 0 else -1.0
             realized = closing * (price - avg) * direction
+            prior_opened_at = leg.opened_at
             leg.realized_pnl = float(leg.realized_pnl or 0) + realized
             leg.today_realized_pnl = float(leg.today_realized_pnl or 0) + realized
             db_session.add(
@@ -706,6 +738,10 @@ def _apply_fill_locked(
                     exit_price=round(price, 4),
                     realized_pnl=round(realized, 4),
                     trade_date=today,
+                    # Same clock as opened_at, so a replayed fill's hold time is not
+                    # stretched to the moment the reconciler recovered it.
+                    closed_at=fill_time,
+                    opened_at=prior_opened_at,
                 )
             )
             remaining = abs(signed) - closing
@@ -715,6 +751,7 @@ def _apply_fill_locked(
                 leg.average_price = 0.0
             elif remaining > 0:
                 leg.average_price = price
+                leg.opened_at = fill_time
 
         tag.applied_quantity = filled_quantity
         tag.applied_notional = cumulative_notional
@@ -903,6 +940,7 @@ def close_all_legs_for_position(
                         exit_price=round(float(exit_price), 4),
                         realized_pnl=round(realized, 4),
                         trade_date=leg.trade_date or today,
+                        opened_at=leg.opened_at,
                     )
                 )
                 leg.quantity = 0.0
@@ -1009,6 +1047,7 @@ def get_closed_trades(
                 "realized_pnl": float(r.realized_pnl or 0),
                 "trade_date": r.trade_date,
                 "closed_at": r.closed_at.isoformat() if r.closed_at else None,
+                "opened_at": r.opened_at.isoformat() if r.opened_at else None,
             }
             for r in query.all()
         ]

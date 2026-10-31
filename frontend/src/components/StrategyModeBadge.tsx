@@ -24,7 +24,7 @@ export function StrategyModeBadge({ mode }: { mode?: 'live' | 'analyze' }) {
           : 'Paper trading in the sandbox. Figures below are Analyze-mode trades only.'
       }
     >
-      {isLive ? 'LIVE (real money)' : 'ANALYZE (paper)'}
+      {isLive ? 'LIVE (real money)' : 'ANALYZE (Sandbox)'}
     </Badge>
   )
 }

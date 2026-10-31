@@ -5,25 +5,35 @@ import {
   createChart,
   type IChartApi,
   type ISeriesApi,
+  LineSeries,
+  LineStyle,
   type UTCTimestamp,
 } from 'lightweight-charts'
-import { AlertTriangle, Gauge, Loader2, RefreshCw } from 'lucide-react'
+import { AlertTriangle, Download, Gauge, Loader2, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router'
 import {
   type BrokerCharges,
   type DailyPnlPoint,
+  type DateRange,
   type EquityPoint,
   type PerformancePeriod,
-  type PerformanceTrade,
-  type StrategyDailyPerformance as StrategyDailyPerformanceData,
   type SymbolPnl,
   strategyPnlApi,
 } from '@/api/strategyPnl'
 import { DataHealthBanner } from '@/components/DataHealthBanner'
 import { StrategyModeBadge } from '@/components/StrategyModeBadge'
+import { CloseBreakdowns } from '@/components/strategy-pnl/CloseBreakdowns'
+import { EdgeCheckCard } from '@/components/strategy-pnl/EdgeCheckCard'
+import { HoldBuckets } from '@/components/strategy-pnl/HoldBuckets'
+import { HoldStatsRow } from '@/components/strategy-pnl/HoldStats'
+import { MetricCard } from '@/components/strategy-pnl/MetricCard'
+import { SessionSummary } from '@/components/strategy-pnl/SessionSummary'
+import { SessionTrades } from '@/components/strategy-pnl/SessionTrades'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
+import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -40,46 +50,48 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
+import {
+  chargesHint,
+  edgeShortLabel,
+  fmtDate,
+  fmtDuration,
+  fmtR,
+  pnlClass,
+  rCoverage,
+  slippageHint,
+  todayIst,
+} from '@/lib/strategyPnlView'
 import { cn, makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange, useThemeStore } from '@/stores/themeStore'
+import { showToast } from '@/utils/toast'
 
 const PERIODS: { value: PerformancePeriod; label: string }[] = [
   { value: '1d', label: '1D' },
   { value: '7d', label: '7D' },
+  { value: '15d', label: '15D' },
   { value: '30d', label: '30D' },
   { value: '90d', label: '90D' },
   { value: 'ytd', label: 'YTD' },
   { value: 'all', label: 'All' },
+  { value: 'custom', label: 'Custom' },
 ]
+
+const PERIOD_VALUES = new Set<string>(PERIODS.map((p) => p.value))
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+
+/** "30 Oct 2026" or "05 Oct 2026 - 20 Oct 2026" for the range the server resolved. */
+function rangeLabel(start: string | undefined, end: string | undefined): string {
+  if (!start || !end) return ''
+  return start === end ? fmtDate(start) : `${fmtDate(start)} - ${fmtDate(end)}`
+}
+
+function validRange(range: DateRange): boolean {
+  return ISO_DATE.test(range.start) && ISO_DATE.test(range.end) && range.start <= range.end
+}
 
 const PORTFOLIO_VALUE = '__portfolio__'
 const POLL_MS = 60_000
-
-/** "charges Rs X (Y% of gross profit)" - how much of the profit the charges take. */
-function chargesHint(
-  d: {
-    est_costs?: number | null
-    charges_pct_of_gross?: number | null
-    fee_basis_assumed?: boolean
-  },
-  format: (value: number) => string
-): string | undefined {
-  if (d.est_costs == null) return undefined
-  const amount = format(d.est_costs)
-  const note = d.fee_basis_assumed ? ' [assumed broker rates]' : ''
-  if (d.charges_pct_of_gross == null) return `charges ${amount} (no gross profit)${note}`
-  return `charges ${amount} = ${d.charges_pct_of_gross.toFixed(1)}% of gross profit${note}`
-}
-
-/** "measured from N of M trades" - slippage is already in the P&L, so it is information only. */
-function slippageHint(d: {
-  slippage_covered?: number
-  slippage_total?: number
-}): string | undefined {
-  if (!d.slippage_total) return undefined
-  return `already in P&L, measured on ${d.slippage_covered ?? 0} of ${d.slippage_total} trades`
-}
 
 /** Colour for a charges-to-profit share: half the profit is a warning, all of it a loss. */
 function chargesDragClass(pct: number | null | undefined): string {
@@ -92,86 +104,6 @@ function chargesDragClass(pct: number | null | undefined): string {
 function fmtRatio(value: number | null | undefined): string {
   if (value === null || value === undefined) return '—'
   return value.toFixed(2)
-}
-
-function fmtR(value: number | null | undefined): string {
-  if (value === null || value === undefined) return '—'
-  return `${value > 0 ? '+' : ''}${value.toFixed(2)}R`
-}
-
-function rCoverage(d: StrategyDailyPerformanceData): string | undefined {
-  if (!d.r_total) return undefined
-  return d.r_covered === d.r_total ? `${d.r_total} trades` : `${d.r_covered} of ${d.r_total} trades`
-}
-
-function pnlClass(value: number): string {
-  return value > 0 ? 'text-green-600' : value < 0 ? 'text-red-600' : ''
-}
-
-function fmtTime(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime())
-    ? '—'
-    : d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })
-}
-
-function TodayTrades({
-  trades,
-  formatCurrency,
-}: {
-  trades: PerformanceTrade[]
-  formatCurrency: (value: number) => string
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Today's Closed Trades</CardTitle>
-      </CardHeader>
-      <CardContent className="py-0">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Time</TableHead>
-              <TableHead>Strategy</TableHead>
-              <TableHead>Symbol</TableHead>
-              <TableHead>Side</TableHead>
-              <TableHead className="text-right">Qty</TableHead>
-              <TableHead className="text-right">Entry</TableHead>
-              <TableHead className="text-right">Exit</TableHead>
-              <TableHead className="text-right">P&amp;L</TableHead>
-              <TableHead className="text-right">R</TableHead>
-              <TableHead>Broker</TableHead>
-              <TableHead className="text-right">Est. Charges</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {trades.map((t, i) => (
-              <TableRow key={`${t.closed_at}-${t.symbol}-${t.strategy}-${i}`}>
-                <TableCell className="font-mono">{fmtTime(t.closed_at)}</TableCell>
-                <TableCell>{t.strategy}</TableCell>
-                <TableCell className="font-medium">{t.symbol}</TableCell>
-                <TableCell>{t.direction}</TableCell>
-                <TableCell className="text-right font-mono">{t.closed_quantity}</TableCell>
-                <TableCell className="text-right font-mono">{t.entry_price.toFixed(2)}</TableCell>
-                <TableCell className="text-right font-mono">{t.exit_price.toFixed(2)}</TableCell>
-                <TableCell className={cn('text-right font-mono', pnlClass(t.realized_pnl))}>
-                  {formatCurrency(t.realized_pnl)}
-                </TableCell>
-                <TableCell className={cn('text-right font-mono', pnlClass(t.r_multiple ?? 0))}>
-                  {fmtR(t.r_multiple)}
-                </TableCell>
-                <TableCell className="text-muted-foreground">{t.broker ?? '—'}</TableCell>
-                <TableCell className="text-right font-mono text-muted-foreground">
-                  {t.cost === null ? '—' : formatCurrency(t.cost)}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
-  )
 }
 
 function SymbolTable({
@@ -290,44 +222,14 @@ function BrokerChargesCard({
   )
 }
 
-function MetricCard({
-  label,
-  value,
-  positive,
-  negative,
-  hint,
-}: {
-  label: string
-  value: string
-  positive?: boolean
-  negative?: boolean
-  hint?: string
-}) {
-  return (
-    <Card>
-      <CardContent className="py-4">
-        <div className="text-xs text-muted-foreground">{label}</div>
-        <div
-          className={cn(
-            'text-xl font-bold font-mono mt-1',
-            positive && 'text-green-600',
-            negative && 'text-red-600'
-          )}
-        >
-          {value}
-        </div>
-        {hint && <div className="text-[11px] text-muted-foreground mt-0.5">{hint}</div>}
-      </CardContent>
-    </Card>
-  )
-}
-
 function CalendarHeatmap({
   dailyPnl,
   formatCurrency,
+  onSelectDay,
 }: {
   dailyPnl: DailyPnlPoint[]
   formatCurrency: (v: number) => string
+  onSelectDay: (day: string) => void
 }) {
   const { grid, maxAbs } = useMemo(() => {
     if (dailyPnl.length === 0) return { grid: [] as (DailyPnlPoint | null)[][], maxAbs: 1 }
@@ -365,11 +267,14 @@ function CalendarHeatmap({
                   ? `rgba(239, 68, 68, ${0.15 + intensity * 0.65})`
                   : 'rgba(148, 163, 184, 0.2)'
             return (
-              <div
+              <button
+                type="button"
                 key={day.date}
                 title={`${day.date}: ${formatCurrency(day.pnl)}`}
-                className="h-3.5 w-3.5 rounded-sm"
+                aria-label={`Open ${day.date}, P&L ${formatCurrency(day.pnl)}`}
+                className="h-3.5 w-3.5 rounded-sm p-0 border-0 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
                 style={{ backgroundColor: bg }}
+                onClick={() => onSelectDay(day.date)}
               />
             )
           })}
@@ -379,12 +284,16 @@ function CalendarHeatmap({
   )
 }
 
+const NET_LINE_COLOR = '#6366f1'
+
 function EquityDrawdownChart({
   equityCurve,
+  equityCurveNet,
   isDarkMode,
   formatCurrency,
 }: {
   equityCurve: EquityPoint[]
+  equityCurveNet: EquityPoint[]
   isDarkMode: boolean
   formatCurrency: (v: number) => string
 }) {
@@ -392,6 +301,10 @@ function EquityDrawdownChart({
   const chartRef = useRef<IChartApi | null>(null)
   const equitySeriesRef = useRef<ISeriesApi<'Baseline'> | null>(null)
   const drawdownSeriesRef = useRef<ISeriesApi<'Baseline'> | null>(null)
+  const netSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
+  // Bumped each time the chart is rebuilt (theme or currency change), so the
+  // data effect below reloads the new, empty series.
+  const [chartVersion, setChartVersion] = useState(0)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -445,6 +358,20 @@ function EquityDrawdownChart({
       0
     )
 
+    const netSeries = chart.addSeries(
+      LineSeries,
+      {
+        color: NET_LINE_COLOR,
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        priceScaleId: 'right',
+        lastValueVisible: false,
+        priceLineVisible: false,
+        priceFormat: { type: 'custom', formatter: (p: number) => formatCurrency(p) },
+      },
+      0
+    )
+
     const drawdownSeries = chart.addSeries(
       BaselineSeries,
       {
@@ -471,6 +398,8 @@ function EquityDrawdownChart({
     chartRef.current = chart
     equitySeriesRef.current = equitySeries
     drawdownSeriesRef.current = drawdownSeries
+    netSeriesRef.current = netSeries
+    setChartVersion((v) => v + 1)
 
     const handleResize = () => {
       chart.applyOptions({ width: container.offsetWidth })
@@ -485,7 +414,7 @@ function EquityDrawdownChart({
   }, [isDarkMode, formatCurrency])
 
   useEffect(() => {
-    if (!equitySeriesRef.current || !drawdownSeriesRef.current) return
+    if (chartVersion === 0 || !equitySeriesRef.current || !drawdownSeriesRef.current) return
     const toTime = (d: string) =>
       Math.floor(new Date(`${d}T00:00:00Z`).getTime() / 1000) as UTCTimestamp
 
@@ -499,11 +428,38 @@ function EquityDrawdownChart({
     if (equityData.length > 0) {
       equitySeriesRef.current.setData(equityData)
       drawdownSeriesRef.current.setData(drawdownData)
+      netSeriesRef.current?.setData(
+        equityCurveNet.map((p) => ({ time: toTime(p.date), value: p.value }))
+      )
       chartRef.current?.timeScale().fitContent()
     }
-  }, [equityCurve])
+  }, [equityCurve, equityCurveNet, chartVersion])
 
   return <div ref={containerRef} className="relative" style={{ height: '400px' }} />
+}
+
+function EquityLegend({ coverage }: { coverage: { covered: number; total: number } | undefined }) {
+  const partial = !!coverage && coverage.covered < coverage.total
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-muted-foreground">
+      <span className="flex items-center gap-1">
+        <span className="inline-block h-0.5 w-4 bg-green-500" />
+        Equity
+      </span>
+      <span className="flex items-center gap-1">
+        <span
+          className="inline-block w-4 border-t-2 border-dashed"
+          style={{ borderColor: NET_LINE_COLOR }}
+        />
+        After est. charges
+      </span>
+      {partial && (
+        <span>
+          charges estimated for {coverage.covered} of {coverage.total} trades
+        </span>
+      )}
+    </div>
+  )
 }
 
 export default function StrategyDailyPerformance() {
@@ -513,23 +469,104 @@ export default function StrategyDailyPerformance() {
   const isDarkMode = themeMode === 'dark'
   const queryClient = useQueryClient()
 
-  const [period, setPeriod] = useState<PerformancePeriod>('7d')
-  const [selectedStrategy, setSelectedStrategy] = useState<string>(PORTFOLIO_VALUE)
+  // Period, range and strategy live in the URL, so a refresh or a shared link
+  // reopens the same view.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const rawPeriod = searchParams.get('period') ?? '7d'
+  const period = (PERIOD_VALUES.has(rawPeriod) ? rawPeriod : '7d') as PerformancePeriod
+  const selectedStrategy = searchParams.get('strategy') || PORTFOLIO_VALUE
   const strategyParam = selectedStrategy === PORTFOLIO_VALUE ? null : selectedStrategy
+  const appliedRange = useMemo<DateRange>(
+    () => ({ start: searchParams.get('start') ?? '', end: searchParams.get('end') ?? '' }),
+    [searchParams]
+  )
+  const [draftRange, setDraftRange] = useState<DateRange>(appliedRange)
+  // Back/forward navigation changes the URL range; keep the pickers in step.
+  useEffect(() => setDraftRange(appliedRange), [appliedRange])
+  const isCustom = period === 'custom'
+  const rangeReady = !isCustom || validRange(appliedRange)
+  const range = isCustom ? appliedRange : undefined
+
+  const updateParams = useCallback(
+    (changes: Record<string, string | null>) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          for (const [key, value] of Object.entries(changes)) {
+            if (value === null) next.delete(key)
+            else next.set(key, value)
+          }
+          return next
+        },
+        { replace: true }
+      )
+    },
+    [setSearchParams]
+  )
+
+  const setPeriod = (value: PerformancePeriod) => {
+    if (value !== 'custom') {
+      updateParams({ period: value, start: null, end: null })
+      return
+    }
+    // Seed the picker with the last 7 days so Custom shows data at once.
+    const end = todayIst()
+    const start = new Date(`${end}T00:00:00`)
+    start.setDate(start.getDate() - 6)
+    const seeded = appliedRange.start
+      ? appliedRange
+      : { start: new Intl.DateTimeFormat('en-CA').format(start), end }
+    setDraftRange(seeded)
+    updateParams({ period: value, start: seeded.start, end: seeded.end })
+  }
+
+  const openDay = (day: string) => {
+    setDraftRange({ start: day, end: day })
+    updateParams({ period: 'custom', start: day, end: day })
+  }
+
+  const [exporting, setExporting] = useState(false)
+  const exportCsv = async () => {
+    setExporting(true)
+    try {
+      const { blob, filename } = await strategyPnlApi.exportTrades(strategyParam, period, range)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      showToast.error(error instanceof Error ? error.message : 'Could not export the trades.')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const setSelectedStrategy = (value: string) =>
+    updateParams({ strategy: value === PORTFOLIO_VALUE ? null : value })
+
+  const applyDraftRange = () => {
+    if (validRange(draftRange)) updateParams({ start: draftRange.start, end: draftRange.end })
+  }
 
   // Closed trades are only pushed on fill events, so a missed event (socket
   // down, app restarted) would leave the page stale until reload. A slow poll
   // also picks up fills the server-side reconcile recovers from the broker.
   // TanStack Query pauses this while the tab is hidden.
   const compareQuery = useQuery({
-    queryKey: ['strategy-daily-compare', period],
-    queryFn: () => strategyPnlApi.compare(period),
+    queryKey: ['strategy-daily-compare', period, range?.start, range?.end],
+    queryFn: () => strategyPnlApi.compare(period, range),
+    enabled: rangeReady,
     refetchInterval: POLL_MS,
   })
 
   const dailyQuery = useQuery({
-    queryKey: ['strategy-daily', strategyParam, period],
-    queryFn: () => strategyPnlApi.daily(strategyParam, period),
+    queryKey: ['strategy-daily', strategyParam, period, range?.start, range?.end],
+    queryFn: () => strategyPnlApi.daily(strategyParam, period, range),
+    enabled: rangeReady,
     refetchInterval: POLL_MS,
   })
 
@@ -546,10 +583,19 @@ export default function StrategyDailyPerformance() {
   }, [refresh])
 
   const strategies = compareQuery.data?.strategies ?? []
+  const strategyNames = useMemo(() => {
+    const names = compareQuery.data?.all_strategies ?? strategies.map((s) => s.strategy)
+    return strategyParam && !names.includes(strategyParam) ? [...names, strategyParam] : names
+  }, [compareQuery.data?.all_strategies, strategies, strategyParam])
   const daily = dailyQuery.data
   const dailyError = daily?.status === 'error' ? daily.message : null
   const isFetching = compareQuery.isFetching || dailyQuery.isFetching
-  const isToday = period === '1d'
+  // One resolved day (1D, or a one-day custom range) shows the trade list
+  // instead of ratios that mean nothing over a single session.
+  const isToday = !!daily?.start_date && daily.start_date === daily.end_date
+  const shownRange = rangeLabel(daily?.start_date, daily?.end_date)
+  const isLastSession = period === '1d' && !!daily?.end_date && daily.end_date !== todayIst()
+  const draftValid = validRange(draftRange)
   const bySymbol = daily?.by_symbol ?? []
 
   return (
@@ -563,20 +609,28 @@ export default function StrategyDailyPerformance() {
           <p className="text-muted-foreground">
             Day-by-day strategy performance with professional trade evaluation metrics - win rate,
             profit factor, expectancy in R, estimated charges, Sharpe/Sortino/Calmar, drawdown and
-            streaks. 1D shows today's trades instead of ratios. Live and Analyze mode are tracked
-            separately.
+            streaks. 1D shows the last traded session's trades instead of ratios. Live and Analyze
+            mode are tracked separately.
           </p>
+          {shownRange && (
+            <p className="text-sm mt-1">
+              Showing <span className="font-medium">{shownRange}</span>
+              {isLastSession && (
+                <span className="text-muted-foreground"> (last traded session)</span>
+              )}
+            </p>
+          )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Select value={selectedStrategy} onValueChange={setSelectedStrategy}>
             <SelectTrigger className="w-[220px]">
               <SelectValue placeholder="Portfolio (all strategies)" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={PORTFOLIO_VALUE}>Portfolio (all strategies)</SelectItem>
-              {strategies.map((s) => (
-                <SelectItem key={s.strategy} value={s.strategy}>
-                  {s.strategy}
+              {strategyNames.map((name) => (
+                <SelectItem key={name} value={name}>
+                  {name}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -593,9 +647,58 @@ export default function StrategyDailyPerformance() {
               ))}
             </SelectContent>
           </Select>
+          {isCustom && (
+            <form
+              className="flex items-center gap-2"
+              onSubmit={(e) => {
+                e.preventDefault()
+                applyDraftRange()
+              }}
+            >
+              <Input
+                type="date"
+                aria-label="Start date"
+                className="w-[150px]"
+                value={draftRange.start}
+                max={draftRange.end || todayIst()}
+                onChange={(e) => setDraftRange((r) => ({ ...r, start: e.target.value }))}
+                aria-invalid={!draftValid}
+              />
+              <span className="text-muted-foreground text-sm">to</span>
+              <Input
+                type="date"
+                aria-label="End date"
+                className="w-[150px]"
+                value={draftRange.end}
+                min={draftRange.start || undefined}
+                max={todayIst()}
+                onChange={(e) => setDraftRange((r) => ({ ...r, end: e.target.value }))}
+                aria-invalid={!draftValid}
+              />
+              <Button
+                type="submit"
+                size="sm"
+                disabled={
+                  !draftValid ||
+                  (draftRange.start === appliedRange.start && draftRange.end === appliedRange.end)
+                }
+              >
+                Apply
+              </Button>
+            </form>
+          )}
           <Button variant="outline" size="sm" onClick={refresh} disabled={isFetching}>
             <RefreshCw className={cn('h-4 w-4 mr-2', isFetching && 'animate-spin')} />
             Refresh
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportCsv}
+            disabled={!rangeReady || exporting}
+          >
+            <Download className={cn('h-4 w-4 mr-2', exporting && 'animate-pulse')} />
+            Export CSV
           </Button>
         </div>
       </div>
@@ -615,7 +718,11 @@ export default function StrategyDailyPerformance() {
         </span>
       </div>
 
-      {dailyQuery.isLoading ? (
+      {!rangeReady ? (
+        <div className="text-center py-12 text-muted-foreground">
+          Choose a start and end date, then press Apply.
+        </div>
+      ) : dailyQuery.isLoading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-8 w-8 animate-spin" />
         </div>
@@ -630,52 +737,7 @@ export default function StrategyDailyPerformance() {
       ) : (
         <>
           {isToday ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-              <MetricCard
-                label="Net P&L (gross)"
-                value={formatCurrency(daily.net_profit ?? 0)}
-                positive={(daily.net_profit ?? 0) > 0}
-                negative={(daily.net_profit ?? 0) < 0}
-              />
-              <MetricCard
-                label="After est. charges"
-                value={daily.net_after_costs == null ? '—' : formatCurrency(daily.net_after_costs)}
-                positive={(daily.net_after_costs ?? 0) > 0}
-                negative={(daily.net_after_costs ?? 0) < 0}
-                hint={chargesHint(daily, formatCurrency)}
-              />
-              <MetricCard
-                label="Entry slippage"
-                value={daily.entry_slippage == null ? '—' : formatCurrency(daily.entry_slippage)}
-                hint={
-                  daily.entry_slippage_bps == null
-                    ? slippageHint(daily)
-                    : `${daily.entry_slippage_bps.toFixed(1)} bps, ${slippageHint(daily)}`
-                }
-              />
-              <MetricCard
-                label="Wins / Losses"
-                value={`${daily.winning_trades ?? 0} / ${daily.losing_trades ?? 0}`}
-                hint={`${daily.trades_count ?? 0} trades, ${(daily.win_rate ?? 0).toFixed(0)}% win`}
-              />
-              <MetricCard
-                label="Total R"
-                value={fmtR(daily.total_r)}
-                positive={(daily.total_r ?? 0) > 0}
-                negative={(daily.total_r ?? 0) < 0}
-                hint={rCoverage(daily)}
-              />
-              <MetricCard
-                label="Avg Win"
-                value={formatCurrency(daily.avg_win ?? 0)}
-                hint="per winning trade"
-              />
-              <MetricCard
-                label="Avg Loss"
-                value={formatCurrency(daily.avg_loss ?? 0)}
-                hint="per losing trade"
-              />
-            </div>
+            <SessionSummary daily={daily} formatCurrency={formatCurrency} />
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
               <MetricCard
@@ -721,6 +783,10 @@ export default function StrategyDailyPerformance() {
             </div>
           )}
 
+          {!isToday && <EdgeCheckCard daily={daily} formatCurrency={formatCurrency} />}
+
+          {daily.hold_stats && <HoldStatsRow stats={daily.hold_stats} />}
+
           <BrokerChargesCard
             rows={daily.by_broker ?? []}
             assumed={daily.fee_basis_assumed ?? false}
@@ -728,7 +794,13 @@ export default function StrategyDailyPerformance() {
           />
 
           {isToday ? (
-            <TodayTrades trades={daily.trades ?? []} formatCurrency={formatCurrency} />
+            <SessionTrades
+              trades={daily.trades ?? []}
+              sessionDate={daily.start_date}
+              excursionCovered={daily.excursion_covered ?? 0}
+              excursionTotal={daily.excursion_total ?? 0}
+              formatCurrency={formatCurrency}
+            />
           ) : (
             <>
               <Card>
@@ -738,9 +810,11 @@ export default function StrategyDailyPerformance() {
                 <CardContent>
                   <EquityDrawdownChart
                     equityCurve={daily.equity_curve ?? []}
+                    equityCurveNet={daily.equity_curve_net ?? []}
                     isDarkMode={isDarkMode}
                     formatCurrency={formatCurrency}
                   />
+                  <EquityLegend coverage={daily.equity_net_cost_coverage} />
                 </CardContent>
               </Card>
 
@@ -752,6 +826,7 @@ export default function StrategyDailyPerformance() {
                   <CalendarHeatmap
                     dailyPnl={daily.daily_pnl ?? []}
                     formatCurrency={formatCurrency}
+                    onSelectDay={openDay}
                   />
                   <div className="flex flex-wrap gap-4 mt-2 text-xs text-muted-foreground">
                     <span>Best day: {formatCurrency(daily.best_day ?? 0)}</span>
@@ -786,6 +861,15 @@ export default function StrategyDailyPerformance() {
               </Card>
             </>
           )}
+
+          <HoldBuckets rows={daily.by_hold_bucket ?? []} formatCurrency={formatCurrency} />
+
+          <CloseBreakdowns
+            byEntryHour={daily.by_entry_hour ?? []}
+            byHour={daily.by_hour ?? []}
+            byWeekday={daily.by_weekday ?? []}
+            formatCurrency={formatCurrency}
+          />
         </>
       )}
 
@@ -817,6 +901,19 @@ export default function StrategyDailyPerformance() {
                   <TableHead className="text-right">Charges % of profit</TableHead>
                   <TableHead className="text-right">After charges</TableHead>
                   <TableHead className="text-right">Expectancy</TableHead>
+                  <TableHead
+                    className="text-right"
+                    title="Average result per trade after estimated charges"
+                  >
+                    Net/trade
+                  </TableHead>
+                  <TableHead
+                    className="text-right"
+                    title="Whether the average per trade is unlikely to be luck (needs 30+ trades)"
+                  >
+                    Edge
+                  </TableHead>
+                  <TableHead className="text-right">Avg Hold</TableHead>
                   {!isToday && <TableHead className="text-right">Sharpe</TableHead>}
                   {!isToday && <TableHead className="text-right">Max Drawdown</TableHead>}
                 </TableRow>
@@ -878,6 +975,15 @@ export default function StrategyDailyPerformance() {
                     </TableCell>
                     <TableCell className="text-right font-mono">
                       {formatCurrency(row.expectancy)}
+                    </TableCell>
+                    <TableCell
+                      className={cn('text-right font-mono', pnlClass(row.net_expectancy ?? 0))}
+                    >
+                      {row.net_expectancy == null ? '—' : formatCurrency(row.net_expectancy)}
+                    </TableCell>
+                    <TableCell className="text-right">{edgeShortLabel(row.edge_verdict)}</TableCell>
+                    <TableCell className="text-right font-mono">
+                      {fmtDuration(row.avg_hold_min)}
                     </TableCell>
                     {!isToday && (
                       <TableCell className="text-right font-mono">
