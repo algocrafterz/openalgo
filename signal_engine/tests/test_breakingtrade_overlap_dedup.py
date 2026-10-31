@@ -19,6 +19,17 @@ from signal_engine.tracker import TradeRecord, _dedupe_breakingtrade_overlap
 
 
 @pytest.fixture(autouse=True)
+def _outcome_level(monkeypatch):
+    """These tests cover the day summary and the send queue, not notify_level; the config runs
+    `alerts` since 2026-10-31, which drops both. Pin a level that keeps them."""
+    import dataclasses
+
+    from signal_engine import notifier
+
+    monkeypatch.setattr(notifier, "settings", dataclasses.replace(notifier.settings, notify_level="quiet"))
+
+
+@pytest.fixture(autouse=True)
 def _fresh_db(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "_DB_PATH", str(tmp_path / "trades.db"))
     db.reset_connection()

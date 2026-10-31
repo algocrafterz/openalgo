@@ -165,6 +165,8 @@ class TestNotifyStartupSummarySendsExactlyOnce:
         # _send_oneshot() resolves the channel via _current_phase(), which otherwise calls
         # OpenAlgo over HTTP - bypass it directly so this test stays offline.
         monkeypatch.setattr("signal_engine.notifier._current_phase", _async_returns("analyze"))
+        # Sending at all is under test, not the routine-banner rule (test_notify_critical_only.py).
+        monkeypatch.setattr("signal_engine.notifier.routine_status_enabled", lambda now=None: True)
         mock_client = AsyncMock()
         mock_client.is_user_authorized.return_value = True
 

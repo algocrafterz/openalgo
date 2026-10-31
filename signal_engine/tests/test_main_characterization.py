@@ -564,7 +564,7 @@ class TestEntryPreflightRejections:
         h = harness(_is_be_series=MagicMock(return_value=True))
         with h.stack:
             await _handle_entry(_entry_signal())
-            h.notifier.notify_order_rejected.assert_awaited_once()
+            h.notifier.notify_entry_declined.assert_awaited_once()  # routine decline, filtered at alerts
             h.send_order.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -572,7 +572,7 @@ class TestEntryPreflightRejections:
         h = harness(settings=_settings_stub(broker_mis_rejected={"RELIANCE"}))
         with h.stack:
             await _handle_entry(_entry_signal())
-            h.notifier.notify_order_rejected.assert_awaited_once()
+            h.notifier.notify_entry_declined.assert_awaited_once()  # routine decline, filtered at alerts
             h.send_order.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -610,7 +610,7 @@ class TestEntryPreflightRejections:
         h.risk.get_sizing_capital.return_value = 100000.0
         with h.stack:
             await _handle_entry(_entry_signal())
-            h.notifier.notify_order_rejected.assert_awaited_once()
+            h.notifier.notify_entry_declined.assert_awaited_once()  # routine decline, filtered at alerts
             h.send_order.assert_not_awaited()
 
 

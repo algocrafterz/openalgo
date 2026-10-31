@@ -12,6 +12,7 @@ this file pins that EVERY path gets the tag - a new notify_* function or a new s
 forget it, because it never has to know the tag exists.
 """
 
+import dataclasses
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -93,6 +94,8 @@ class TestEveryNotifierSendPathIsTagged:
             lambda strategy, phase: TelegramChannel(name="intraday-orb-live", id=-2),
         )
 
+        # The tag is under test, not the level: pin a level that mirrors outcomes.
+        monkeypatch.setattr(notifier, "settings", dataclasses.replace(notifier.settings, notify_level="quiet"))
         await notifier._mirror_to_strategy("entry_filled", "filled", "ORB")
 
         assert client.sent == [(-2, "[LIVE] filled")]

@@ -1661,7 +1661,7 @@ async def _entry_rejected_by_symbol_rules(signal) -> bool:
     if _is_be_series(signal.symbol, exchange):
         msg = f"{signal.symbol} is T2T (BE series) — MIS not allowed, add to blacklist to suppress"
         logger.warning(msg)
-        await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
+        await notifier.notify_entry_declined(signal.symbol, msg, strategy=signal.strategy)
         await _decline(signal, stage="symbol_rules", reason=msg)
         return True
 
@@ -1674,7 +1674,7 @@ async def _entry_rejected_by_symbol_rules(signal) -> bool:
             "— skipping to avoid certain rejection"
         )
         logger.warning(msg)
-        await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
+        await notifier.notify_entry_declined(signal.symbol, msg, strategy=signal.strategy)
         await _decline(signal, stage="symbol_rules", reason=msg)
         return True
 
@@ -1796,7 +1796,7 @@ async def _resolve_entry_quantity(
             f"(capital={sizing_capital:,.0f})"
         )
         logger.info(msg)
-        await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
+        await notifier.notify_entry_declined(signal.symbol, msg, strategy=signal.strategy)
         await _decline(signal, stage="sizing", reason=msg)
         return None
 

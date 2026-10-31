@@ -17,6 +17,17 @@ from signal_engine.tracker import PositionTracker
 
 
 @pytest.fixture(autouse=True)
+def _outcome_level(monkeypatch):
+    """These tests cover the day summary and the send queue, not notify_level; the config runs
+    `alerts` since 2026-10-31, which drops both. Pin a level that keeps them."""
+    import dataclasses
+
+    from signal_engine import notifier
+
+    monkeypatch.setattr(notifier, "settings", dataclasses.replace(notifier.settings, notify_level="quiet"))
+
+
+@pytest.fixture(autouse=True)
 def isolated_marker(tmp_path, monkeypatch):
     monkeypatch.setattr(tracker_module, "_DAY_SUMMARY_MARKER", str(tmp_path / "day_summary"))
 

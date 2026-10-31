@@ -189,7 +189,7 @@ telegram:
   # [tune] How much routine traffic reaches notify_channel.
   #   alerts  - failures and operational alerts only; no outcomes, no day summary (both are on
   #             the OpenAlgo Strategy P&L pages). Also stops outcome mirrors to strategy channels.
-  #             Inbound signals are unaffected. Staged 2026-10-23, not yet switched on.
+  #             Inbound signals are unaffected. Staged 2026-10-23, on since 2026-10-31.
   #   quiet   - outcomes only: fills, closes, time exits, the day summary
   #   normal  - the above plus order-placed / SL-placed / partial-exit steps  (default)
   #   verbose - everything, including "exit signal received" acknowledgements
@@ -198,9 +198,12 @@ telegram:
   # NEVER filtered at any level — trimming routine traffic is only worth doing because it
   # makes the exceptional traffic visible.
   #
-  # `quiet` for the 2026-09-07 paper week: two strategies at up to 24 trades a day is ~120
-  # messages at `normal`, which is where a failed SL goes unnoticed.
-  notify_level: quiet
+  # `alerts` since 2026-10-31 (owner: critical notifications only). The week before sent about
+  # 640 routine messages (fills, closes, no-progress exits) plus daily start/stop/login banners;
+  # outcomes are on the Strategy P&L pages and the close-day report, and close_day.sh sends one
+  # verdict line per day. Routine pre-trade declines (`entry_declined`) and success banners
+  # (`routine_status`) are dropped too, except a start or stop inside market hours.
+  notify_level: alerts
 
   # [tune] Personal/admin channel for start/stop/error alerts, order lifecycle, and the day
   # summary - same ANALYZE/LIVE split as the strategy channels above, so a risk-halt during

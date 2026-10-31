@@ -1012,6 +1012,19 @@ def notify_failure(stage: str, detail: str, _send=None) -> bool:
         return False
 
 
+def _routine_notice_enabled() -> bool:
+    """Whether a success banner goes to Telegram (signal_engine.notifier.routine_status_enabled).
+
+    Unreadable config means send: a missing banner is the failure this must never cause.
+    """
+    try:
+        from signal_engine.notifier import routine_status_enabled
+
+        return routine_status_enabled()
+    except Exception:
+        return True
+
+
 def _run_startup():
     """Full startup flow: login, verify, summarise, notify."""
     from utils.logging import get_logger
@@ -1078,15 +1091,18 @@ def _run_startup():
         if line.strip():
             logger.info(line)
 
-    # 5. Send Telegram notification
-    try:
-        sent = asyncio.run(send_telegram_notification(summary))
-        if sent:
-            logger.info("Startup notification sent to Telegram")
-        else:
-            logger.warning("Startup notification not sent (no channels or send failed)")
-    except Exception:
-        logger.exception("Telegram notification failed (non-fatal)")
+    # 5. Send Telegram notification (a clean scheduled login is routine; failures went out above)
+    if not _routine_notice_enabled():
+        logger.info("Startup summary not sent to Telegram (routine, notify_level)")
+    else:
+        try:
+            sent = asyncio.run(send_telegram_notification(summary))
+            if sent:
+                logger.info("Startup notification sent to Telegram")
+            else:
+                logger.warning("Startup notification not sent (no channels or send failed)")
+        except Exception:
+            logger.exception("Telegram notification failed (non-fatal)")
 
     # 6. Weekly watchlist screen, LAST so it can never delay trading readiness or the
     # notification above. Runs on whatever day the system actually next starts up
@@ -1156,6 +1172,9 @@ def _run_shutdown(reason: str = "scheduled"):
 
     _revoke_broker_session_at_stop(reason)
 
+    if not _routine_notice_enabled():
+        logger.info("Shutdown summary not sent to Telegram (routine, notify_level)")
+        return
     try:
         sent = asyncio.run(send_telegram_notification(summary))
         if sent:
@@ -1307,6 +1326,8 @@ def _run_squareoff():
     asyncio.run(_do())
     logger.info("Squareoff: done")
 
+    if not _routine_notice_enabled():
+        return  # the failsafe ran as scheduled; anything left open shows in the close-day report
     try:
         msg = f"Squareoff 15:02 (failsafe): {', '.join(mis_strategies)} processed"
         asyncio.run(send_telegram_notification(msg))

@@ -163,6 +163,13 @@ EVENT_LEVELS = {
     "time_exit": "quiet",
     "no_progress_exit": "quiet",
     "day_summary": "quiet",
+    # A pre-trade decline (T2T series, broker MIS reject list, price band, sizing): the filter
+    # working as designed, recorded in trades.db and on the close-day report. A broker
+    # rejection, a margin-API failure or a capital shortfall stays order_rejected, never filtered.
+    "entry_declined": "quiet",
+    # Success banners at the scheduled times (login, engine start, stop, the square-off
+    # failsafe). The same event inside market hours is a crash or restart and always goes out.
+    "routine_status": "quiet",
 }
 
 #: `alerts` (2026-10-23) sits below quiet: every event in EVENT_LEVELS is dropped, so only
@@ -183,6 +190,23 @@ def should_notify(event: str, level: str) -> bool:
     if configured is None:
         return True
     return configured >= _LEVEL_RANK[required]
+
+
+#: A stop or a start inside this window is not the schedule (start 09:10, stop 15:35): alert.
+_MARKET_HOURS = ((9, 15), (15, 30))
+
+
+def routine_status_enabled(now: datetime | None = None) -> bool:
+    """Whether a success banner (start, stop, square-off) goes out now.
+
+    Always inside market hours, where it means an unscheduled restart or stop; outside them only
+    when notify_level keeps routine traffic. close_day.sh and open_day.sh report the schedule.
+    """
+    now = now or datetime.now(IST)
+    (open_h, open_m), (close_h, close_m) = _MARKET_HOURS
+    if now.weekday() < 5 and (open_h, open_m) <= (now.hour, now.minute) < (close_h, close_m):
+        return True
+    return should_notify("routine_status", getattr(settings, "notify_level", "normal"))
 
 
 def day_summary_enabled() -> bool:
@@ -405,6 +429,15 @@ async def notify_entry_filled(
         # in the analyze channel too.
         f"FILLED | {symbol} {_dir(direction)}{_tag(strategy)} | {_now_ist()}\n"
         f"Fill: {fill_price:.2f} (slip {slip:+.2f}) | Qty: {qty}{sl_str}{tp_str}",
+        strategy=strategy,
+    )
+
+
+async def notify_entry_declined(symbol: str, reason: str, strategy: str = "") -> None:
+    """A routine pre-trade decline; filtered at `alerts` (see EVENT_LEVELS["entry_declined"])."""
+    await notify_event("entry_declined",
+        f"ENTRY SKIPPED | {symbol}{_tag(strategy)} | {_now_ist()}\n"
+        f"No trade taken. Reason: {reason}",
         strategy=strategy,
     )
 
@@ -1040,6 +1073,9 @@ def _trade_line(rec) -> str:
 
 
 async def notify_engine_stopped() -> None:
+    if not routine_status_enabled():
+        logger.info("Engine stopped (scheduled stop, not sent: notify_level)")
+        return
     await notify_event("engine_stopped", f"Engine stopped | {_now_ist()}")
 
 
@@ -1159,5 +1195,11 @@ def build_startup_summary_message(report, mode: str, capital: float, broker_name
 
 async def notify_startup_summary(report, mode: str, capital: float, broker_name: str) -> None:
     """Send the one consolidated startup/smoke-test summary — fires once per engine
-    start/restart, replacing the separate startup-result and engine-started messages."""
+    start/restart, replacing the separate startup-result and engine-started messages.
+
+    A clean scheduled start is not sent at notify_level `alerts`; a failed check or a restart
+    inside market hours always is."""
+    if report.all_passed and not routine_status_enabled():
+        logger.info("Startup summary: all checks passed (scheduled start, not sent: notify_level)")
+        return
     await _send_oneshot(build_startup_summary_message(report, mode, capital, broker_name))
