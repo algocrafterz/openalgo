@@ -9,12 +9,14 @@
 #
 # TIMELINE (weekdays; the Windows tasks stop the engine at 15:35 and OpenAlgo at 16:00)
 #   15:36  start: the engine is stopped, so trades.db and the sandbox are final
-#   15:36  backfill_cron.sh in the background (needs OpenAlgo; about 7 minutes)
-#   15:36  eod.sh: tradebook snapshot, ledger, pages vs fills, regression check to Telegram (< 1 min)
-#   15:37  execution health report (seconds)
-#   15:37  Fridays: weekly.sh rollup for Monday..Friday (seconds)
-#   15:37  Claude close-day review, report-only, bounded by the deadline (typically 5-10 minutes)
-#   ~15:50 backfill joined, status written; hard deadline 15:58, before OpenAlgo stops
+#   15:36  backfill   backfill_cron.sh in the background (needs OpenAlgo; about 7 minutes)
+#   15:36  eod        eod.sh: tradebook snapshot, ledger, pages vs fills, regression check (< 1 min)
+#   15:37  execution_health, logs (error signatures), Fridays weekly (seconds each)
+#   ~15:43 backfill joined; jobs (scheduled-job audit, seconds)
+#   ~15:43 review     Claude close-day review, report-only, reads every output above (2-10 minutes)
+#   ~15:50 notify     the day's single Telegram line (verdict); hard deadline 15:58
+#
+# The morning phases (open-day 09:12, liveness 09:27) are signal_engine/ops/run_phase.sh.
 #
 # Each step's start, end and exit code go to signal_engine/reports/close-day-<day>-status.tsv,
 # so the review and /close-day can say exactly what ran and what did not.
@@ -85,48 +87,45 @@ step() {  # step NAME CMD... : run with the deadline as its timeout, record the 
 
 echo "=== close day $DAY (started $(date +%T)) ==="
 
-# The backfill only needs OpenAlgo and is the longest step: start it first, join it last.
+# One duty per step, one output per step. The review interprets the outputs; it never re-runs a
+# step, and only the notify step talks to Telegram.
+OPS=(env PYTHONPATH=. "$UV" run python -m signal_engine.ops)
+
+# The backfill only needs OpenAlgo and is the longest step: start it first, join it before the
+# review so the review can read its verify result.
 step backfill "$REPO/signal_engine/backtest/backfill_cron.sh" >> "$LOGS/backfill_cron.log" 2>&1 &
 BACKFILL_PID=$!
 
-step eod "$ANALYSIS/eod.sh" "$DAY" >> "$LOGS/eod_cron.log" 2>&1
+# EOD_TELEGRAM=0: the regression digest goes into the report, not to Telegram (notify owns that).
+step eod env EOD_TELEGRAM=0 "$ANALYSIS/eod.sh" "$DAY" >> "$LOGS/eod_cron.log" 2>&1
 
 step execution_health "$UV" run python -m signal_engine.analysis.execution_health --day "$DAY" --format md \
   > "$REPORTS/execution-health-$DAY.md" 2>> "$LOGS/execution_health_cron.log"
+
+step logs "${OPS[@]}" logs --day "$DAY" >> "$LOGS/ops_cron.log" 2>&1
 
 if [ "$(date -d "$DAY" +%u)" -eq 5 ]; then
   step weekly "$ANALYSIS/weekly.sh" "$(date -d "$DAY -4 days" +%F)" "$DAY" >> "$LOGS/weekly_cron.log" 2>&1
 fi
 
-if [ "$REVIEW" -eq 1 ]; then
-  step review "$ANALYSIS/eod_claude_review.sh" "$DAY" >> "$LOGS/eod_claude_cron.log" 2>&1
-fi
-
 wait "$BACKFILL_PID"
 
-# The review runs while the backfill is still writing, so it cannot report tomorrow's data
-# readiness; the verify lines are appended here, once the backfill has finished.
+step jobs "${OPS[@]}" jobs --day "$DAY" >> "$LOGS/ops_cron.log" 2>&1
+
 REVIEW_REPORT="$REPORTS/eod-$DAY-claude-review.md"
-if [ -f "$REVIEW_REPORT.partial" ]; then
-  # The deadline stopped the review (timeout kills its whole process group): keep what it wrote.
-  { cat "$REVIEW_REPORT.partial"; echo; echo "> Review stopped at the 15:58 deadline: incomplete, no tracker changes applied. Run /close-day."; } > "$REVIEW_REPORT"
-  rm -f "$REVIEW_REPORT.partial"
+if [ "$REVIEW" -eq 1 ]; then
+  step review "$ANALYSIS/eod_claude_review.sh" "$DAY" >> "$LOGS/eod_claude_cron.log" 2>&1
+  if [ -f "$REVIEW_REPORT.partial" ]; then
+    # The deadline stopped the review (timeout kills its whole process group): keep what it wrote.
+    { cat "$REVIEW_REPORT.partial"; echo; echo "> Review stopped at the 15:58 deadline: incomplete, no tracker changes applied. Run /close-day."; } > "$REVIEW_REPORT"
+    rm -f "$REVIEW_REPORT.partial"
+  fi
+  NOTIFY_FLAG=""; [ "$DAY" = "$(date +%F)" ] || NOTIFY_FLAG="--dry-run"  # only same-day runs send
+  step notify "${OPS[@]}" notify close-day --day "$DAY" $NOTIFY_FLAG >> "$LOGS/ops_cron.log" 2>&1
 fi
+
 if [ -f "$REVIEW_REPORT" ]; then
-  {
-    echo
-    echo "## Data for tomorrow (appended by close_day.sh after the backfill)"
-    echo
-    echo '```'
-    sed -n "/^=== backfill $DAY ===/,\$p" "$LOGS/backfill_cron.log" | grep -E "^verify|FAIL|ERROR|behind" | tail -8
-    echo '```'
-    echo
-    echo "## Close-day steps"
-    echo
-    echo '```'
-    column -t -s $'\t' "$STATUS"
-    echo '```'
-  } >> "$REVIEW_REPORT"
+  { echo; echo "## Close-day steps"; echo; echo '```'; column -t -s $'\t' "$STATUS"; echo '```'; } >> "$REVIEW_REPORT"
 fi
 echo "=== close day $DAY done $(date +%T); status -> $STATUS ==="
 column -t -s $'\t' "$STATUS"

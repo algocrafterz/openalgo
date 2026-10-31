@@ -73,6 +73,11 @@ You have a hard time budget (the run is stopped before OpenAlgo shuts down at 16
 the skill's order, and if time is short finish the verdict, the P&L table and the tracker block
 before anything else.
 
+Just before that last block, write the day's verdict as a fenced code block with the info string
+close-day-verdict holding one JSON object: {"verdict": "GREEN" | "AMBER" | "RED", "line": "<one
+sentence a trader reads on Telegram: net P&L after charges and the one thing that needs attention,
+or 'nothing needs attention'>"}. close_day.sh sends that line; it is the day's only Telegram message.
+
 The very last thing in your response is the bug-tracker block described in
 .claude/skills/bug-tracker/SKILL.md ("Unattended runs"): a fenced code block with the info
 string bug-tracker holding a JSON list (empty list if nothing applies). This script applies it.

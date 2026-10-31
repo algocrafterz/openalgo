@@ -109,27 +109,12 @@ fi
     echo '## BreakingTrade scanner vs engine'
     echo
     echo '```'
-    run -m signal_engine.analysis.breakingtrade --review 2>&1 || echo "(review unavailable)"
+    run -m signal_engine.analysis.breakingtrade --review --day "$DAY" 2>&1 || echo "(review unavailable)"
     echo '```'
   fi
 
   echo
-  echo '## Errors logged today'
-  echo
-  echo '```'
-  if [ -s "$LOGS/errors_$DAY.jsonl" ]; then
-    "$UV" run python -c "
-import json,sys
-for line in open('$LOGS/errors_$DAY.jsonl'):
-    try: r=json.loads(line)['record']
-    except Exception: continue
-    print(f\"{r['time']['repr'][11:19]} {r['extra'].get('symbol','-'):12} {r['message']}\")
-" 2>&1
-  else
-    echo "none"
-  fi
-  echo '```'
-
+  # Errors for the day are the close-day `logs` step (signal_engine/ops/logscan.py).
   echo
   echo '## Strategy P&L / Performance pages vs broker fills'
   echo
@@ -138,13 +123,13 @@ for line in open('$LOGS/errors_$DAY.jsonl'):
   echo '```'
 
   echo
-  echo '## EOD regression check (trade / signal / system) — posted to Telegram'
+  echo '## EOD regression check (trade / signal / system)'
   echo
   echo '```'
   # Only the same-day run posts to Telegram; a re-run of an earlier day prints the digest instead
   # of announcing an old session as today's.
   POST_FLAG=""
-  [ "$DAY" = "$(date +%F)" ] || POST_FLAG="--dry-run"
+  { [ "$DAY" = "$(date +%F)" ] && [ "${EOD_TELEGRAM:-1}" = "1" ]; } || POST_FLAG="--dry-run"
   run -m signal_engine.analysis.eod_review "$DAY" $POST_FLAG 2>&1 || echo "(eod_review exited non-zero — see CHECK results above)"
   echo '```'
 } > "$REPORT"
