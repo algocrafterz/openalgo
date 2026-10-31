@@ -58,10 +58,15 @@
           "at": "2026-10-31T14:15:19+05:30",
           "status": "fixed",
           "note": "fixed 2026-10-31, uncommitted; needs one clean session with a timed-out exit to verify"
+        },
+        {
+          "at": "2026-10-31T17:00:13+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-10-30] 2026-10-30: path occurred (ADANIENT 10:40, JSWENERGY 10:15 exit timeouts) but the session predates the fix (adae1b78a, 2026-10-31); not exercised on fixed code. trades.db rows 3392/3404 for 10-30 still carry the cancelled stop ids. 2026-11-02 is the first session on the fix."
         }
       ],
       "created_at": "2026-10-31T14:15:18+05:30",
-      "updated_at": "2026-10-31T14:15:19+05:30"
+      "updated_at": "2026-10-31T17:00:13+05:30"
     },
     {
       "id": "BUG-002",
@@ -118,10 +123,15 @@
           "at": "2026-10-31T14:15:20+05:30",
           "status": "fixed",
           "note": "data fix 2026-10-31; pages-vs-fills on the next session must show no SUNPHARMA phantom leg"
+        },
+        {
+          "at": "2026-10-31T17:00:13+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-10-30] 2026-10-31 re-run of 10-30: data fix is partial. strategy_positions rows 159/203 now quantity 0 (phantom open legs gone), but row 203 EVWAP-EARLY-PY SUNPHARMA today_realized_pnl is still 1735.82 vs fills 40.8, so pages-vs-fills for 10-30 still fails by 1695.0; cumulative realized_pnl still carries the phantom close (row 159: 2487.80, row 203: -2970.68). Remove the phantom 66-share close from row 203 today_realized_pnl and from realized_pnl on both rows, checked against sandbox_trades SUNPHARMA fills."
         }
       ],
       "created_at": "2026-10-31T14:15:19+05:30",
-      "updated_at": "2026-10-31T14:15:20+05:30"
+      "updated_at": "2026-10-31T17:00:13+05:30"
     },
     {
       "id": "BUG-003",
@@ -388,6 +398,43 @@
       ],
       "created_at": "2026-10-31T14:15:24+05:30",
       "updated_at": "2026-10-31T14:15:24+05:30"
+    },
+    {
+      "id": "BUG-009",
+      "title": "eod.sh re-run for a past day reviews the BreakingTrade scanner for the run date, not the requested day",
+      "kind": "BUG",
+      "severity": "LOW",
+      "status": "open",
+      "area": "signal_engine",
+      "strategies": [
+        "BREAKINGTRADE",
+        "BREAKINGTRADE-RI"
+      ],
+      "first_seen": "2026-10-30",
+      "last_seen": "2026-10-30",
+      "occurrences": [
+        "2026-10-30"
+      ],
+      "impact": "A re-run of an earlier day's EOD report shows 0 BreakingTrade signals/trades (it reviews today), so the re-run report silently loses that section; reporting only, no trading effect.",
+      "evidence": [
+        "reports/eod-2026-10-30.md (re-run 2026-10-31 16:58) shows 'INTRADAY PAPER REVIEW - 2026-10-31 (Saturday)', 0 signals; reports/original-2026-10-30/eod-2026-10-30.md (15:25) shows 7 signals, 11 trades",
+        "eod.sh:112 calls 'breakingtrade --review' with no day; __main__.py:904 calls review.report() with no argument; review.py:106-107 defaults day to ist_today()",
+        "Same re-run also showed Positions page 0.0 and Broker +0.00 vs 528.5 in the original (appears to read live sandbox state; not traced in code)"
+      ],
+      "root_cause": "The --review CLI path has no day argument, so review.report() falls back to ist_today(). Fix: add --day to the breakingtrade CLI, pass it to review.report(day), call it with --day \"$DAY\" from eod.sh; add a test that a past-day review reads that day.",
+      "fix": "",
+      "fix_commit": "",
+      "verification": "",
+      "sources": [],
+      "history": [
+        {
+          "at": "2026-10-31T17:00:13+05:30",
+          "status": "open",
+          "note": "recorded"
+        }
+      ],
+      "created_at": "2026-10-31T17:00:13+05:30",
+      "updated_at": "2026-10-31T17:00:13+05:30"
     }
   ]
 }
