@@ -24,7 +24,7 @@ import os
 import signal
 import sqlite3
 import sys
-from datetime import time
+from datetime import date, time
 from time import sleep
 
 import pandas as pd
@@ -830,6 +830,12 @@ def main() -> int:
         help="End-of-day paper review: mode check, signals emitted, trades taken",
     )
     parser.add_argument(
+        "--day",
+        type=date.fromisoformat,
+        default=None,
+        help="YYYY-MM-DD for --review (default: today, IST)",
+    )
+    parser.add_argument(
         "--paper",
         action="store_true",
         help="Settle and report the BTST paper-trade ledger",
@@ -901,7 +907,7 @@ def main() -> int:
     if args.review:
         from signal_engine.analysis.breakingtrade import review
 
-        review.report()
+        review.report(args.day)
         return 0
 
     if args.paper:
