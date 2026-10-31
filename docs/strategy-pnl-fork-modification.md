@@ -485,6 +485,22 @@ Owner-approved core change, read-only page. Shows `signal_engine/bugs/bugs.json`
 
 Merge risk: low. Additive lines only in `app.py`, `react_app.py`, `App.tsx` and `LogsIndex.tsx`.
 
+## Daily workflow page (added 2026-10-31)
+
+Owner-approved core change, read-only page. Shows the signal_engine ops phases (open-day 09:12,
+liveness 09:27, close-day 15:36) from `signal_engine/reports/*-status.tsv`, their check results
+(`<phase>-<day>.json`) and reports at `/logs/workflow`.
+
+- `blueprints/ops_workflow.py` (new): `GET /api/ops/workflow?day=`, `GET /api/ops/report?name=`;
+  session-authed, rate limited; a report is served only for a whitelisted file name inside
+  `signal_engine/reports/`.
+- `app.py`: import and register `ops_workflow_bp`. `blueprints/react_app.py`: `/logs/workflow`.
+- `frontend/src/api/opsWorkflow.ts`, `frontend/src/pages/monitoring/DailyWorkflow.tsx` (new), a
+  route in `frontend/src/App.tsx`, a card in `frontend/src/pages/LogsIndex.tsx`.
+- `test/test_ops_workflow_blueprint.py` (new).
+
+Merge risk: low, additive lines only.
+
 ## Merge-conflict risk assessment (2026-09-28)
 
 Checked ahead of the next OpenAlgo version bump

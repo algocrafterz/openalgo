@@ -2,6 +2,7 @@ import {
   Activity,
   ArrowRight,
   Bug,
+  CalendarCheck,
   ClipboardList,
   Clock,
   FileText,
@@ -54,6 +55,14 @@ export default function LogsIndex() {
       href: '/logs/security',
       color: 'bg-red-500',
       countLabel: 'security',
+    },
+    {
+      title: 'Daily Workflow',
+      description: 'What ran at the open, after the open and at the close, and what it found',
+      icon: CalendarCheck,
+      href: '/logs/workflow',
+      color: 'bg-emerald-600',
+      countLabel: 'schedule',
     },
     {
       title: 'Bug Tracker',

@@ -85,6 +85,7 @@ from blueprints.oiprofile import oiprofile_bp  # Import the OI Profile blueprint
 from blueprints.oitracker import oitracker_bp  # Import the OI tracker blueprint
 from blueprints.openscript import openscript_bp  # Trader authored OpenScript sources
 from blueprints.openscript_runner import openscript_runner_bp  # Runs one saved strategy
+from blueprints.ops_workflow import ops_workflow_bp  # Daily workflow page (/logs/workflow)
 from blueprints.orders import orders_bp
 from blueprints.platforms import platforms_bp
 from blueprints.playground import playground_bp  # Import the API playground blueprint
@@ -355,6 +356,7 @@ def create_app():
     app.register_blueprint(strategy_portfolio_bp)  # Register Strategy Portfolio blueprint
     app.register_blueprint(strategy_pnl_bp)  # Register Strategy P&L blueprint
     app.register_blueprint(bug_tracker_bp)  # Register Bug Tracker blueprint
+    app.register_blueprint(ops_workflow_bp)  # Register Daily Workflow blueprint
     app.register_blueprint(backtest_results_bp)  # Register Backtest Results blueprint
     app.register_blueprint(postback_bp)  # Register broker postback (order-update webhook) blueprint
 

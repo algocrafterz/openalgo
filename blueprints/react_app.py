@@ -752,6 +752,11 @@ def react_logs_bugs():
     return serve_react_app()
 
 
+@react_bp.route("/logs/workflow", strict_slashes=False)
+def react_logs_workflow():
+    return serve_react_app()
+
+
 # Profile Settings
 @react_bp.route("/profile", strict_slashes=False)
 def react_profile():
