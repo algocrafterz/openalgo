@@ -6,7 +6,7 @@
       "title": "Timed-out exit that later fills is booked under the cancelled stop id and labelled SL",
       "kind": "BUG",
       "severity": "HIGH",
-      "status": "fixed",
+      "status": "open",
       "area": "signal_engine",
       "strategies": [
         "EVWAP-EARLY-PY"
@@ -23,7 +23,9 @@
       "evidence": [
         "10-27 INDUSINDBK, TVSMOTOR booked under 26102734560840 / 26102741027393",
         "10-29 ADANIENT row 3270 under cancelled stop 26102934224208",
-        "10-30 JSWENERGY row 3392, ADANIENT row 3404"
+        "10-30 JSWENERGY row 3392, ADANIENT row 3404",
+        "trades.db rows 3391-3392 (JSWENERGY) and 3403-3404 (ADANIENT): TIMEOUT exit with empty order_id, then SUCCESS close under SL order ids 26103035121544 and 26103035119260 labelled 'Closed by tracker (SL)'",
+        "eod ledger check FAIL: 2 broker fills with no matching engine order (ADANIENT, JSWENERGY); logs say exit orders 26103036923667 and 26103038430811 completed at the broker"
       ],
       "root_cause": "The FILLED branch of sweep_unresolved_orders (main.py) never gave the filled exit id to the tracked position; book_close() then wrote pos.sl_order_id (the cancelled stop), and _poll_close_exit_types() defaulted the label to SL.",
       "fix": "Sweep sets pos.sl_order_id to the filled exit; a full exit records its label in TrackedPosition.claimed_exit before sending, and the poll books the close under it. Tests: test_exit_timeout_safety.py (JSWENERGY replay, TestPollCloseLabel).",
@@ -31,7 +33,9 @@
       "verification": "",
       "sources": [
         "signal_engine/reports/eod-2026-10-27-claude-review.md",
-        "signal_engine/reports/eod-2026-10-30-claude-review.md"
+        "signal_engine/reports/eod-2026-10-30-claude-review.md",
+        "signal_engine/reports/eod-2026-10-30.md",
+        "signal_engine/reports/logs-2026-10-30.md"
       ],
       "history": [
         {
@@ -63,17 +67,27 @@
           "at": "2026-10-31T17:00:13+05:30",
           "status": "fixed",
           "note": "[eod-cron-2026-10-30] 2026-10-30: path occurred (ADANIENT 10:40, JSWENERGY 10:15 exit timeouts) but the session predates the fix (adae1b78a, 2026-10-31); not exercised on fixed code. trades.db rows 3392/3404 for 10-30 still carry the cancelled stop ids. 2026-11-02 is the first session on the fix."
+        },
+        {
+          "at": "2026-10-31T17:36:41+05:30",
+          "status": "open",
+          "note": "seen on 2026-10-30: recurred after being fixed, reopened"
+        },
+        {
+          "at": "2026-10-31T17:36:41+05:30",
+          "status": "open",
+          "note": "[eod-cron-2026-10-30] 2026-10-30: path exercised by two timed-out EXIT UNCERTAIN events, not held (booked under stop id, labelled SL)"
         }
       ],
       "created_at": "2026-10-31T14:15:18+05:30",
-      "updated_at": "2026-10-31T17:00:13+05:30"
+      "updated_at": "2026-10-31T17:36:41+05:30"
     },
     {
       "id": "BUG-002",
       "title": "Phantom SUNPHARMA 66-share legs on the BREAKOUT-PY and EVWAP-EARLY-PY strategy pages",
       "kind": "DATA",
       "severity": "HIGH",
-      "status": "fixed",
+      "status": "verified",
       "area": "openalgo-core",
       "strategies": [
         "BREAKOUT-PY",
@@ -92,9 +106,9 @@
         "strategy_closed_trades id 1062: phantom LONG 66 closed at -1,531.2"
       ],
       "root_cause": "10-26 10:33 restart restore attributed EVWAP's 66 shares to BREAKOUT-PY (_direction_name regression, fixed in 297ca5428). The strategy book kept strategy_positions rows 159 (-66) and 203 (+66).",
-      "fix": "Zeroed quantity and average_price on strategy_positions 159 and 203 (backup db/backups/openalgo-pre-sunpharma-phantom-fix-20261031.db). Already-closed rows on 10-27/28/30 keep the phantom realised P&L; not rewritten.",
+      "fix": "Leftover legs zeroed (strategy_positions 159/203). Then the misattributed fill (order 26102613405788, SELL 66 @ 1758.5, 10-26 10:45) re-tagged to EVWAP-EARLY-PY in sandbox_trades, sandbox_orders and strategy_order_tags; EVWAP SUNPHARMA closed trades 10-26..30 replayed from fills (8 rows -1,329.78 -> 7 rows -2,470.40); row 203 realized -2,970.68 -> -4,111.30, today 1,735.82 -> 40.80; trades.db row 2822 moved to EVWAP (pnl -59.4) and BREAKOUT-PY's missing 171-share stop exit added (-803.7). Backups db/backups/*-pre-bug002-replay-20261031.db.",
       "fix_commit": "",
-      "verification": "",
+      "verification": "pages_vs_fills --mode analyze re-run 2026-10-31 for 10-26, 10-27, 10-28, 10-30: no SUNPHARMA FAIL; 10-28 and 10-30 RESULT PASS.",
       "sources": [
         "signal_engine/reports/eod-2026-10-30-claude-review.md"
       ],
@@ -128,10 +142,20 @@
           "at": "2026-10-31T17:00:13+05:30",
           "status": "fixed",
           "note": "[eod-cron-2026-10-30] 2026-10-31 re-run of 10-30: data fix is partial. strategy_positions rows 159/203 now quantity 0 (phantom open legs gone), but row 203 EVWAP-EARLY-PY SUNPHARMA today_realized_pnl is still 1735.82 vs fills 40.8, so pages-vs-fills for 10-30 still fails by 1695.0; cumulative realized_pnl still carries the phantom close (row 159: 2487.80, row 203: -2970.68). Remove the phantom 66-share close from row 203 today_realized_pnl and from realized_pnl on both rows, checked against sandbox_trades SUNPHARMA fills."
+        },
+        {
+          "at": "2026-10-31T17:17:55+05:30",
+          "status": "fixed",
+          "note": "history replayed 2026-10-31; pages_vs_fills SUNPHARMA clean on 10-26/27/28/30"
+        },
+        {
+          "at": "2026-10-31T17:17:55+05:30",
+          "status": "verified",
+          "note": "verified on the reconciliation that found it"
         }
       ],
       "created_at": "2026-10-31T14:15:19+05:30",
-      "updated_at": "2026-10-31T17:00:13+05:30"
+      "updated_at": "2026-10-31T17:17:55+05:30"
     },
     {
       "id": "BUG-003",
@@ -169,10 +193,15 @@
           "at": "2026-10-31T14:15:20+05:30",
           "status": "fixed",
           "note": "fixed 2026-10-31, uncommitted"
+        },
+        {
+          "at": "2026-10-31T17:36:41+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-10-30] 2026-10-30: path not exercised (no restart after the 08:51 start)"
         }
       ],
       "created_at": "2026-10-31T14:15:20+05:30",
-      "updated_at": "2026-10-31T14:15:20+05:30"
+      "updated_at": "2026-10-31T17:36:41+05:30"
     },
     {
       "id": "BUG-004",
@@ -210,10 +239,15 @@
           "at": "2026-10-31T14:15:21+05:30",
           "status": "fixed",
           "note": "fixed 2026-10-31, uncommitted"
+        },
+        {
+          "at": "2026-10-31T17:36:41+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-10-30] 2026-10-30: path not exercised (no restart)"
         }
       ],
       "created_at": "2026-10-31T14:15:21+05:30",
-      "updated_at": "2026-10-31T14:15:21+05:30"
+      "updated_at": "2026-10-31T17:36:41+05:30"
     },
     {
       "id": "BUG-005",
@@ -303,10 +337,15 @@
           "at": "2026-10-31T14:15:22+05:30",
           "status": "fixed",
           "note": "fixed 2026-10-31, uncommitted"
+        },
+        {
+          "at": "2026-10-31T17:36:41+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-10-30] 2026-10-30: path not exercised (no minimum-price sizing decline; declines were validator R:R)"
         }
       ],
       "created_at": "2026-10-31T14:15:22+05:30",
-      "updated_at": "2026-10-31T14:15:22+05:30"
+      "updated_at": "2026-10-31T17:36:41+05:30"
     },
     {
       "id": "BUG-007",
@@ -327,7 +366,8 @@
       ],
       "impact": "Order timeouts drive every bookkeeping bug above; a 20-minute positionbook outage on 10-28 left the engine blind.",
       "evidence": [
-        "10-30: 12 Timeout sending order at 10:15, 10:25, 10:40, 11:15"
+        "10-30: 12 Timeout sending order at 10:15, 10:25, 10:40, 11:15",
+        "execution-health: Timeout sending order x12, slow sandbox place_order above 5 s x10, limiter critical-lane max wait 13.4 s, refused calls 1447"
       ],
       "root_cause": "Not found. Flattrade disconnects plus OpenAlgo slowness at candle boundaries; 04a29664f (quote request sharing) did not remove it.",
       "fix": "",
@@ -362,10 +402,15 @@
           "at": "2026-10-31T14:15:23+05:30",
           "status": "open",
           "note": "seen on 2026-10-30"
+        },
+        {
+          "at": "2026-10-31T17:36:41+05:30",
+          "status": "open",
+          "note": "seen on 2026-10-30"
         }
       ],
       "created_at": "2026-10-31T14:15:22+05:30",
-      "updated_at": "2026-10-31T14:15:23+05:30"
+      "updated_at": "2026-10-31T17:36:41+05:30"
     },
     {
       "id": "BUG-008",
@@ -383,28 +428,37 @@
         "2026-10-30"
       ],
       "impact": "Week 10-26..10-30: gross -10,923, charges 11,256 on 225 entries (about 50 per round trip).",
-      "evidence": [],
+      "evidence": [
+        "EVWAP-EARLY-PY 57 trades: gross +482.7 INR, estimated charges 2,558.2 INR, net -2,075.6 INR"
+      ],
       "root_cause": "Win rate 49%, avg win 484 vs avg loss 510; per-trade cost is about the size of the edge. Frozen strategy: observation only, no tuning from early P&L (5 sessions this week, min stop raised to 0.40% on 10-28).",
       "fix": "",
       "fix_commit": "",
       "verification": "",
-      "sources": [],
+      "sources": [
+        "signal_engine/reports/eod-2026-10-30.md"
+      ],
       "history": [
         {
           "at": "2026-10-31T14:15:24+05:30",
           "status": "open",
           "note": "recorded"
+        },
+        {
+          "at": "2026-10-31T17:36:41+05:30",
+          "status": "open",
+          "note": "seen on 2026-10-30"
         }
       ],
       "created_at": "2026-10-31T14:15:24+05:30",
-      "updated_at": "2026-10-31T14:15:24+05:30"
+      "updated_at": "2026-10-31T17:36:41+05:30"
     },
     {
       "id": "BUG-009",
       "title": "eod.sh re-run for a past day reviews the BreakingTrade scanner for the run date, not the requested day",
       "kind": "BUG",
       "severity": "LOW",
-      "status": "open",
+      "status": "fixed",
       "area": "signal_engine",
       "strategies": [
         "BREAKINGTRADE",
@@ -422,7 +476,7 @@
         "Same re-run also showed Positions page 0.0 and Broker +0.00 vs 528.5 in the original (appears to read live sandbox state; not traced in code)"
       ],
       "root_cause": "The --review CLI path has no day argument, so review.report() falls back to ist_today(). Fix: add --day to the breakingtrade CLI, pass it to review.report(day), call it with --day \"$DAY\" from eod.sh; add a test that a past-day review reads that day.",
-      "fix": "",
+      "fix": "breakingtrade --review --day; eod.sh passes $DAY. Test: test_breakingtrade_review_day.py.",
       "fix_commit": "",
       "verification": "",
       "sources": [],
@@ -431,10 +485,94 @@
           "at": "2026-10-31T17:00:13+05:30",
           "status": "open",
           "note": "recorded"
+        },
+        {
+          "at": "2026-10-31T17:34:48+05:30",
+          "status": "fixed",
+          "note": "fixed 2026-10-31"
+        },
+        {
+          "at": "2026-10-31T17:36:41+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-10-30] 2026-10-30: path not exercised (first run for 2026-10-30, not a re-run)"
         }
       ],
       "created_at": "2026-10-31T17:00:13+05:30",
-      "updated_at": "2026-10-31T17:00:13+05:30"
+      "updated_at": "2026-10-31T17:36:41+05:30"
+    },
+    {
+      "id": "BUG-010",
+      "title": "26 Oct duplicate exit fills (TCS 3x BUY 62, ICICIBANK 3x SELL 162) stay in the strategy pages",
+      "kind": "DATA",
+      "severity": "LOW",
+      "status": "open",
+      "area": "openalgo-core",
+      "strategies": [
+        "EVWAP-EARLY-PY"
+      ],
+      "first_seen": "2026-10-26",
+      "last_seen": "2026-10-26",
+      "occurrences": [
+        "2026-10-26"
+      ],
+      "impact": "Pages show EVWAP 10-26 -1,913 and 10-27 -2,082 worse than pages_vs_fills, which treats the copies as artifacts; the copies really filled in the sandbox.",
+      "evidence": [
+        "pages_vs_fills 10-26 ARTIFACT lines, 10-27 TCS page -2,036.8 vs fills 45.0"
+      ],
+      "root_cause": "BUG fixed 2026-10-26 (exit resend after a timeout); the extra fills opened TCS +124 / ICICIBANK -162 legs that the sandbox later closed.",
+      "fix": "",
+      "fix_commit": "",
+      "verification": "",
+      "sources": [],
+      "history": [
+        {
+          "at": "2026-10-31T17:17:55+05:30",
+          "status": "open",
+          "note": "recorded"
+        }
+      ],
+      "created_at": "2026-10-31T17:17:55+05:30",
+      "updated_at": "2026-10-31T17:17:55+05:30"
+    },
+    {
+      "id": "BUG-011",
+      "title": "eod.sh 'Errors logged today' section was always empty",
+      "kind": "BUG",
+      "severity": "LOW",
+      "status": "fixed",
+      "area": "signal_engine",
+      "strategies": [],
+      "first_seen": "2026-10-31",
+      "last_seen": "2026-10-31",
+      "occurrences": [
+        "2026-10-31"
+      ],
+      "impact": "The EOD report never listed the day's engine errors; the regression check's counts were the only signal.",
+      "evidence": [],
+      "root_cause": "It parsed a loguru 'record' wrapper the JSON error log no longer writes (keys are time/level/logger/message), and swallowed every line.",
+      "fix": "Section removed from eod.sh; error analysis is the close-day 'logs' step (signal_engine/ops/logscan.py), tested in test_ops_phases.py.",
+      "fix_commit": "",
+      "verification": "",
+      "sources": [],
+      "history": [
+        {
+          "at": "2026-10-31T17:34:48+05:30",
+          "status": "open",
+          "note": "recorded"
+        },
+        {
+          "at": "2026-10-31T17:34:48+05:30",
+          "status": "fixed",
+          "note": "fixed 2026-10-31 by moving the duty"
+        },
+        {
+          "at": "2026-10-31T17:36:41+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-10-30] 2026-10-30: path exercised, logs section populated with 79 error records in 20 signatures; held"
+        }
+      ],
+      "created_at": "2026-10-31T17:34:48+05:30",
+      "updated_at": "2026-10-31T17:36:41+05:30"
     }
   ]
 }

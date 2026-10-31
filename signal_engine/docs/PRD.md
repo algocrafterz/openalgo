@@ -6459,3 +6459,23 @@ Found in the 2026-10-26..30 sandbox week (bug tracker BUG-001, 003, 004, 006).
 - **Sizing decline wording (BUG-006).** The reason names the price band or the risk budget.
 - Not changed: history already booked from the phantom SUNPHARMA leg (BUG-002, data repaired in
   `strategy_positions`); the candle-boundary timeouts (BUG-007) are open.
+
+## Daily ops phases, critical-only Telegram, SUNPHARMA history replay (2026-10-31)
+
+- **Three phases, one duty per step** (owner request: no overlapping checks). open-day 09:12
+  (`signal_engine/ops/run_phase.sh open-day`: readiness, reads the engine's own startup checks),
+  liveness 09:27 (first runner cycle, first BreakingTrade scan, storms), close-day 15:36
+  (`close_day.sh`: backfill, eod, execution_health, logs, weekly on Fridays, jobs, review, notify).
+  Each step writes one output; the Claude review interprets them and re-runs nothing. Replaces the
+  six Orca automations, which never completed (interactive `claude` stuck on a sudo prompt, then
+  the app was not running at the scheduled times).
+- **Telegram: failures only.** `notify_level: alerts`; routine pre-trade declines are a new
+  `entry_declined` event and success banners `routine_status`, both dropped at alerts, except a
+  start or stop inside market hours. One scheduled message a day: the close-day verdict. The EOD
+  regression digest no longer posts on its own. Re-runs of an earlier day never post.
+- **BUG-002 history replay.** The 10-26 SELL 66 SUNPHARMA (order 26102613405788) re-tagged to
+  EVWAP-EARLY-PY in the sandbox, the strategy book and trades.db; EVWAP SUNPHARMA closed trades
+  10-26..30 rebuilt from fills; BREAKOUT-PY's missing 171-share stop exit added. Backups in
+  `db/backups/*-pre-bug002-replay-20261031.db`.
+- **eod.sh** no longer prints the errors section (always empty, BUG-011; now the `logs` step) and
+  reviews BreakingTrade for the requested day (BUG-009).

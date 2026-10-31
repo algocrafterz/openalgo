@@ -13,13 +13,19 @@ One prompt, one report, finished by 16:00 IST. The building blocks keep their ow
 
 | Time | What | Where |
 | --- | --- | --- |
+| 08:50 | OpenAlgo start, broker login, engine start | Windows task `openAlgoAutoStart` |
+| 09:10 | BreakingTrade poller start | Windows task `breakingTradeAutoStart` |
+| 09:12 | **open-day**: readiness checks; Telegram only if RED (`/open-day`) | cron, `signal_engine/ops/run_phase.sh` |
+| 09:27 | **liveness**: first cycle, first scan, storms; Telegram only if RED | cron, `run_phase.sh` |
 | 14:45 | Engine time exit, each strategy's own legs | signal_engine |
 | 14:55 | Square-off failsafe | Windows task `openAlgoSquareOff` |
 | 15:35 | Engine stopped | Windows task `breakingTradeAutoStop` |
-| 15:36 | `close_day.sh`: backfill (bg), `eod.sh`, execution health, Friday `weekly.sh`, unattended review | cron, one line |
-| ~15:50 | Review report + data readiness + step table | `signal_engine/reports/eod-<day>-claude-review.md` |
+| 15:36 | **close-day**: backfill (bg), eod, execution_health, logs, weekly (Fri), jobs, review, notify | cron, `close_day.sh` |
+| ~15:50 | Report, tracker updates, the day's one Telegram line | `eod-<day>-claude-review.md` |
 | 15:58 | Hard deadline inside `close_day.sh` | |
 | 16:00 | OpenAlgo stopped | Windows task `openAlgoAutoStop` |
+
+Every phase writes `signal_engine/reports/<phase>-<day>-status.tsv`; all of it is on `/logs/workflow`.
 
 After 16:00 OpenAlgo is down: a missed tradebook snapshot or backfill cannot be redone until the
 next start. Say so; do not pretend the numbers are fill-backed.
@@ -61,8 +67,8 @@ simulated account is **sandbox** (or analyzer mode), never "paper trading"; no e
    limit hit or within 20% of it is called out.
 7. **Bugs.** Per the `bug-tracker` skill: new entries, recurrences, and for each `fixed` entry
    whether today exercised its path and held. Name ids; do not re-describe tracked bugs.
-8. **Data for tomorrow.** The backfill verify lines (symbols behind must be 0 for both
-   intervals). In an interactive run, if anything is behind, use the `data-check` skill.
+8. **Data for tomorrow.** The backfill's `verify` lines for the day (symbols behind must be 0 for
+   both intervals). In an interactive run, if anything is behind, use the `data-check` skill.
 9. **Tomorrow.** Next session date from `db/openalgo.db` `market_holidays` (NSE) - a holiday
    tomorrow means no warm-up concerns. Code the engine will run: `git status --short --
    signal_engine` and the branch; uncommitted engine changes mean tomorrow runs untested code, so
@@ -82,12 +88,29 @@ simulated account is **sandbox** (or analyzer mode), never "paper trading"; no e
 Same report and order, with these limits:
 
 - Report-only: no file writes, no commits, no database changes, no fixes. Describe fixes.
-- Read the deterministic outputs (`eod-<day>.md`, `execution-health-<day>.md`, the status file);
-  never re-run them. Do not query `historify.duckdb`: the backfill is writing it.
-- Sections 8 (data) and the step table are appended by `close_day.sh` after the backfill ends;
-  write "appended below" for section 8.
-- Time is bounded: if short, finish sections 1-3 and the bug-tracker block first.
-- End with the bug-tracker block (`bug-tracker` skill, "Unattended runs").
+- Read the step outputs; never re-run them, and never redo their duty:
+
+  | Step | Output it owns | Report section |
+  | --- | --- | --- |
+  | `eod` | `eod-<day>.md` (snapshot, ledger, pages vs fills, regression check) | 2, 3 |
+  | `execution_health` | `execution-health-<day>.md` | 5 |
+  | `logs` | `logs-<day>.md` (error signatures, NEW/RISING vs 5 sessions) | 5 |
+  | `weekly` (Fri) | `weekly-<mon>-to-<fri>.md` | 10 |
+  | `backfill` | `signal_engine/logs/backfill_cron.log`, the day's `verify` lines | 8 |
+  | `jobs` | `jobs-<day>.md` (Windows tasks, crontab, phase status files) | 9 |
+  | open-day, liveness | `open-day-<day>.md`, `liveness-<day>.md` (morning) | 1, 2 |
+
+- Time is bounded: if short, finish sections 1-3, the verdict block and the bug-tracker block first.
+- End with two blocks: `close-day-verdict` (JSON: verdict GREEN/AMBER/RED and one plain line for
+  Telegram) and then the `bug-tracker` block. The `notify` step sends only that verdict line.
+
+## Telegram
+
+One scheduled message per trading day: the close-day verdict line (silence means the automation
+did not run). open-day and liveness send only when RED. The engine sends failures and safety
+alerts only (`notify_level: alerts` in `signal_engine/config.yaml`); outcomes, routine declines and
+success banners are on the Strategy P&L pages and in these reports, and a start or stop inside
+market hours always alerts. Everything is visible at `/logs/workflow`.
 
 ## Holidays and partial days
 
