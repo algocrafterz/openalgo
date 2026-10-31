@@ -6479,3 +6479,9 @@ Found in the 2026-10-26..30 sandbox week (bug tracker BUG-001, 003, 004, 006).
   `db/backups/*-pre-bug002-replay-20261031.db`.
 - **eod.sh** no longer prints the errors section (always empty, BUG-011; now the `logs` step) and
   reviews BreakingTrade for the requested day (BUG-009).
+- **Value areas stored daily.** VAH/POC/VAL were never stored: the BREAKOUT runner and backtests
+  rebuilt them from 1-minute bars on every run, and no enabled strategy reads them today.
+  `signal_engine/features/value_area_store.py` keeps one row per symbol per session in
+  `signal_engine/data/value_areas.db` (Pine-parity profile from `features/value_area.py`,
+  parameters stored per row); the close-day `value_areas` step adds each session after the
+  backfill and checks coverage. History rebuilt with `build --full` on 2026-10-31.

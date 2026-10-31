@@ -20,7 +20,7 @@ One prompt, one report, finished by 16:00 IST. The building blocks keep their ow
 | 14:45 | Engine time exit, each strategy's own legs | signal_engine |
 | 14:55 | Square-off failsafe | Windows task `openAlgoSquareOff` |
 | 15:35 | Engine stopped | Windows task `breakingTradeAutoStop` |
-| 15:36 | **close-day**: backfill (bg), eod, execution_health, logs, weekly (Fri), jobs, review, notify | cron, `close_day.sh` |
+| 15:36 | **close-day**: backfill (bg), eod, execution_health, logs, weekly (Fri), value_areas, jobs, review, notify | cron, `close_day.sh` |
 | ~15:50 | Report, tracker updates, the day's one Telegram line | `eod-<day>-claude-review.md` |
 | 15:58 | Hard deadline inside `close_day.sh` | |
 | 16:00 | OpenAlgo stopped | Windows task `openAlgoAutoStop` |
@@ -68,7 +68,9 @@ simulated account is **sandbox** (or analyzer mode), never "paper trading"; no e
 7. **Bugs.** Per the `bug-tracker` skill: new entries, recurrences, and for each `fixed` entry
    whether today exercised its path and held. Name ids; do not re-describe tracked bugs.
 8. **Data for tomorrow.** The backfill's `verify` lines for the day (symbols behind must be 0 for
-   both intervals). In an interactive run, if anything is behind, use the `data-check` skill.
+   both intervals) and the value-area coverage (`value-areas-<day>.md`: every symbol with 1-minute
+   bars has the day's VAH/POC/VAL). In an interactive run, if anything is behind, use the
+   `data-check` skill.
 9. **Tomorrow.** Next session date from `db/openalgo.db` `market_holidays` (NSE) - a holiday
    tomorrow means no warm-up concerns. Code the engine will run: `git status --short --
    signal_engine` and the branch; uncommitted engine changes mean tomorrow runs untested code, so
@@ -97,6 +99,7 @@ Same report and order, with these limits:
   | `logs` | `logs-<day>.md` (error signatures, NEW/RISING vs 5 sessions) | 5 |
   | `weekly` (Fri) | `weekly-<mon>-to-<fri>.md` | 10 |
   | `backfill` | `signal_engine/logs/backfill_cron.log`, the day's `verify` lines | 8 |
+  | `value_areas` | `value-areas-<day>.md` (the day's VAH/POC/VAL rows in `signal_engine/data/value_areas.db`, coverage) | 8 |
   | `jobs` | `jobs-<day>.md` (Windows tasks, crontab, phase status files) | 9 |
   | open-day, liveness | `open-day-<day>.md`, `liveness-<day>.md` (morning) | 1, 2 |
 

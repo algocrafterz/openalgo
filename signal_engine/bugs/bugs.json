@@ -573,6 +573,40 @@
       ],
       "created_at": "2026-10-31T17:34:48+05:30",
       "updated_at": "2026-10-31T17:36:41+05:30"
+    },
+    {
+      "id": "BUG-012",
+      "title": "Two value-area implementations give different VAH/POC/VAL",
+      "kind": "DATA",
+      "severity": "MEDIUM",
+      "status": "open",
+      "area": "signal_engine",
+      "strategies": [
+        "BREAKOUT-PY"
+      ],
+      "first_seen": "2026-10-31",
+      "last_seen": "2026-10-31",
+      "occurrences": [
+        "2026-10-31"
+      ],
+      "impact": "Backtests of value_area_fade and open_drive use backtest/volume_profile.py (close-only bins, MarketProfile library); the breakout runner and the stored dataset use features/value_area.py (volume spread over each bar's range). A result from one does not transfer to the other.",
+      "evidence": [
+        "signal_engine/backtest/volume_profile.py docstring; signal_engine/features/value_area.py docstring"
+      ],
+      "root_cause": "Two modules written for different purposes; volume_profile.py's own docstring says it bins on the close only.",
+      "fix": "",
+      "fix_commit": "",
+      "verification": "",
+      "sources": [],
+      "history": [
+        {
+          "at": "2026-10-31T18:54:09+05:30",
+          "status": "open",
+          "note": "recorded"
+        }
+      ],
+      "created_at": "2026-10-31T18:54:09+05:30",
+      "updated_at": "2026-10-31T18:54:09+05:30"
     }
   ]
 }

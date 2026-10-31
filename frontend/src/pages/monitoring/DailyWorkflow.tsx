@@ -49,6 +49,7 @@ const CHECK_TITLES: Record<string, string> = {
   'open-day': 'Open: readiness checks',
   liveness: 'After the open: liveness checks',
   logs: 'Close: errors today',
+  'value-areas': 'Close: value areas (VAH / POC / VAL)',
   jobs: 'Close: scheduled jobs',
 }
 

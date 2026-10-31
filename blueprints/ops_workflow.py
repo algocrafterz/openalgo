@@ -28,7 +28,7 @@ REPORTS_DIR = os.path.join(
 
 PHASES = ("open-day", "liveness", "close-day")
 #: Phase or step reports with a machine-readable verdict next to them.
-CHECKED = ("open-day", "liveness", "logs", "jobs")
+CHECKED = ("open-day", "liveness", "logs", "value-areas", "jobs")
 _DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 #: A report the page may open: a plain file name in REPORTS_DIR, nothing else.
 _REPORT = re.compile(

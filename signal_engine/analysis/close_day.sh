@@ -12,7 +12,7 @@
 #   15:36  backfill   backfill_cron.sh in the background (needs OpenAlgo; about 7 minutes)
 #   15:36  eod        eod.sh: tradebook snapshot, ledger, pages vs fills, regression check (< 1 min)
 #   15:37  execution_health, logs (error signatures), Fridays weekly (seconds each)
-#   ~15:43 backfill joined; jobs (scheduled-job audit, seconds)
+#   ~15:43 backfill joined; value_areas (the day's VAH/POC/VAL rows); jobs (scheduled-job audit)
 #   ~15:43 review     Claude close-day review, report-only, reads every output above (2-10 minutes)
 #   ~15:50 notify     the day's single Telegram line (verdict); hard deadline 15:58
 #
@@ -109,6 +109,9 @@ if [ "$(date -d "$DAY" +%u)" -eq 5 ]; then
 fi
 
 wait "$BACKFILL_PID"
+
+# Needs the session's 1-minute bars, so after the backfill; reads Historify only.
+step value_areas "${OPS[@]}" value-areas --day "$DAY" >> "$LOGS/ops_cron.log" 2>&1
 
 step jobs "${OPS[@]}" jobs --day "$DAY" >> "$LOGS/ops_cron.log" 2>&1
 
