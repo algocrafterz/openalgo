@@ -6439,3 +6439,23 @@ good in the paper month only because the market was falling.
 - `signal_engine/shadow/` records Quote-mode ticks from the WebSocket proxy and compares 5-minute bars built from them with Flattrade history. Read-only: no strategy reads these bars and no order path is touched.
 - Purpose: the runner spends 40 history calls per 5-minute boundary against the account's 110 per minute cap. Whether tick-built bars could replace them is decided only by the acceptance criteria in `docs/SHADOW-TICK-CANDLES.md` over at least 5 sessions.
 - Status: tooling and unit tests done; no trading session recorded yet.
+
+## Restart and timed-out-exit bookkeeping fixes (2026-10-31)
+
+Found in the 2026-10-26..30 sandbox week (bug tracker BUG-001, 003, 004, 006).
+
+- **Timed-out exit booked under the cancelled stop (BUG-001, four days running).** The sweep's
+  FILLED branch now sets `pos.sl_order_id` to the exit that filled, and a full exit records its
+  label in `TrackedPosition.claimed_exit` before sending, so the poll books a TRAILING_STOP close
+  as TRAILING_STOP, not "SL". P&L was already right; ids and labels were wrong.
+- **Second entry after a restart (BUG-003, BEL 2026-10-28).** The per-symbol counts were
+  in-memory only; startup now seeds them from restored positions
+  (`RiskEngine.seed_concentration`), and the entry gate declines a symbol the strategy already
+  tracks. Before, the second entry replaced the first in the tracker and the duplicate-stop
+  cleanup cancelled the first leg's stop.
+- **Leg hidden behind another strategy's position (BUG-004, HDFCBANK -1,049 unbooked).** Startup
+  books such a leg from its own completed closing order (same strategy tag, opposite side, full
+  size) with the real order id, or alerts; it never guesses.
+- **Sizing decline wording (BUG-006).** The reason names the price band or the risk budget.
+- Not changed: history already booked from the phantom SUNPHARMA leg (BUG-002, data repaired in
+  `strategy_positions`); the candle-boundary timeouts (BUG-007) are open.

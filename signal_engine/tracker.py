@@ -90,8 +90,12 @@ _FILL_WAIT = "wait"  # status still unresolved — retry on the next poll
 _FILL_ORPHANED = "orphaned"  # order never traded — slot released, no trade recorded
 
 
-def _poll_close_exit_types(exit_types: list) -> list:
+def _poll_close_exit_types(exit_types: list, claimed: str = "") -> list:
     """Labels for a close the poll found on the broker: the stop, unless another path claimed it.
+
+    `claimed` is the label of a full exit that was sent but timed out (TrackedPosition.claimed_exit):
+    its order filled, so the close is that exit's, not the stop's (ADANIENT and JSWENERGY
+    2026-10-30 were TRAILING_STOP exits booked as "SL").
 
     Only assume an SL hit when no other path has already claimed this exit: a no-progress market
     exit tags NO-PROGRESS before the close is detected (all four of 2026-09-11's closes were
@@ -100,6 +104,8 @@ def _poll_close_exit_types(exit_types: list) -> list:
     RELIANCE ORB was booked "Closed by tracker (TP1)" after its stop closed the second half).
     """
     labels = list(exit_types or [])
+    if claimed:
+        return labels + [claimed]
     if not labels or labels[-1].upper().startswith("TP"):
         labels.append("SL")
     return labels
@@ -216,6 +222,7 @@ class TrackedPosition:
     sl_order_id: str = ""
     exit_pending: bool = False  # True while an exit handler is actively processing this position
     stop_filled_in_cancel: bool = False  # a stop filled while the exit sweep cancelled it
+    claimed_exit: str = ""  # label of a full exit sent but unconfirmed (timed out); "" = none
     fill_price: float = 0.0  # Actual broker fill price for the entry order (0 = unknown)
     original_quantity: int = 0  # Set by register() — qty at entry, unchanged through partial exits
     realized_pnl: float = (
@@ -399,6 +406,10 @@ class PositionTracker:
     def _key(symbol: str, strategy: str) -> str:
         """Normalise lookup key — upper-case both components to absorb case drift in signals."""
         return f"{symbol.upper()}:{strategy.upper()}"
+
+    def tracked_positions(self) -> list[TrackedPosition]:
+        """A snapshot of every tracked position."""
+        return list(self._positions.values())
 
     def register(self, position: TrackedPosition) -> None:
         """Register a new position to track. Sets original_quantity from quantity if not provided."""
@@ -1528,7 +1539,7 @@ class PositionTracker:
             pos,
             pnl_delta=pnl_delta,
             exit_price=exit_price,
-            exit_types=_poll_close_exit_types(pos.exit_types),
+            exit_types=_poll_close_exit_types(pos.exit_types, pos.claimed_exit),
             hold_minutes=int(age.total_seconds() / 60),
             max_trades=_settings.max_trades_per_day,
         )

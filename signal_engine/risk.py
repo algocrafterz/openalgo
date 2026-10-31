@@ -528,6 +528,20 @@ class RiskEngine:
 
         return qty
 
+    def zero_quantity_reason(self, signal: Signal) -> str:
+        """Why calculate_quantity() returned 0 for this signal, in words a trader can act on.
+
+        The price band is checked first, as calculate_quantity() does. 2026-10-26..29: ORB
+        declines for TATASTEEL at 169.10 said "entry price too high" when the entry was below
+        the 300 minimum.
+        """
+        min_price, max_price = self._price_band_for(signal.strategy)
+        if min_price > 0 and signal.entry < min_price:
+            return f"entry {signal.entry:.2f} is below the strategy's minimum price {min_price:g}"
+        if max_price > 0 and signal.entry > max_price:
+            return f"entry {signal.entry:.2f} is above the strategy's maximum price {max_price:g}"
+        return f"risk budget buys less than 1 share at entry {signal.entry:.2f}"
+
     def _price_band_for(self, strategy: str) -> tuple:
         """(min_entry_price, max_entry_price) for this strategy, falling back to the global
         band when the strategy has no override.
@@ -795,6 +809,24 @@ class RiskEngine:
             return True
         held = self._positions_by_sector.get((self._concentration_key(strategy), sector), 0)
         return held + self._pending_in_sector(strategy, sector) < self.max_positions_per_sector
+
+    def seed_concentration(self, held) -> None:
+        """Count positions restored after a restart, as (strategy, symbol) pairs.
+
+        The symbol/sector counts live in memory only, so a restart left them empty and the
+        one-position-per-symbol cap passed a second entry on a name still held (EVWAP BEL
+        2026-10-28: restored at 11:06, re-entered at 11:55). A count already above the restored
+        figure is kept, so calling this twice never double counts.
+        """
+        per_symbol: dict[tuple, int] = defaultdict(int)
+        for strategy, symbol in held:
+            if symbol:
+                per_symbol[(strategy, symbol)] += 1
+        for (strategy, symbol), count in per_symbol.items():
+            key = self._concentration_key(strategy)
+            missing = count - self._positions_by_symbol.get((key, symbol), 0)
+            if missing > 0:
+                self._adjust_concentration(strategy, symbol, missing)
 
     def _adjust_concentration(self, strategy: str, symbol: str, delta: int) -> None:
         """Move this STRATEGY's symbol/sector position counts by delta, never below zero."""

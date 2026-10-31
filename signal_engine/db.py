@@ -477,7 +477,8 @@ def fetch_all_open_positions() -> list:
         conn = _get_connection()
         rows = conn.execute(
             """
-            SELECT strategy, symbol, direction, entry, sl, tp, quantity, order_id, executed_at, sig_id
+            SELECT strategy, symbol, direction, entry, sl, tp, quantity, order_id, executed_at, sig_id,
+                   fill_price
             FROM trades
             WHERE status = 'SUCCESS' AND direction IN ('LONG', 'SHORT', 'EXIT')
               AND date(executed_at) = ?
@@ -490,7 +491,7 @@ def fetch_all_open_positions() -> list:
         return []
 
     latest = {}
-    for strategy, symbol, direction, entry, sl, tp, qty, order_id, executed_at, sig_id in rows:
+    for strategy, symbol, direction, entry, sl, tp, qty, order_id, executed_at, sig_id, fill in rows:
         latest[(strategy, symbol)] = {
             "strategy": strategy,
             "symbol": symbol,
@@ -502,6 +503,7 @@ def fetch_all_open_positions() -> list:
             "order_id": str(order_id or ""),
             "executed_at": str(executed_at or ""),
             "sig_id": str(sig_id or ""),
+            "fill_price": float(fill or 0.0),
         }
     return [v for v in latest.values() if v["direction"] in ("LONG", "SHORT")]
 
@@ -521,6 +523,7 @@ def save_reconciled_exit(
     pnl: float,
     note: str,
     sig_id: "str | None" = None,
+    order_id: str = RECONCILED_ORDER_ID,
 ) -> None:
     """Backfill an EXIT row for a position the broker had already closed by the time the engine
     restarted - see startup.reconcile_open_positions(). The exact fill time, and whether it
@@ -543,7 +546,7 @@ def save_reconciled_exit(
                 sl,
                 tp,
                 quantity,
-                RECONCILED_ORDER_ID,
+                order_id,
                 "SUCCESS",
                 note,
                 "",

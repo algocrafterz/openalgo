@@ -8,10 +8,11 @@ rather than imported, so this module holds no global state of its own.
 import asyncio
 import signal as signal_module
 import sys
+from datetime import datetime
 
 from loguru import logger
 
-from signal_engine import mode_guard, notifier
+from signal_engine import mode_guard, notifier, order_reconcile
 from signal_engine.api_client import fetch_available_capital, fetch_trading_mode
 from signal_engine.config import settings
 from signal_engine.db import fetch_last_entry_trade, set_trade_mode
@@ -20,6 +21,7 @@ from signal_engine.logger_setup import set_mode as set_log_mode
 from signal_engine.models import Direction
 from signal_engine.pipeline import service, single_source
 from signal_engine.runtime import apply_trade_mode
+from signal_engine.timeutils import IST
 from signal_engine.tracker import TimeExitScheduler, TrackedPosition
 
 # ---------------------------------------------------------------------------
@@ -384,6 +386,81 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
     await _alert_unmatched_positions(unmatched)
     if restored > 0:
         logger.info(f"Tracker restoration complete: {restored}/{actual_open} position(s) restored")
+    risk_engine.seed_concentration((p.strategy, p.symbol) for p in tracker.tracked_positions())
+    await _book_legs_hidden_by_another_strategy(
+        locally_open, open_broker_symbols, tracker, risk_engine
+    )
+
+
+async def _book_legs_hidden_by_another_strategy(
+    locally_open, open_broker_symbols, tracker, risk_engine
+) -> None:
+    """Book the close of a leg that the broker's net position hides behind another strategy's.
+
+    The flat-symbol check above only sees a symbol the broker shows flat, and the restore only
+    adopts legs on the broker's net side. HDFCBANK 2026-10-28: EVWAP's 259 short was stopped
+    out (BUY 259 @ 678.6, its own stop order) while BREAKINGTRADE held 131 long, so the symbol
+    was not flat, the short was not restored, and its -1,049 was never booked. A leg is booked
+    only on its own completed closing order (same strategy tag, opposite side, full size);
+    without one it is alerted, never guessed.
+    """
+    from signal_engine import db
+    from signal_engine.api_client import fetch_order_fill_price, fetch_orderbook
+
+    hidden = [
+        leg for leg in locally_open
+        if leg["symbol"] in open_broker_symbols
+        and tracker.find_position(leg["symbol"], leg["strategy"]) is None
+    ]
+    if not hidden:
+        return
+    book = await fetch_orderbook()
+    if book is None:
+        logger.critical(
+            f"Reconciliation: legs {[(leg['strategy'], leg['symbol']) for leg in hidden]} are open in "
+            "trades.db, not tracked, and the order book is unreadable - verify them at the broker"
+        )
+        return
+
+    async def read_book():
+        return book
+
+    for leg in hidden:
+        is_long = leg["direction"] == "LONG"
+        result = await order_reconcile.reconcile_timed_out_order(
+            symbol=leg["symbol"], action="SELL" if is_long else "BUY", quantity=leg["quantity"],
+            since=_executed_at_ist(leg["executed_at"]), fetch_orderbook=read_book,
+            attempts=1, delay=0.0, strategy=leg["strategy"],
+        )
+        if result.outcome != order_reconcile.FILLED:
+            logger.critical(
+                f"Reconciliation: {leg['symbol']} [{leg['strategy']}] {leg['direction']} "
+                f"{leg['quantity']} is open in trades.db but not tracked, and no closing order of its "
+                f"own was found ({result.outcome}) - verify it at the broker"
+            )
+            continue
+        exit_price = await fetch_order_fill_price(result.order_id, leg["strategy"]) or 0.0
+        base = leg.get("fill_price") or leg["entry"]
+        pnl = (exit_price - base) * leg["quantity"] * (1 if is_long else -1) if exit_price else 0.0
+        note = (
+            f"Reconciled at startup: {leg['symbol']} closed by this strategy's own order "
+            f"{result.order_id} at {exit_price:.2f} while another strategy held the symbol."
+        )
+        logger.warning(note)
+        db.save_reconciled_exit(
+            leg["strategy"], leg["symbol"], leg["entry"], leg["sl"], leg["tp"], leg["quantity"],
+            exit_price, pnl, note, sig_id=leg.get("sig_id"), order_id=result.order_id,
+        )
+        risk_engine.record_close(pnl, strategy=leg["strategy"], symbol=leg["symbol"])
+
+
+def _executed_at_ist(executed_at: str) -> datetime:
+    """trades.db stores naive IST; an unreadable stamp falls back to the start of today."""
+    try:
+        stamp = datetime.fromisoformat(executed_at)
+    except (TypeError, ValueError):
+        stamp = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=IST)
 
 
 #: Order types that ARE the bracket stop. A working LIMIT order is something else entirely

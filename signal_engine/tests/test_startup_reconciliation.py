@@ -7,7 +7,7 @@ all - so nothing about it was ever detected, trades.db kept showing it open fore
 realised-loss counter never saw its P&L. HINDALCO, 2026-09-08.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -25,6 +25,11 @@ def _engine_with_open(open_positions: int, **overrides):
     engine = _engine(**overrides)
     engine._state("BREAKOUT").open_positions = open_positions
     return engine
+
+
+def _tracker():
+    """The tracker's API is synchronous: every symbol reads as already tracked, nothing restored."""
+    return MagicMock(find_position=MagicMock(return_value=object()), tracked_positions=MagicMock(return_value=[]))
 
 
 def _local_position(**overrides) -> dict:
@@ -49,7 +54,7 @@ class TestClosedWhileDown:
     @pytest.mark.asyncio
     async def test_reconciles_a_position_closed_while_the_engine_was_down(self):
         risk_engine = _engine_with_open(1)
-        tracker = AsyncMock()
+        tracker = _tracker()
         closed_row = {
             "symbol": "HINDALCO",
             "quantity": 0,
@@ -84,7 +89,7 @@ class TestClosedWhileDown:
     async def test_updates_the_realised_loss_counter(self):
         """The actual bug: not just "an exit gets recorded" but "risk tracking sees the loss"."""
         risk_engine = _engine_with_open(1)
-        tracker = AsyncMock()
+        tracker = _tracker()
         closed_row = {
             "symbol": "HINDALCO",
             "quantity": 0,
@@ -113,7 +118,7 @@ class TestClosedWhileDown:
         return`) would have skipped reconciliation entirely here, even though trades.db has a
         real open position the broker has already closed."""
         risk_engine = _engine_with_open(0)
-        tracker = AsyncMock()
+        tracker = _tracker()
         closed_row = {
             "symbol": "HINDALCO",
             "quantity": 0,
@@ -139,7 +144,7 @@ class TestClosedWhileDown:
     async def test_still_genuinely_open_position_is_left_to_the_restore_path(self):
         """A position that IS still open at the broker must not be treated as closed."""
         risk_engine = _engine_with_open(1)
-        tracker = AsyncMock()
+        tracker = _tracker()
         still_open_row = {"symbol": "HINDALCO", "quantity": 107, "product": "MIS", "ltp": 1030.0}
 
         with (
@@ -160,7 +165,7 @@ class TestClosedWhileDown:
         """No broker record at all (not even a flat one) - nothing to reconcile from, so this
         must not guess a P&L. Logs a warning and moves on."""
         risk_engine = _engine_with_open(1)
-        tracker = AsyncMock()
+        tracker = _tracker()
 
         with (
             patch("signal_engine.db.fetch_all_open_positions", return_value=[_local_position()]),
@@ -174,7 +179,7 @@ class TestClosedWhileDown:
     @pytest.mark.asyncio
     async def test_nothing_local_and_nothing_stored_is_a_true_no_op(self):
         risk_engine = _engine_with_open(0)
-        tracker = AsyncMock()
+        tracker = _tracker()
 
         with (
             patch("signal_engine.db.fetch_all_open_positions", return_value=[]),
@@ -187,7 +192,7 @@ class TestClosedWhileDown:
     @pytest.mark.asyncio
     async def test_positionbook_unreachable_skips_without_crashing(self):
         risk_engine = _engine_with_open(1)
-        tracker = AsyncMock()
+        tracker = _tracker()
 
         with (
             patch("signal_engine.db.fetch_all_open_positions", return_value=[_local_position()]),

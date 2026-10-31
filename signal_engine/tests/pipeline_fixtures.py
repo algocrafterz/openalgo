@@ -42,4 +42,5 @@ def tracker_mock() -> MagicMock:
     m.send_day_summary = AsyncMock()
     m.maybe_send_day_summary = AsyncMock()
     m.fetch_own_position = AsyncMock(return_value=0)
+    m.find_position = MagicMock(return_value=None)  # an empty tracker: nothing held yet
     return m

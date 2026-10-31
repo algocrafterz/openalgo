@@ -453,7 +453,25 @@ class TestSweeper:
         _mark_exit()
         await _sweep([[_filled_row("F1")]], position=pos)
         assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None
-        assert pos.sl_order_id == "SL-1"
+        # No stop is placed: the id now names the exit that filled, not a new stop.
+        assert pos.sl_order_id == "F1"
+
+    async def test_exit_found_filled_books_under_the_exit_order_not_the_cancelled_stop(self):
+        # JSWENERGY 2026-10-30: the exit 26103036923667 timed out, the sweep found it complete,
+        # and the poll booked the close under the cancelled stop 26103035121544.
+        pos = _tracked(symbol="JSWENERGY", qty=134, sl_id="26103035121544")
+        pos.claimed_exit = "TRAILING_STOP"
+        _mark_exit(symbol="JSWENERGY", qty=134)
+        await _sweep([[_filled_row("26103036923667", symbol="JSWENERGY", qty=134)]], position=pos)
+        assert pos.sl_order_id == "26103036923667"
+        assert pos.claimed_exit == "TRAILING_STOP"
+
+    async def test_exit_absent_and_stop_restored_drops_the_exit_claim(self):
+        pos = _tracked()
+        pos.claimed_exit = "TRAILING_STOP"
+        _mark_exit()
+        await _sweep([[]], position=pos)
+        assert pos.claimed_exit == ""
 
     async def test_still_unreadable_keeps_the_hold_and_alerts_once_per_window(self):
         pos = _tracked()
@@ -883,11 +901,33 @@ class TestAbsentExitRestoresOnlyOnPositionProof:
         oc.mark_uncertain(replace(pending, watch_until=datetime.now(IST) + timedelta(seconds=60)))
         await _sweep([[_filled_row("LATE1")]], position=pos, own_qty=0)
         assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None
-        assert pos.sl_order_id == "SL-1"
+        assert pos.sl_order_id == "LATE1"  # the filled exit, no stop restored
 
     async def test_late_fill_seen_at_the_first_read_after_the_watch_is_not_reprotected(self):
         pos = _tracked()
         self._expired_exit()
         await _sweep([[_filled_row("LATE2")]], position=pos, own_qty=0)
         assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None
-        assert pos.sl_order_id == "SL-1"  # FILLED path: no stop restored
+        assert pos.sl_order_id == "LATE2"  # FILLED path: the filled exit, no stop restored
+
+
+# ---- the label of a close the poll books after a timed-out exit ---------------------------
+
+class TestPollCloseLabel:
+    def test_unclaimed_close_is_the_stop(self):
+        from signal_engine.tracker import _poll_close_exit_types
+
+        assert _poll_close_exit_types([]) == ["SL"]
+        assert _poll_close_exit_types(["TP1"]) == ["TP1", "SL"]
+
+    def test_a_claimed_exit_keeps_its_own_label(self):
+        # ADANIENT and JSWENERGY 2026-10-30 were TRAILING_STOP exits booked as "SL".
+        from signal_engine.tracker import _poll_close_exit_types
+
+        assert _poll_close_exit_types([], "TRAILING_STOP") == ["TRAILING_STOP"]
+        assert _poll_close_exit_types(["TP1"], "TP2") == ["TP1", "TP2"]
+
+    def test_another_path_that_already_claimed_wins(self):
+        from signal_engine.tracker import _poll_close_exit_types
+
+        assert _poll_close_exit_types(["NO-PROGRESS"], "") == ["NO-PROGRESS"]

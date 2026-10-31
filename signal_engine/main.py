@@ -367,7 +367,12 @@ async def _handle_exit_locked(signal) -> None:
         await _resolve_failed_missed_stop_cancel(signal, pos)
         return
 
+    # A full exit that times out may still fill; the poll then books the close under this label
+    # instead of assuming the stop. Cleared unless the exit is held as unconfirmed.
+    pos.claimed_exit = (tp_level or "EXIT") if is_full_exit else ""
     exit_order, trade_result = await _place_exit_order(pos, exit_qty)
+    if trade_result.status != OrderStatus.TIMEOUT:
+        pos.claimed_exit = ""
 
     if trade_result.status == OrderStatus.SUCCESS:
         if not await _book_exit_result(signal, pos, tp_level, exit_qty, is_full_exit, trade_result):
@@ -1726,6 +1731,13 @@ async def _entry_passes_risk_gates(signal) -> bool:
         await _decline(signal, stage="risk_gates", reason=reason)
         return False
 
+    if tracker.find_position(signal.symbol, signal.strategy) is not None:
+        # The tracker holds one position per strategy and symbol: a second entry would replace
+        # the first, whose stop the duplicate-stop cleanup then cancels (BEL 2026-10-28).
+        logger.warning(f"{signal.strategy} already holds a tracked {signal.symbol} position, skipping")
+        await _decline(signal, stage="risk_gates", reason="symbol already held by this strategy")
+        return False
+
     if not risk_engine.can_trade_symbol(signal.symbol, signal.strategy):
         logger.warning(f"Symbol concentration limit reached for {signal.symbol}")
         await _decline(signal, stage="risk_gates", reason="symbol concentration limit")
@@ -1779,7 +1791,10 @@ async def _resolve_entry_quantity(
     quantity = risk_engine.calculate_quantity(signal, capital=sizing_capital)
     risk_based_quantity = quantity
     if quantity <= 0:
-        msg = f"Sizing returned 0 for {signal.symbol} — entry price too high for risk budget ({signal.entry:.2f} vs capital={sizing_capital:,.0f})"
+        msg = (
+            f"Sizing returned 0 for {signal.symbol}: {risk_engine.zero_quantity_reason(signal)} "
+            f"(capital={sizing_capital:,.0f})"
+        )
         logger.info(msg)
         await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
         await _decline(signal, stage="sizing", reason=msg)
@@ -2221,15 +2236,21 @@ async def sweep_unresolved_orders() -> None:
             else:
                 logger.warning(f"ENTRY {pending.symbol} [{pending.strategy}]: not on the broker, hold released")
             continue
+        pos = tracker.find_position(pending.symbol, pending.strategy)
         if result.outcome == order_reconcile.FILLED:
             logger.critical(
                 f"EXIT {pending.symbol} [{pending.strategy}] order {result.order_id} completed at the broker; "
                 "the tracker poll books the close"
             )
+            if pos is not None and result.order_id:
+                # book_close() writes pos.sl_order_id as the closing order: without this the close
+                # is booked under the stop cancelled before the exit (4 days running, 10-27..10-30).
+                pos.sl_order_id = result.order_id
             if result.duplicate_ids:
-                pos = tracker.find_position(pending.symbol, pending.strategy)
                 await _handle_duplicate_exit_fills(pos, pending.action, pending.quantity, result)
             continue
+        if pos is not None:
+            pos.claimed_exit = ""  # the exit never reached the broker: the close is not its own
         if decision == "flat":
             logger.critical(
                 f"EXIT {pending.symbol} [{pending.strategy}] is not on the broker yet the position is "

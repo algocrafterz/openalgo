@@ -473,3 +473,27 @@ class TestMaxSlPctForSizing:
         expected_rps = 490.8 * 0.015 * 1.10
         expected = int(150 / expected_rps)
         assert qty == expected
+
+
+class TestZeroQuantityReason:
+    """The decline message names the real cause (ORB TATASTEEL 169.10, 2026-10-26)."""
+
+    def test_below_the_minimum_price(self):
+        engine = _engine(min_entry_price=300, max_entry_price=5000)
+        signal = _make_signal(entry=169.1, sl=165.25, tp=172.18)
+        assert engine.calculate_quantity(signal, capital=100_000) == 0
+        assert engine.zero_quantity_reason(signal) == (
+            "entry 169.10 is below the strategy's minimum price 300"
+        )
+
+    def test_above_the_maximum_price(self):
+        engine = _engine(min_entry_price=300, max_entry_price=5000)
+        signal = _make_signal(entry=6000, sl=5990, tp=6020)
+        assert engine.zero_quantity_reason(signal) == (
+            "entry 6000.00 is above the strategy's maximum price 5000"
+        )
+
+    def test_inside_the_band_is_the_risk_budget(self):
+        engine = _engine()
+        signal = _make_signal(entry=50_000, sl=40_000, tp=60_000)
+        assert engine.zero_quantity_reason(signal).startswith("risk budget buys less than 1 share")

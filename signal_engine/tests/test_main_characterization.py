@@ -806,7 +806,7 @@ class TestEntryPostFill:
         adopted a second time — guards against a same-quantity coincidence."""
         tracker = _real_tracker()
         tracker.register(
-            _position(symbol="RELIANCE", strategy="ORB", entry_order_id="ALREADY_TRACKED")
+            _position(symbol="RELIANCE", strategy="BREAKOUT-PY", entry_order_id="ALREADY_TRACKED")
         )
         timeout_result = TradeResult(
             order_id="", status=OrderStatus.TIMEOUT, message="Request timed out"
