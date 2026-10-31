@@ -215,7 +215,7 @@ async def send_order(order: Order) -> TradeResult:
     payload = _placeorder_payload(order)
 
     try:
-        async with httpx.AsyncClient(timeout=settings.api_timeout) as client:
+        async with httpx.AsyncClient(timeout=settings.order_timeout) as client:
             response = await client.post(url, json=payload)
             data = (
                 response.json()

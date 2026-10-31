@@ -800,6 +800,12 @@ listener:
 api:
   # [tune] HTTP timeout and retry settings for OpenAlgo API calls.
   timeout: 5.0                   # Request timeout in seconds
+  # [tune] placeorder only (entries, exits, stops). The sandbox executes orders one at a time
+  # under one lock, so a burst after a candle close queues: 2026-10-30 10:15 six orders took
+  # 3.7, 3.8, 5.3, 8.7, 10.4 and 12.7 s, and every order past 5 s became an "uncertain" timeout
+  # (the source of BUG-001's bookkeeping errors). 20 s covers that burst; a genuine timeout still
+  # goes through the order-book reconcile and late-fill watch. BUG-007, 2026-10-31.
+  order_timeout: 20.0
   margin_retries: 3              # Retries for Margin API on network error (not on app errors)
 
   # [tune] A client-side timeout on the ENTRY order does not mean the broker never

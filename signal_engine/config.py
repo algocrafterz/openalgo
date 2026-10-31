@@ -243,6 +243,8 @@ class Settings:
 
     # API (from yaml)
     api_timeout: float
+    #: placeorder only (entries, exits, stops); every other call uses api_timeout. BUG-007.
+    order_timeout: float
     margin_api_retries: int
     entry_timeout_recovery_attempts: (
         int  # polls of the orderbook after an ambiguous entry-order timeout
@@ -878,6 +880,7 @@ def _build_settings() -> Settings:
         listener_max_retries=int(_require_key(listener, "listener", "max_retries")),
         listener_base_backoff=int(_require_key(listener, "listener", "base_backoff")),
         api_timeout=float(_require_key(api, "api", "timeout")),
+        order_timeout=float(api.get("order_timeout", _require_key(api, "api", "timeout"))),
         margin_api_retries=int(api.get("margin_retries", 3)),
         entry_timeout_recovery_attempts=int(api.get("entry_timeout_recovery_attempts", 3)),
         entry_timeout_recovery_delay_seconds=float(
