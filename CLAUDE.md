@@ -164,7 +164,7 @@ the source file in `docs/` and every reader sees the change.
 Detailed procedures live in `.claude/skills/` and load on demand:
 
 - **`ai-model-workflow`** — before any non-trivial task or any subagent spawn: which model (`opus` or `sonnet` alias only) does which phase
-- **`close-day`** — the single end-of-day entry point (`/close-day`): system health, paper strategy P&L, risk, bugs, data and tomorrow readiness; scheduled part is `signal_engine/analysis/close_day.sh` (cron 15:36 IST, done by 16:00)
+- **`close-day`** — the single end-of-day entry point (`/close-day`): system health, sandbox strategy P&L, risk, bugs, data and tomorrow readiness; scheduled part is `signal_engine/analysis/close_day.sh` (cron 15:36 IST, done by 16:00)
 - **`bug-tracker`** — record, fix, verify and close every defect a review finds; one entry per bug in `signal_engine/bugs/bugs.json`, shown at `/logs/bugs`
 - **`fd-audit`** — run after any change touching DB, WebSockets/streaming, threads/executors, subprocesses, files, or sockets
 - **`version-bump`** — releasing the platform, or bumping the pinned `openalgo` SDK (two unrelated version numbers)

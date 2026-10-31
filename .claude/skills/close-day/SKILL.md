@@ -1,6 +1,6 @@
 ---
 name: close-day
-description: The single end-of-day entry point for the OpenAlgo algo system - "/close-day [YYYY-MM-DD]". Checks that today's after-market jobs ran (close_day.sh), then reports how the system worked (flat at close, unprotected or orphan positions, execution health), how every paper strategy performed (gross, charges, net, week to date), risk-limit usage, bugs found or proven fixed (tracker), data readiness for tomorrow, and anything the owner must decide before the next open. Fridays add the weekly report. Use when asked to "close the day", "how did today go", "end of day review", "EOD", "how did the paper strategies do", or "are we ready for tomorrow". Replaces invoking eod, paper-review, execution-health and data-check one by one.
+description: The single end-of-day entry point for the OpenAlgo algo system - "/close-day [YYYY-MM-DD]". Checks that today's after-market jobs ran (close_day.sh), then reports how the system worked (flat at close, unprotected or orphan positions, execution health), how every sandbox strategy performed (gross, charges, net, week to date), risk-limit usage, bugs found or proven fixed (tracker), data readiness for tomorrow, and anything the owner must decide before the next open. Fridays add the weekly report. Use when asked to "close the day", "how did today go", "end of day review", "EOD", "how did the sandbox strategies do", or "are we ready for tomorrow". Replaces invoking eod, paper-review, execution-health and data-check one by one.
 ---
 
 # Close the day
@@ -39,7 +39,8 @@ next start. Say so; do not pretend the numbers are fill-backed.
 
 ## The report (both modes, in this order)
 
-Lead with the verdict; keep each section short. Every number names its source.
+Lead with the verdict; keep each section short. Every number names its source. Words: the
+simulated account is **sandbox** (or analyzer mode), never "paper trading"; no emojis.
 
 1. **Verdict, three lines.** Did the system run clean (yes / with issues / no)? Today's P&L, gross
    and after charges. Is anything open or unprotected now?
@@ -47,7 +48,7 @@ Lead with the verdict; keep each section short. Every number names its source.
    whole-account rebuild), no working orders left, no untracked broker fills (ledger "broker
    fills the engine never sent"), no position that ran without a stop (log: `TRACKING BLIND`,
    `no stop`, `UNCONFIRMED`). Any of these is HIGH and goes first.
-3. **Paper strategies, today.** One table: strategy, entries, gross (pages_vs_fills **fills**
+3. **Sandbox strategies, today.** One table: strategy, entries, gross (pages_vs_fills **fills**
    column), charges, net, win/loss, best and worst trade, declines by reason (grouped). Use fills,
    never the engine's `context.pnl` (it double counts partial exits). Note any strategy that did
    not trade and why (config change, filter, retired), from evidence.
@@ -67,8 +68,12 @@ Lead with the verdict; keep each section short. Every number names its source.
    signal_engine` and the branch; uncommitted engine changes mean tomorrow runs untested code, so
    say which files. Config changes today (`git log --since <day> -- signal_engine/config.yaml`).
    Open decisions for the owner, one line each.
-10. **Fridays: the week.** `weekly.sh` output (`signal_engine/reports/weekly-*.md`) plus the
-    `paper-review` skill's "Weekly report" and the `bug-tracker` "Weekly sweep".
+10. **Fridays: the week, a full section, not a pointer to section 4.** Per strategy: days traded,
+    entries, gross, charges, net (gross and charges summed from each day's `pages_vs_fills` run;
+    `weekly.sh`'s `signal_engine/reports/weekly-*.md` has gross only), win rate, and one note;
+    then the account total after charges, the clean-session count, config changes in the week,
+    and the `bug-tracker` "Weekly sweep" (open, fixed-but-unproven, verified this week). The
+    `paper-review` skill's "Weekly report" section has the method.
 11. **In plain words**, 4-8 sentences for a trader: what the system did, what it made or lost after
     charges in a ₹1,00,000-account example, what (if anything) needs attention before the open.
 

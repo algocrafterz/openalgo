@@ -141,7 +141,11 @@ for line in open('$LOGS/errors_$DAY.jsonl'):
   echo '## EOD regression check (trade / signal / system) — posted to Telegram'
   echo
   echo '```'
-  run -m signal_engine.analysis.eod_review "$DAY" 2>&1 || echo "(eod_review exited non-zero — see CHECK results above)"
+  # Only the same-day run posts to Telegram; a re-run of an earlier day prints the digest instead
+  # of announcing an old session as today's.
+  POST_FLAG=""
+  [ "$DAY" = "$(date +%F)" ] || POST_FLAG="--dry-run"
+  run -m signal_engine.analysis.eod_review "$DAY" $POST_FLAG 2>&1 || echo "(eod_review exited non-zero — see CHECK results above)"
   echo '```'
 } > "$REPORT"
 
