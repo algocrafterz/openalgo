@@ -1,0 +1,393 @@
+{
+  "version": 1,
+  "bugs": [
+    {
+      "id": "BUG-001",
+      "title": "Timed-out exit that later fills is booked under the cancelled stop id and labelled SL",
+      "kind": "BUG",
+      "severity": "HIGH",
+      "status": "fixed",
+      "area": "signal_engine",
+      "strategies": [
+        "EVWAP-EARLY-PY"
+      ],
+      "first_seen": "2026-10-27",
+      "last_seen": "2026-10-30",
+      "occurrences": [
+        "2026-10-27",
+        "2026-10-28",
+        "2026-10-29",
+        "2026-10-30"
+      ],
+      "impact": "P&L is right, but the ledger names the wrong order and calls a trailing-stop exit a stop-loss, so reviews and EOD ledger checks fail daily.",
+      "evidence": [
+        "10-27 INDUSINDBK, TVSMOTOR booked under 26102734560840 / 26102741027393",
+        "10-29 ADANIENT row 3270 under cancelled stop 26102934224208",
+        "10-30 JSWENERGY row 3392, ADANIENT row 3404"
+      ],
+      "root_cause": "The FILLED branch of sweep_unresolved_orders (main.py) never gave the filled exit id to the tracked position; book_close() then wrote pos.sl_order_id (the cancelled stop), and _poll_close_exit_types() defaulted the label to SL.",
+      "fix": "Sweep sets pos.sl_order_id to the filled exit; a full exit records its label in TrackedPosition.claimed_exit before sending, and the poll books the close under it. Tests: test_exit_timeout_safety.py (JSWENERGY replay, TestPollCloseLabel).",
+      "fix_commit": "",
+      "verification": "",
+      "sources": [
+        "signal_engine/reports/eod-2026-10-27-claude-review.md",
+        "signal_engine/reports/eod-2026-10-30-claude-review.md"
+      ],
+      "history": [
+        {
+          "at": "2026-10-31T14:15:18+05:30",
+          "status": "open",
+          "note": "recorded"
+        },
+        {
+          "at": "2026-10-31T14:15:18+05:30",
+          "status": "open",
+          "note": "seen on 2026-10-28"
+        },
+        {
+          "at": "2026-10-31T14:15:18+05:30",
+          "status": "open",
+          "note": "seen on 2026-10-29"
+        },
+        {
+          "at": "2026-10-31T14:15:18+05:30",
+          "status": "open",
+          "note": "seen on 2026-10-30"
+        },
+        {
+          "at": "2026-10-31T14:15:19+05:30",
+          "status": "fixed",
+          "note": "fixed 2026-10-31, uncommitted; needs one clean session with a timed-out exit to verify"
+        }
+      ],
+      "created_at": "2026-10-31T14:15:18+05:30",
+      "updated_at": "2026-10-31T14:15:19+05:30"
+    },
+    {
+      "id": "BUG-002",
+      "title": "Phantom SUNPHARMA 66-share legs on the BREAKOUT-PY and EVWAP-EARLY-PY strategy pages",
+      "kind": "DATA",
+      "severity": "HIGH",
+      "status": "fixed",
+      "area": "openalgo-core",
+      "strategies": [
+        "BREAKOUT-PY",
+        "EVWAP-EARLY-PY"
+      ],
+      "first_seen": "2026-10-27",
+      "last_seen": "2026-10-30",
+      "occurrences": [
+        "2026-10-27",
+        "2026-10-28",
+        "2026-10-29",
+        "2026-10-30"
+      ],
+      "impact": "Strategy pages showed P&L the fills do not back: -600.6 on 10-28, +1,695.0 on 10-30; pages-vs-fills failed every day.",
+      "evidence": [
+        "strategy_closed_trades id 1062: phantom LONG 66 closed at -1,531.2"
+      ],
+      "root_cause": "10-26 10:33 restart restore attributed EVWAP's 66 shares to BREAKOUT-PY (_direction_name regression, fixed in 297ca5428). The strategy book kept strategy_positions rows 159 (-66) and 203 (+66).",
+      "fix": "Zeroed quantity and average_price on strategy_positions 159 and 203 (backup db/backups/openalgo-pre-sunpharma-phantom-fix-20261031.db). Already-closed rows on 10-27/28/30 keep the phantom realised P&L; not rewritten.",
+      "fix_commit": "",
+      "verification": "",
+      "sources": [
+        "signal_engine/reports/eod-2026-10-30-claude-review.md"
+      ],
+      "history": [
+        {
+          "at": "2026-10-31T14:15:19+05:30",
+          "status": "open",
+          "note": "recorded"
+        },
+        {
+          "at": "2026-10-31T14:15:19+05:30",
+          "status": "open",
+          "note": "seen on 2026-10-28"
+        },
+        {
+          "at": "2026-10-31T14:15:19+05:30",
+          "status": "open",
+          "note": "seen on 2026-10-29"
+        },
+        {
+          "at": "2026-10-31T14:15:20+05:30",
+          "status": "open",
+          "note": "seen on 2026-10-30"
+        },
+        {
+          "at": "2026-10-31T14:15:20+05:30",
+          "status": "fixed",
+          "note": "data fix 2026-10-31; pages-vs-fills on the next session must show no SUNPHARMA phantom leg"
+        }
+      ],
+      "created_at": "2026-10-31T14:15:19+05:30",
+      "updated_at": "2026-10-31T14:15:20+05:30"
+    },
+    {
+      "id": "BUG-003",
+      "title": "After a restart the one-position-per-symbol cap is empty, so a second entry replaces the first and its stop is cancelled",
+      "kind": "BUG",
+      "severity": "HIGH",
+      "status": "fixed",
+      "area": "signal_engine",
+      "strategies": [
+        "EVWAP-EARLY-PY"
+      ],
+      "first_seen": "2026-10-28",
+      "last_seen": "2026-10-28",
+      "occurrences": [
+        "2026-10-28"
+      ],
+      "impact": "A held position lost its stop and tracking for hours (BEL 218 short, 10:30 to 14:45); in live mode an unprotected position.",
+      "evidence": [
+        "log 2026-10-28 11:56:14 Duplicate SL for BEL confirmed cancelled ['26102805051735', '26102842746844']"
+      ],
+      "root_cause": "RiskEngine symbol counts are in memory only; startup restore registered positions without counting them, so can_trade_symbol passed EVWAP's 11:55 BEL entry; tracker.register overwrote the first leg and the duplicate-stop cleanup cancelled its stop 26102842746844.",
+      "fix": "Startup seeds the symbol counts from restored positions (RiskEngine.seed_concentration); entry gate declines a symbol the strategy already tracks. Tests: test_restart_position_guards.py.",
+      "fix_commit": "",
+      "verification": "",
+      "sources": [
+        "signal_engine/reports/eod-2026-10-28-claude-review.md"
+      ],
+      "history": [
+        {
+          "at": "2026-10-31T14:15:20+05:30",
+          "status": "open",
+          "note": "recorded"
+        },
+        {
+          "at": "2026-10-31T14:15:20+05:30",
+          "status": "fixed",
+          "note": "fixed 2026-10-31, uncommitted"
+        }
+      ],
+      "created_at": "2026-10-31T14:15:20+05:30",
+      "updated_at": "2026-10-31T14:15:20+05:30"
+    },
+    {
+      "id": "BUG-004",
+      "title": "Startup reconcile misses a leg closed while another strategy holds the same symbol",
+      "kind": "BUG",
+      "severity": "HIGH",
+      "status": "fixed",
+      "area": "signal_engine",
+      "strategies": [
+        "EVWAP-EARLY-PY"
+      ],
+      "first_seen": "2026-10-28",
+      "last_seen": "2026-10-28",
+      "occurrences": [
+        "2026-10-28"
+      ],
+      "impact": "A stopped-out trade is never booked: HDFCBANK -1,049 missing from the engine's books and risk counters.",
+      "evidence": [
+        "HDFCBANK SHORT 259 @ 674.55, own stop 26102883531763 filled 11:05:21 @ 678.6"
+      ],
+      "root_cause": "The closed-while-down check only looks at symbols the broker shows flat; the restore adopts only legs on the broker's net side. EVWAP's short sat behind BREAKINGTRADE's long.",
+      "fix": "_book_legs_hidden_by_another_strategy books such a leg from its own completed closing order (same strategy tag, opposite side, full size) with the real order id, or alerts. Tests: test_restart_position_guards.py.",
+      "fix_commit": "",
+      "verification": "",
+      "sources": [
+        "signal_engine/reports/eod-2026-10-28-claude-review.md"
+      ],
+      "history": [
+        {
+          "at": "2026-10-31T14:15:21+05:30",
+          "status": "open",
+          "note": "recorded"
+        },
+        {
+          "at": "2026-10-31T14:15:21+05:30",
+          "status": "fixed",
+          "note": "fixed 2026-10-31, uncommitted"
+        }
+      ],
+      "created_at": "2026-10-31T14:15:21+05:30",
+      "updated_at": "2026-10-31T14:15:21+05:30"
+    },
+    {
+      "id": "BUG-005",
+      "title": "14:45 time exit used closeposition, which closed every strategy's positions",
+      "kind": "BUG",
+      "severity": "MEDIUM",
+      "status": "verified",
+      "area": "signal_engine",
+      "strategies": [
+        "BREAKINGTRADE",
+        "BREAKINGTRADE-RI",
+        "EVWAP-EARLY-PY"
+      ],
+      "first_seen": "2026-10-26",
+      "last_seen": "2026-10-28",
+      "occurrences": [
+        "2026-10-26",
+        "2026-10-28"
+      ],
+      "impact": "Other strategies' positions closed without being booked (10-28: JSWENERGY +849, TATAPOWER -501, BEL).",
+      "evidence": [],
+      "root_cause": "OpenAlgo /closeposition ignores the strategy tag.",
+      "fix": "Time exit closes only the strategy's own tracked MIS legs, one order each (tracker._close_strategy).",
+      "fix_commit": "d2bfbffdc",
+      "verification": "10-29 and 10-30 EOD: no untagged close-all fills, no cross-strategy closes.",
+      "sources": [
+        "signal_engine/reports/eod-2026-10-26-claude-review.md",
+        "signal_engine/reports/eod-2026-10-28-claude-review.md"
+      ],
+      "history": [
+        {
+          "at": "2026-10-31T14:15:21+05:30",
+          "status": "open",
+          "note": "recorded"
+        },
+        {
+          "at": "2026-10-31T14:15:21+05:30",
+          "status": "open",
+          "note": "seen on 2026-10-28"
+        },
+        {
+          "at": "2026-10-31T14:15:21+05:30",
+          "status": "fixed",
+          "note": "committed 2026-10-28"
+        },
+        {
+          "at": "2026-10-31T14:15:22+05:30",
+          "status": "verified",
+          "note": "two clean sessions"
+        }
+      ],
+      "created_at": "2026-10-31T14:15:21+05:30",
+      "updated_at": "2026-10-31T14:15:22+05:30"
+    },
+    {
+      "id": "BUG-006",
+      "title": "Sizing decline says entry price too high when the entry is below the strategy's minimum price",
+      "kind": "BUG",
+      "severity": "LOW",
+      "status": "fixed",
+      "area": "signal_engine",
+      "strategies": [
+        "BREAKOUT",
+        "ORB"
+      ],
+      "first_seen": "2026-10-26",
+      "last_seen": "2026-10-26",
+      "occurrences": [
+        "2026-10-26"
+      ],
+      "impact": "Misleading decline reason in Telegram and trades.db (TATASTEEL 169.10 vs min 300).",
+      "evidence": [
+        "8 declines 10-26..10-29: TATASTEEL, VEDL, RECLTD, ITC, ASHOKLEY"
+      ],
+      "root_cause": "main._resolve_entry_quantity used one fixed message for every zero-quantity cause.",
+      "fix": "RiskEngine.zero_quantity_reason names the price band or the risk budget. Tests: test_risk_sizing.py TestZeroQuantityReason.",
+      "fix_commit": "",
+      "verification": "",
+      "sources": [],
+      "history": [
+        {
+          "at": "2026-10-31T14:15:22+05:30",
+          "status": "open",
+          "note": "recorded"
+        },
+        {
+          "at": "2026-10-31T14:15:22+05:30",
+          "status": "fixed",
+          "note": "fixed 2026-10-31, uncommitted"
+        }
+      ],
+      "created_at": "2026-10-31T14:15:22+05:30",
+      "updated_at": "2026-10-31T14:15:22+05:30"
+    },
+    {
+      "id": "BUG-007",
+      "title": "Order and history calls time out 25-30 s after 5-minute candle closes",
+      "kind": "EXECUTION",
+      "severity": "MEDIUM",
+      "status": "open",
+      "area": "openalgo-core",
+      "strategies": [],
+      "first_seen": "2026-10-26",
+      "last_seen": "2026-10-30",
+      "occurrences": [
+        "2026-10-26",
+        "2026-10-27",
+        "2026-10-28",
+        "2026-10-29",
+        "2026-10-30"
+      ],
+      "impact": "Order timeouts drive every bookkeeping bug above; a 20-minute positionbook outage on 10-28 left the engine blind.",
+      "evidence": [
+        "10-30: 12 Timeout sending order at 10:15, 10:25, 10:40, 11:15"
+      ],
+      "root_cause": "Not found. Flattrade disconnects plus OpenAlgo slowness at candle boundaries; 04a29664f (quote request sharing) did not remove it.",
+      "fix": "",
+      "fix_commit": "",
+      "verification": "",
+      "sources": [
+        "signal_engine/reports/execution-health-2026-10-29.md",
+        "signal_engine/reports/execution-health-2026-10-30.md"
+      ],
+      "history": [
+        {
+          "at": "2026-10-31T14:15:22+05:30",
+          "status": "open",
+          "note": "recorded"
+        },
+        {
+          "at": "2026-10-31T14:15:23+05:30",
+          "status": "open",
+          "note": "seen on 2026-10-27"
+        },
+        {
+          "at": "2026-10-31T14:15:23+05:30",
+          "status": "open",
+          "note": "seen on 2026-10-28"
+        },
+        {
+          "at": "2026-10-31T14:15:23+05:30",
+          "status": "open",
+          "note": "seen on 2026-10-29"
+        },
+        {
+          "at": "2026-10-31T14:15:23+05:30",
+          "status": "open",
+          "note": "seen on 2026-10-30"
+        }
+      ],
+      "created_at": "2026-10-31T14:15:22+05:30",
+      "updated_at": "2026-10-31T14:15:23+05:30"
+    },
+    {
+      "id": "BUG-008",
+      "title": "EVWAP-EARLY-PY charges exceed its gross edge",
+      "kind": "TUNING-IDEA",
+      "severity": "MEDIUM",
+      "status": "open",
+      "area": "strategy",
+      "strategies": [
+        "EVWAP-EARLY-PY"
+      ],
+      "first_seen": "2026-10-30",
+      "last_seen": "2026-10-30",
+      "occurrences": [
+        "2026-10-30"
+      ],
+      "impact": "Week 10-26..10-30: gross -10,923, charges 11,256 on 225 entries (about 50 per round trip).",
+      "evidence": [],
+      "root_cause": "Win rate 49%, avg win 484 vs avg loss 510; per-trade cost is about the size of the edge. Frozen strategy: observation only, no tuning from early P&L (5 sessions this week, min stop raised to 0.40% on 10-28).",
+      "fix": "",
+      "fix_commit": "",
+      "verification": "",
+      "sources": [],
+      "history": [
+        {
+          "at": "2026-10-31T14:15:24+05:30",
+          "status": "open",
+          "note": "recorded"
+        }
+      ],
+      "created_at": "2026-10-31T14:15:24+05:30",
+      "updated_at": "2026-10-31T14:15:24+05:30"
+    }
+  ]
+}

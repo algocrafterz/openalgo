@@ -26,3 +26,5 @@ repo `CLAUDE.md`; idea status lives in `research/REGISTRY.md`; change history li
 - A backtest result: a run record in that idea's `runs/`, plus prose only if it adds insight.
 - A new backtest adapter: `backtest/strategies/<name>.py`.
 - Design notes, reviews, one-off analyses: `docs/`.
+- A bug, execution problem or data error found in a review: the tracker, via
+  `uv run python -m signal_engine.bugs` (see `.claude/skills/bug-tracker/SKILL.md`), never a new file.

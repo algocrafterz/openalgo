@@ -156,6 +156,7 @@ const LiveLogs = lazy(() => import('@/pages/Logs'))
 const SecurityDashboard = lazy(() => import('@/pages/monitoring/SecurityDashboard'))
 const TrafficDashboard = lazy(() => import('@/pages/monitoring/TrafficDashboard'))
 const LatencyDashboard = lazy(() => import('@/pages/monitoring/LatencyDashboard'))
+const BugTracker = lazy(() => import('@/pages/monitoring/BugTracker'))
 const HealthMonitor = lazy(() => import('@/pages/HealthMonitor'))
 
 function PageTitleUpdater() {
@@ -307,6 +308,7 @@ function App() {
                 <Route path="/logs/security" element={<SecurityDashboard />} />
                 <Route path="/logs/traffic" element={<TrafficDashboard />} />
                 <Route path="/logs/latency" element={<LatencyDashboard />} />
+                <Route path="/logs/bugs" element={<BugTracker />} />
                 <Route path="/health" element={<HealthMonitor />} />
                 {/* Phase 7: Settings & Action Center */}
                 <Route path="/profile" element={<Profile />} />

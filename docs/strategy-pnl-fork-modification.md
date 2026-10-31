@@ -471,6 +471,20 @@ Merge risk: low. An upstream change to `place_order`'s body applies to `_place_o
 `timer.mark(...)` lines are single inserts at stage boundaries. Remove the wrapper once the cause
 of the delay is known.
 
+## Bug tracker page (added 2026-10-31)
+
+Owner-approved core change, read-only page. Shows `signal_engine/bugs/bugs.json` (written only by
+`python -m signal_engine.bugs`) at `/logs/bugs`.
+
+- `blueprints/bug_tracker.py` (new): `GET /api/bugs`, session-authed, rate limited, reads the file.
+- `app.py`: import and register `bug_tracker_bp`.
+- `blueprints/react_app.py`: `/logs/bugs` serves the React app.
+- `frontend/src/api/bugs.ts`, `frontend/src/pages/monitoring/BugTracker.tsx` (new), a route in
+  `frontend/src/App.tsx`, a card in `frontend/src/pages/LogsIndex.tsx`.
+- `test/test_bug_tracker_blueprint.py` (new).
+
+Merge risk: low. Additive lines only in `app.py`, `react_app.py`, `App.tsx` and `LogsIndex.tsx`.
+
 ## Merge-conflict risk assessment (2026-09-28)
 
 Checked ahead of the next OpenAlgo version bump

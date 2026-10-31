@@ -1,6 +1,7 @@
 import {
   Activity,
   ArrowRight,
+  Bug,
   ClipboardList,
   Clock,
   FileText,
@@ -53,6 +54,14 @@ export default function LogsIndex() {
       href: '/logs/security',
       color: 'bg-red-500',
       countLabel: 'security',
+    },
+    {
+      title: 'Bug Tracker',
+      description: 'Problems found in the daily reviews, their fixes, and the proof they hold',
+      icon: Bug,
+      href: '/logs/bugs',
+      color: 'bg-amber-500',
+      countLabel: 'tracking',
     },
     {
       title: 'Health Monitor',

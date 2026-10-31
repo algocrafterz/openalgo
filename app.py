@@ -59,6 +59,7 @@ from blueprints.brlogin import brlogin_bp
 from blueprints.broker_credentials import (
     broker_credentials_bp,  # Import the broker credentials blueprint
 )
+from blueprints.bug_tracker import bug_tracker_bp  # Bug tracker page (/logs/bugs)
 from blueprints.chart_test import chart_test_bp  # Standalone chart test page (dev/testing only)
 from blueprints.chartink import chartink_bp  # Import the chartink blueprint
 from blueprints.core import core_bp
@@ -353,6 +354,7 @@ def create_app():
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
     app.register_blueprint(strategy_portfolio_bp)  # Register Strategy Portfolio blueprint
     app.register_blueprint(strategy_pnl_bp)  # Register Strategy P&L blueprint
+    app.register_blueprint(bug_tracker_bp)  # Register Bug Tracker blueprint
     app.register_blueprint(backtest_results_bp)  # Register Backtest Results blueprint
     app.register_blueprint(postback_bp)  # Register broker postback (order-update webhook) blueprint
 

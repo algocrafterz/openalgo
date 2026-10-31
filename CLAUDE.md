@@ -164,6 +164,7 @@ the source file in `docs/` and every reader sees the change.
 Detailed procedures live in `.claude/skills/` and load on demand:
 
 - **`ai-model-workflow`** — before any non-trivial task or any subagent spawn: which model (`opus` or `sonnet` alias only) does which phase
+- **`bug-tracker`** — record, fix, verify and close every defect a review finds; one entry per bug in `signal_engine/bugs/bugs.json`, shown at `/logs/bugs`
 - **`fd-audit`** — run after any change touching DB, WebSockets/streaming, threads/executors, subprocesses, files, or sockets
 - **`version-bump`** — releasing the platform, or bumping the pinned `openalgo` SDK (two unrelated version numbers)
 - **`broker-integration`** — adding or modifying a broker plugin
