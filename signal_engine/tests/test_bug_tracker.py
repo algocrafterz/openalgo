@@ -123,3 +123,14 @@ def test_actions_are_read_from_the_last_block_of_a_report():
     assert store.actions_from_report("no block") is None
     with pytest.raises(store.TrackerError):
         store.actions_from_report("```bug-tracker\n{}\n```")
+
+
+def test_a_re_run_of_a_day_before_the_fix_does_not_reopen(path):
+    _add(path)
+    bug = store.update("BUG-001", status="fixed", fix="sweep sets the id", path=path)
+    fixed_day = bug["history"][-1]["at"][:10]
+    bug = store.seen("BUG-001", "2026-10-27", path=path)  # a re-run of the session that found it
+    assert bug["status"] == "fixed" and "stays fixed" in bug["history"][-1]["note"]
+    later = "2099-01-02"
+    assert later > fixed_day
+    assert store.seen("BUG-001", later, path=path)["status"] == "open"

@@ -6485,3 +6485,24 @@ Found in the 2026-10-26..30 sandbox week (bug tracker BUG-001, 003, 004, 006).
   `signal_engine/data/value_areas.db` (Pine-parity profile from `features/value_area.py`,
   parameters stored per row); the close-day `value_areas` step adds each session after the
   backfill and checks coverage. History rebuilt with `build --full` on 2026-10-31.
+
+## One value-area method, placeorder timeout, duplicate-fill repair (2026-10-31)
+
+- **BUG-012.** `backtest/volume_profile.py` now uses `features/value_area.py` (it used the
+  MarketProfile library: close-only bins, about 30 rows a session), so backtests, the Pine
+  strategy and `value_areas.db` share one calculation: volume spread over each bar's range, one
+  row at a time toward the heavier neighbour to 70% (CQG, NinjaTrader, TradingView practice;
+  CBOT's two-row variant differs by about a row), continuous session only because of NSE's
+  closing auction, rows of 5 NSE ticks in force on that date. Store rebuilt as
+  `range-spread-nse-tick-v2`.
+- **BUG-007.** Candle-close order timeouts come from the sandbox executing fills one at a time
+  (class-wide position lock), not the rate limiter. `api.order_timeout: 20` for placeorder only.
+- **BUG-010.** 2026-10-26 duplicate exit copies removed from EVWAP's strategy book by replay;
+  10-26 exceptions recorded; pages vs fills now pass 10-26..10-30.
+- **Tracker.** A re-run of a day on or before a fix no longer reopens the bug.
+- Sources for the value-area method: LuxAlgo value-area concept (two-row CBOT variant, platforms
+  differ on stepping and ties) https://www.luxalgo.com/library/concept/value-area.md ; CQG Market
+  Profile Value Areas (one price at a time toward more TPOs)
+  https://help.cqg.com/cqgic/25/Documents/marketprofilevalueareasmpva.htm ; TradingView volume
+  profile basics https://www.tradingview.com/wiki/Volume_Profile ; NSE closing auction from
+  2026-08-03 (SOP NSE/CMTR/73362) https://nsearchives.nseindia.com/content/circulars/CMTR73362.pdf

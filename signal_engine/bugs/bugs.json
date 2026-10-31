@@ -6,7 +6,7 @@
       "title": "Timed-out exit that later fills is booked under the cancelled stop id and labelled SL",
       "kind": "BUG",
       "severity": "HIGH",
-      "status": "open",
+      "status": "fixed",
       "area": "signal_engine",
       "strategies": [
         "EVWAP-EARLY-PY"
@@ -28,8 +28,8 @@
         "eod ledger check FAIL: 2 broker fills with no matching engine order (ADANIENT, JSWENERGY); logs say exit orders 26103036923667 and 26103038430811 completed at the broker"
       ],
       "root_cause": "The FILLED branch of sweep_unresolved_orders (main.py) never gave the filled exit id to the tracked position; book_close() then wrote pos.sl_order_id (the cancelled stop), and _poll_close_exit_types() defaulted the label to SL.",
-      "fix": "Sweep sets pos.sl_order_id to the filled exit; a full exit records its label in TrackedPosition.claimed_exit before sending, and the poll books the close under it. Tests: test_exit_timeout_safety.py (JSWENERGY replay, TestPollCloseLabel).",
-      "fix_commit": "",
+      "fix": "Sweep sets pos.sl_order_id to the filled exit; a full exit records its label in TrackedPosition.claimed_exit before sending, and the poll books the close under it (adae1b78a).",
+      "fix_commit": "adae1b78a",
       "verification": "",
       "sources": [
         "signal_engine/reports/eod-2026-10-27-claude-review.md",
@@ -77,10 +77,15 @@
           "at": "2026-10-31T17:36:41+05:30",
           "status": "open",
           "note": "[eod-cron-2026-10-30] 2026-10-30: path exercised by two timed-out EXIT UNCERTAIN events, not held (booked under stop id, labelled SL)"
+        },
+        {
+          "at": "2026-10-31T20:05:20+05:30",
+          "status": "fixed",
+          "note": "reopened in error by the 10-31 re-run of 10-30 (before the fix); seen() no longer reopens for a day on or before the fix"
         }
       ],
       "created_at": "2026-10-31T14:15:18+05:30",
-      "updated_at": "2026-10-31T17:36:41+05:30"
+      "updated_at": "2026-10-31T20:05:20+05:30"
     },
     {
       "id": "BUG-002",
@@ -352,7 +357,7 @@
       "title": "Order and history calls time out 25-30 s after 5-minute candle closes",
       "kind": "EXECUTION",
       "severity": "MEDIUM",
-      "status": "open",
+      "status": "fixed",
       "area": "openalgo-core",
       "strategies": [],
       "first_seen": "2026-10-26",
@@ -369,8 +374,8 @@
         "10-30: 12 Timeout sending order at 10:15, 10:25, 10:40, 11:15",
         "execution-health: Timeout sending order x12, slow sandbox place_order above 5 s x10, limiter critical-lane max wait 13.4 s, refused calls 1447"
       ],
-      "root_cause": "Not found. Flattrade disconnects plus OpenAlgo slowness at candle boundaries; 04a29664f (quote request sharing) did not remove it.",
-      "fix": "",
+      "root_cause": "Not the rate limiter (critical-lane wait 0 at 10:15 on 10-30). The sandbox executes fills one at a time under ExecutionEngine._position_lock (class-wide, also guards the shared funds row): six orders at 10:15:23 took 3.7/3.8/5.3/8.7/10.4/12.7 s (execute stage), so every order past the 5 s client timeout became uncertain.",
+      "fix": "signal_engine: placeorder uses api.order_timeout 20 s (other calls stay 5 s), covering the measured burst; genuine timeouts still reconcile and watch for late fills. Test: test_order_timeout.py. The sandbox lock itself is not changed: b6887f319 logs the time inside the lock per fill, needed before narrowing it.",
       "fix_commit": "",
       "verification": "",
       "sources": [
@@ -407,10 +412,15 @@
           "at": "2026-10-31T17:36:41+05:30",
           "status": "open",
           "note": "seen on 2026-10-30"
+        },
+        {
+          "at": "2026-10-31T22:39:21+05:30",
+          "status": "fixed",
+          "note": "verify: a session with a burst of 4+ simultaneous orders and no 'Timeout sending order'"
         }
       ],
       "created_at": "2026-10-31T14:15:22+05:30",
-      "updated_at": "2026-10-31T17:36:41+05:30"
+      "updated_at": "2026-10-31T22:39:21+05:30"
     },
     {
       "id": "BUG-008",
@@ -505,7 +515,7 @@
       "title": "26 Oct duplicate exit fills (TCS 3x BUY 62, ICICIBANK 3x SELL 162) stay in the strategy pages",
       "kind": "DATA",
       "severity": "LOW",
-      "status": "open",
+      "status": "verified",
       "area": "openalgo-core",
       "strategies": [
         "EVWAP-EARLY-PY"
@@ -520,19 +530,29 @@
         "pages_vs_fills 10-26 ARTIFACT lines, 10-27 TCS page -2,036.8 vs fills 45.0"
       ],
       "root_cause": "BUG fixed 2026-10-26 (exit resend after a timeout); the extra fills opened TCS +124 / ICICIBANK -162 legs that the sandbox later closed.",
-      "fix": "",
+      "fix": "Copies (TCS 26102608636705/26102609598001, ICICIBANK 26102618025933/26102639721372) removed from EVWAP's strategy book by replaying its fills 10-26..30 (TCS 9 rows -2,806.60 -> 8 rows -853.60; ICICIBANK 7 rows -3,805.20 -> 6 rows -14.40); 10-26 exceptions recorded in pages_vs_fills_exceptions.json, as for 10-01. Backup db/backups/openalgo-pre-bug010-replay-20261031.db.",
       "fix_commit": "",
-      "verification": "",
+      "verification": "pages_vs_fills --mode analyze re-run 2026-10-31: 10-26..10-30 RESULT PASS (10-26 via the two recorded exceptions).",
       "sources": [],
       "history": [
         {
           "at": "2026-10-31T17:17:55+05:30",
           "status": "open",
           "note": "recorded"
+        },
+        {
+          "at": "2026-10-31T20:06:36+05:30",
+          "status": "fixed",
+          "note": "same rule as the 2026-10-01 ADANIPORTS repair"
+        },
+        {
+          "at": "2026-10-31T20:06:36+05:30",
+          "status": "verified",
+          "note": "updated"
         }
       ],
       "created_at": "2026-10-31T17:17:55+05:30",
-      "updated_at": "2026-10-31T17:17:55+05:30"
+      "updated_at": "2026-10-31T20:06:36+05:30"
     },
     {
       "id": "BUG-011",
@@ -579,7 +599,7 @@
       "title": "Two value-area implementations give different VAH/POC/VAL",
       "kind": "DATA",
       "severity": "MEDIUM",
-      "status": "open",
+      "status": "verified",
       "area": "signal_engine",
       "strategies": [
         "BREAKOUT-PY"
@@ -593,20 +613,30 @@
       "evidence": [
         "signal_engine/backtest/volume_profile.py docstring; signal_engine/features/value_area.py docstring"
       ],
-      "root_cause": "Two modules written for different purposes; volume_profile.py's own docstring says it bins on the close only.",
-      "fix": "",
+      "root_cause": "backtest/volume_profile.py used the MarketProfile library (close-only bins, ~30 rows per session); features/value_area.py spreads volume over each bar's range in rows of 5 ticks.",
+      "fix": "One calculation: volume_profile.session_value_area now calls features/value_area (range-spread, one row at a time toward the heavier neighbour, 70%, continuous session before 15:15), rows of 5 NSE ticks in force on each session's date (tick_reference). Store rebuilt as range-spread-nse-tick-v2 (456,256 rows, 214 symbols, 2016-10-03..2026-10-30; v1 removed; POC moved in 12.8% of sessions, mean 1.4 bps). Tests: test_volume_profile.py, test_value_area_fade.py, test_open_drive.py, test_value_area_store.py.",
       "fix_commit": "",
-      "verification": "",
+      "verification": "2026-10-31: backtest and store share one function; 51 value-area tests pass; store coverage 2026-10-30 211/211.",
       "sources": [],
       "history": [
         {
           "at": "2026-10-31T18:54:09+05:30",
           "status": "open",
           "note": "recorded"
+        },
+        {
+          "at": "2026-10-31T22:39:21+05:30",
+          "status": "fixed",
+          "note": "method chosen from CBOT/CQG/NinjaTrader/TradingView practice and NSE's 2026-08-03 closing auction"
+        },
+        {
+          "at": "2026-10-31T22:39:21+05:30",
+          "status": "verified",
+          "note": "updated"
         }
       ],
       "created_at": "2026-10-31T18:54:09+05:30",
-      "updated_at": "2026-10-31T18:54:09+05:30"
+      "updated_at": "2026-10-31T22:39:21+05:30"
     }
   ]
 }

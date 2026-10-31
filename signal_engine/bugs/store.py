@@ -169,6 +169,12 @@ def add(
     return bug
 
 
+def _fixed_on(bug: dict) -> str | None:
+    """IST date of the latest change to fixed, from the history; None when never fixed."""
+    days = [h["at"][:10] for h in bug.get("history", []) if h.get("status") == "fixed"]
+    return max(days) if days else None
+
+
 def seen(
     bug_id: str,
     day: str,
@@ -177,12 +183,17 @@ def seen(
     sources: list[str] | None = None,
     path: str | None = None,
 ) -> dict:
-    """Record that a bug happened again on `day`. A fixed or verified bug seen again reopens."""
+    """Record that a bug happened again on `day`. A fixed or verified bug seen again reopens.
+
+    Only a session after the fix reopens it: a re-run of an earlier day (BUG-001 was reopened by
+    a 2026-10-31 re-run of 10-30, the session that found it) is evidence of the old code.
+    """
     path = path or TRACKER_PATH
     _check_date(day)
     with _locked(path):
         data = load(path)
         bug = _find(data, bug_id)
+        fixed_on = _fixed_on(bug)
         if day not in bug["occurrences"]:
             bug["occurrences"] = sorted([*bug["occurrences"], day])
         bug["last_seen"] = max(bug["occurrences"])
@@ -191,8 +202,11 @@ def seen(
         bug["sources"] = [*bug["sources"], *[s for s in (sources or []) if s not in bug["sources"]]]
         note = f"seen on {day}"
         if bug["status"] in ("fixed", "verified"):
-            note += f": recurred after being {bug['status']}, reopened"
-            bug["status"] = "open"
+            if fixed_on is None or day > fixed_on:
+                note += f": recurred after being {bug['status']}, reopened"
+                bug["status"] = "open"
+            else:
+                note += f": on or before the fix ({fixed_on}), stays {bug['status']}"
         bug["updated_at"] = _now()
         bug["history"].append({"at": bug["updated_at"], "status": bug["status"], "note": note})
         _save(data, path)
