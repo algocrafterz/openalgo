@@ -1,4 +1,4 @@
-"""Close-day step `value_areas`: add the day's VAH / POC / VAL rows and prove the day is covered.
+"""Close-day step `value_areas`: store the current session's VAH / POC / VAL and prove it is covered.
 
 Owns the value-area dataset (signal_engine/features/value_area_store.py). Runs after the backfill,
 because a session's profile needs that session's 1-minute bars; it reads Historify, never fetches.
@@ -41,7 +41,8 @@ def run(day: str) -> str:
         )
     )
     summary = (
-        "Previous-session value areas for volume- and market-profile research and backtests, "
-        "stored in signal_engine/data/value_areas.db (one row per symbol per session)."
+        "Each session's own VAH / POC / VAL, stored the same evening as its 1-minute and daily "
+        "bars (signal_engine/data/value_areas.db, one row per symbol per session). A strategy "
+        "that trades off the previous session's levels reads the prior day's row."
     )
     return write_phase("value-areas", day, checks, summary)

@@ -146,7 +146,8 @@ export default function BugTracker() {
             Bug Tracker
           </h1>
           <p className="text-muted-foreground mt-1">
-            Problems found in the daily reviews, what they cost, and whether the fix is proven
+            Problems found in the daily reviews, what they cost, and whether the fix is proven. To
+            work one, ask Claude: /resolve BUG-007 (or /resolve for the next one).
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>

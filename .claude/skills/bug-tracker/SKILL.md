@@ -1,6 +1,6 @@
 ---
 name: bug-tracker
-description: Record, fix, verify and close OpenAlgo/signal_engine defects in the single bug tracker (signal_engine/bugs/bugs.json, shown at http://localhost:5000/logs/bugs). Use whenever a review (eod, paper-review, execution-health, a weekly report) finds a defect, an execution problem, a data error or a tuning idea; when asked to "log this bug", "what bugs are open", "is BUG-00N fixed", "fix the open bugs", "close/verify a bug"; and in the 15:40 unattended EOD run. The reviews find problems; this skill is where they are kept until proven fixed.
+description: The register of OpenAlgo/signal_engine defects: how to record them in the single bug tracker (signal_engine/bugs/bugs.json, shown at http://localhost:5000/logs/bugs). Use whenever a review (eod, paper-review, execution-health, a weekly report) finds a defect, an execution problem, a data error or a tuning idea; when asked to "log this bug" or "what bugs are open"; and in the unattended close-day review. Reviews find problems, this skill keeps them, and the resolve skill works them to closed.
 ---
 
 # Bug tracker
@@ -52,24 +52,13 @@ about a timed-out-exit fix: note it and wait for a session that exercised the pa
 4. TUNING-IDEA entries never become code changes from fewer than 20 sessions, and frozen strategies
    (see memory) get bug fixes only.
 
-## 2. Fix (interactive session, owner approval for trading behaviour)
+## 2. Fix, verify and close
 
-1. `update ID --status in_progress --note "branch X"`.
-2. Follow the repo rules: state old and new behaviour for any trading-behaviour change and get
-   approval; write the regression test first from the real day's symbols, quantities and order
-   ids; run the targeted tests; a test that asserted the defect itself is changed only with the
-   reason stated.
-3. Data repairs (a row in `db/openalgo.db`, `trades.db`): back up first
-   (`sqlite3 db/openalgo.db ".backup db/backups/<name>.db"`), guard the UPDATE on the exact bad
-   values, and put the backup path in `--fix`.
-4. `update ID --status fixed --fix "<what changed, which test>"`; add `--commit SHA` once committed.
-5. Record what the fix deliberately does not cover in `--note` (for example history left as is).
+Working an entry (investigate, fix, prove, close) is the **`resolve`** skill (`/resolve`). This
+skill only owns the register and its rules. Two of them bind every fix:
 
-## 3. Verify and close
-
-- On the first session that exercises the fixed path, check the evidence the bug was found with
-  (same query, same report line). If it held: `update ID --status verified --verification "<day>:
-  <evidence>"`. If it recurred: `seen ID --date DAY` (this reopens it).
+- A fix that has not met its trigger stays `fixed`; `verified` needs a session that exercised the
+  fixed path, named in `--verification`.
 - An EXECUTION entry with no code fix closes as verified only after the symptom is absent for 5
   sessions in a row with the trigger present (for example, slow broker but no timeout fallout).
 
