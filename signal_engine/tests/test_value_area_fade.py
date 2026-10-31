@@ -97,10 +97,8 @@ def test_target_is_poc_when_it_lies_meaningfully_ahead():
     # A flat context pins POC=VAL=VAH identically, which can never leave POC "ahead"
     # of a valid reclaim (Close must already be > VAL, so it can never also sit
     # below a POC equal to VAL). This needs POC and VAL genuinely separated: an
-    # asymmetric volume profile (heaviest at 100, expansion favouring the low side -
-    # same technique as test_volume_profile.py) pins POC~100.5, VAL~50.25, verified
-    # below rather than hand-predicted, since the adaptive bucket size shifts exact
-    # values slightly. Levels are spread wide (50/70/100/130/150) and walked through
+    # asymmetric volume profile (heaviest at 100, the 70 level inside the area) pins
+    # POC~100 and VAL~70, verified below rather than hand-predicted (rows are 5 ticks). Levels are spread wide (50/70/100/130/150) and walked through
     # gradually (not jumped to) so ATR - and therefore the stop buffer and risk -
     # stays small enough that the tp_min_r floor cannot mask the POC branch, the
     # mistake the first version of this fixture made.
@@ -108,8 +106,8 @@ def test_target_is_poc_when_it_lies_meaningfully_ahead():
     vols = [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 50, 50]
     ctx_rows = [(pr, pr + 0.05, pr - 0.05, pr, v) for pr, v in zip(path, vols, strict=True)]
     frames = [_bars(f"2026-06-0{k + 1}", "09:15", ctx_rows) for k in range(3)]
-    # Reclaim closes BETWEEN VAL(~50.25) and POC(~100.5) - POC lies ahead of entry.
-    test_day = _bars("2026-06-10", "09:15", [(70.0, 66.0, 49.0, 65.0, 50)])
+    # Wicks under VAL(~70) and closes BETWEEN VAL and POC(~100) - POC lies ahead of entry.
+    test_day = _bars("2026-06-10", "09:15", [(75.0, 76.0, 66.0, 72.0, 50)])
     df = pd.concat(frames + [test_day]).sort_index()
     strat = ValueAreaFade()
     p = params(tp_mode="poc", tp_min_r=1.0)

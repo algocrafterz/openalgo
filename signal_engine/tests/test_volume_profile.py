@@ -1,15 +1,18 @@
-"""Verifies the `MarketProfile`-library wiring, not the value-area algorithm itself
-(the library owns that). What can still be wrong here: bucket sizing, session
-grouping, and the one-session shift - the same class of bug
-`test_backtest_integrity.py` exists to pin for the engine.
+"""Verifies the backtest wiring of the one value-area calculation (features/value_area.py):
+session grouping, the date's tick, and the one-session shift - the same class of bug
+`test_backtest_integrity.py` exists to pin for the engine. Prices are row centres, so a level
+is checked to within one row (ROW: 5 ticks of 0.01 at these prices, NSE tiers since 2024-06-10).
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from signal_engine.backtest import volume_profile as vp
+
+ROW = 0.05
 
 IST = "Asia/Kolkata"
 
@@ -38,13 +41,12 @@ def test_value_area_expands_toward_the_heavier_side():
 
     assert len(out) == 1
     row = out.iloc[0]
-    # Hand-traced: POC=101.0 (vol 1500). Step 1: high-side neighbour 101.5 (800) >
-    # low-side 100.5 (450) -> take high, running 2300. Step 2: next high 102.0 (600)
-    # > next low 100.5 (450) -> take high, running 2900 >= 70% of 3550 (2485) -> stop.
-    # The low side is never touched, so VAL stays pinned at the POC.
-    assert row["poc"] == 101.0
-    assert row["val"] == 101.0
-    assert row["vah"] == 102.0
+    # POC is the 101.0 row (vol 1500). The heavier neighbours are always above it (101.5:
+    # 800, 102.0: 600 against 100.5: 450), so the area grows upward only until it holds 70%
+    # and VAL stays pinned at the POC row.
+    assert row["poc"] == pytest.approx(101.0, abs=ROW)
+    assert row["val"] == row["poc"]
+    assert row["vah"] == pytest.approx(102.0, abs=ROW)
 
 
 def test_value_area_shifts_one_session_forward():
@@ -64,10 +66,11 @@ def test_value_area_shifts_one_session_forward():
     assert first_day.isna().all()
     # The second session reads the FIRST session's value area, broadcast across
     # every bar of the second session (not just its first bar).
-    assert (second_day == 101.0).all()
+    assert second_day.nunique() == 1 and second_day.iloc[0] == pytest.approx(101.0, abs=ROW)
     pv = pval.loc[day == datetime.date(2026, 6, 2)]
     vh = pvah.loc[day == datetime.date(2026, 6, 2)]
-    assert (pv == 101.0).all() and (vh == 101.0).all()   # heavy_day's POC==VAL==VAH
+    # heavy_day's area is the 101.0 bars alone (their High-Low spans two rows)
+    assert (pv == second_day).all() and (vh - pv <= 2 * ROW).all()
 
 
 def test_value_area_at_two_sessions_back_for_multi_day_confluence():
@@ -87,29 +90,20 @@ def test_value_area_at_two_sessions_back_for_multi_day_confluence():
     # N-1 (day3 reads day2's flat 200.0 profile) vs N-2 (day3 reads day1's 101.0
     # profile) must disagree - proof the two lookbacks aren't accidentally aliased
     # to the same shift.
-    assert (poc1.loc[day == third_day] == 200.0).all()
-    assert (poc2.loc[day == third_day] == 101.0).all()
-    assert (val1.loc[day == third_day] == 200.0).all()
-    # day1's heavy middle bucket (10000 vol) alone already clears 70% of its 10400
-    # total, so VAH/VAL/POC all pin at 101.0 - same shape as
-    # test_value_area_shifts_one_session_forward's heavy_day fixture.
-    assert (vah2.loc[day == third_day] == 101.0).all()
+    assert poc1.loc[day == third_day].iloc[0] == pytest.approx(200.0, abs=ROW)
+    assert poc2.loc[day == third_day].iloc[0] == pytest.approx(101.0, abs=ROW)
+    assert val1.loc[day == third_day].iloc[0] == pytest.approx(200.0, abs=ROW)
+    # day1's heavy middle bars (10000 vol) alone clear 70% of its 10400 total.
+    assert vah2.loc[day == third_day].iloc[0] == pytest.approx(101.0, abs=2 * ROW)
     # Not enough history two sessions back for day2 - must read NaN, not day1 again.
     second_day = datetime.date(2026, 6, 2)
     assert poc2.loc[day == second_day].isna().all()
 
 
-def test_zero_volume_bucket_between_poc_and_edge_is_skipped_not_crashed():
-    # Reproduces a real MarketProfile library bug (see volume_profile.py's comment):
-    # a LEGITIMATE zero-volume bucket sitting between the POC and one edge is
-    # misread as "no buckets left on this side" (bare truthiness, 0 vs None), which
-    # stalls that side until the other one exhausts for real and crashes on
-    # `int + None`. Confirmed against real data: UNIONBANK 2026-09-08 had a
-    # zero-volume bucket at Rs 183.30 between its POC (182.0) and session high.
-    # Minimal repro: POC in the middle, a zero bucket just above it, and too little
-    # volume below the POC to reach the target alone - so the low side exhausts for
-    # real while the high side is still stalled on the zero bucket, and the library
-    # tries to add the resulting `None` to the running total.
+def test_a_zero_volume_row_between_poc_and_edge_is_profiled_not_skipped():
+    # The old MarketProfile library stalled on a legitimate zero-volume bucket (UNIONBANK
+    # 2026-09-08, Rs 183.30) and the session had to be skipped. The standard calculation
+    # grows past an empty row like any other, so the session now has a value area.
     prices = [100.0, 100.1, 100.2, 100.3, 100.4, 100.5]
     volumes = [5, 5, 100, 0, 50, 50]   # POC=100.2 (idx2); 100.3 is the zero bucket
     df = _session("2026-06-01", prices, volumes)
@@ -117,7 +111,10 @@ def test_zero_volume_bucket_between_poc_and_edge_is_skipped_not_crashed():
 
     out = vp.session_value_area(df, day, value_area_pct=70.0)
 
-    assert len(out) == 0   # skipped, not crashed and not silently wrong
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert row["val"] <= row["poc"] <= row["vah"]
+    assert row["poc"] == pytest.approx(100.2, abs=ROW)
 
 
 def test_short_session_is_skipped_not_approximated():
@@ -165,5 +162,5 @@ def test_the_closing_auction_print_does_not_set_the_poc():
 
     out = vp.session_value_area(df, day, value_area_pct=70.0)
 
-    assert out.iloc[0]["poc"] == 101.0
+    assert out.iloc[0]["poc"] == pytest.approx(101.0, abs=ROW)
     assert out.iloc[0]["vah"] < 104.0

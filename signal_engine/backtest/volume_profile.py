@@ -1,124 +1,98 @@
-"""Previous-session Value Area (POC/VAH/VAL), via the `MarketProfile` library.
+"""Previous-session Value Area (POC/VAH/VAL) for backtest strategies.
 
-WHY A LIBRARY INSTEAD OF HAND-ROLLED BINNING
-    `key_level.py`'s docstring flags PVAH/PPOC/PVAL as "left untested rather than
-    approximated" because yfinance only serves 7 days of 1-minute history. That
-    blocker does not apply here: `data.from_historify(interval="1m")` reads years of
-    1-minute bars out of `historify.duckdb`. `pandas-ta`'s `vp()` bins volume by price
-    but does not compute a value area; `MarketProfile` (PyPI, bfolkens/py-market-
-    profile) does the actual 70%-of-volume-from-POC-outward calculation, so this
-    module is a thin wrapper rather than a second implementation of that algorithm.
+ONE CALCULATION (BUG-012, 2026-10-31)
+    This used the `MarketProfile` library, which bins each 1-minute bar's CLOSE only and sizes
+    rows to about 30 per session, so its levels differed from `features/value_area.py` (volume
+    spread evenly over each bar's High-Low range, rows of 5 exchange ticks, 70% grown from the
+    POC toward the heavier neighbour). A result from one did not transfer to the other. Both now
+    use `features/value_area.py`, which is also what the Pine strategy and the stored dataset
+    (`features/value_area_store.py`) compute.
+
+    Spreading over the range is the standard approximation when there is no tick data
+    (TradingView-style profiles do the same); the close-only bin piles a bar's whole volume on
+    one price. Growing one row at a time toward the heavier side is the CQG/NinjaTrader rule;
+    the CBOT two-row variant moves VAH/VAL by about a row. Rows are 5 ticks of the NSE tick in
+    force on that session's date (`tick_reference`: flat 0.05 until 2024-06-09, tiered after),
+    so a 2016 session and a 2026 one are both sized by the exchange's own grid.
 
 WHAT THIS IS NOT
-    `MarketProfile`'s "vol" mode buckets each bar's CLOSE price and sums its Volume
-    into that one bucket - it does not distribute a bar's volume across its High-Low
-    range, and it is not a tick-level TPO profile. On 1-minute bars the close-only
-    approximation is reasonable (a bar's range is narrow); it would be a much rougher
-    approximation on 5-minute bars. Treat this as a volume-profile approximation, not
-    a terminal-grade Market Profile.
-
-BUCKET SIZING
-    Slicing a session at a raw Rs 0.05 step on a Rs 3,850 stock (TCS) with a Rs 50-80 daily range produces
-    ~1,000 nearly-empty buckets - too fine to summarize a distribution. `_prices_per_row`
-    instead sizes the bucket so each session gets roughly `TARGET_ROWS` buckets,
-    regardless of the stock's absolute price - the standard practice for volume
-    profile, not a workaround.
-
-SHIFT DISCIPLINE
-    `prev_session_value_area()` returns each day's value area attached to the NEXT
-    session's bars only, mirroring `indicators.prev_day_levels`. A strategy's
-    `prepare()` must use the shifted output; using `session_value_area()` directly
-    inside entry() would be lookahead - today's own value area is not known until the
-    session closes.
+    A TPO (time) profile, or a tick-level volume profile. Only the continuous market is
+    profiled (bars before 15:15): since 2026-08-03 NSE's closing auction prints about half the
+    day's volume in one bar at the close, which would pin the POC there.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from market_profile import MarketProfile
 
 from signal_engine.features.session import continuous_session
+from signal_engine.features.value_area import finalize_profile, histogram
 
-#: Base unit for bucket sizing only (buckets are about 1/TARGET_ROWS of the session range).
-#: Not the exchange tick: NSE ticks are tiered by price.
-TICK_SIZE = 0.05
+#: Rows per exchange tick, as in breakout.pine (klTicksPerRow) and features/value_area.py.
+ROWS_PER_TICK = 5
 
-#: Buckets to aim for per session. 25-40 is the usual range quoted for volume
-#: profile; 30 sits in the middle regardless of the stock's price level.
-TARGET_ROWS = 30
+#: Fallback tick when the session date is outside the tick reference.
+FALLBACK_TICK = 0.05
 
 #: A session with fewer bars than this (holiday-shortened, bad print) is skipped
-#: rather than fed to MarketProfile, which would build a profile from noise.
+#: rather than profiled from noise.
 MIN_BARS_PER_SESSION = 5
 
 
-def _prices_per_row(day_high: float, day_low: float) -> int:
-    """MarketProfile's `row_size = tick_size * prices_per_row` - solved for the
-    integer `prices_per_row` that gives roughly TARGET_ROWS buckets across the
-    session's own High-Low range."""
-    rng = day_high - day_low
-    if not np.isfinite(rng) or rng <= 0:
-        return 1
-    return max(1, round(rng / TICK_SIZE / TARGET_ROWS))
+def session_tick(price: float, day) -> float:
+    """The NSE cash tick in force on `day` for `price` (FALLBACK_TICK outside the reference)."""
+    from signal_engine.backtest.tick_reference import TickReferenceError, tick_for_price
+
+    try:
+        return tick_for_price(float(price), pd.Timestamp(day).date())
+    except (TickReferenceError, ValueError):
+        return FALLBACK_TICK
 
 
-def session_value_area(df: pd.DataFrame, day: pd.Series,
-                        value_area_pct: float = 70.0) -> pd.DataFrame:
+def session_value_area(
+    df: pd.DataFrame, day: pd.Series, value_area_pct: float = 70.0
+) -> pd.DataFrame:
     """One row per session: poc / vah / val, indexed by session date.
 
     `df` must carry High/Low/Close/Volume and a tz-aware intraday index (i.e. already
     run through `indicators.add_session_columns`). `day` is that function's own `day`
     column - passed separately, as every other indicator here does, rather than
     re-derived.
-
-    Only the continuous market (bars before 15:15) is profiled, as in features/value_area.py:
-    from 2026-08-03 NSE's closing auction prints about half the day's volume in one bar at the
-    close, which would otherwise pin the POC there.
     """
     df = continuous_session(df)
     day = day.loc[df.index]
     rows: dict = {}
     for d, idx in df.groupby(day).groups.items():
         sub = df.loc[idx]
-        if len(sub) < MIN_BARS_PER_SESSION:
+        if len(sub) < MIN_BARS_PER_SESSION or not (sub["Volume"].sum() > 0):
             continue
-        ppr = _prices_per_row(sub["High"].max(), sub["Low"].min())
-        mp = MarketProfile(df, tick_size=TICK_SIZE, prices_per_row=ppr,
-                            value_area_pct=value_area_pct / 100.0, mode="vol")
-        try:
-            s = mp[idx[0]:idx[-1]]
-        except TypeError:
-            # A real bug in `MarketProfile.calculate_value_area()`: it tests "no
-            # buckets left on this side" with bare Python truthiness (`not x`), which
-            # cannot tell a genuinely EMPTY side (x is None) from a bucket that has
-            # legitimate zero volume (x == 0, e.g. an illiquid minute) - both read as
-            # falsy. A zero-volume bucket between the POC and one edge permanently
-            # stalls that side's expansion; the OTHER side then exhausts for real,
-            # hands back a genuine None, and the library unconditionally adds it to
-            # the running total. Confirmed against UNIONBANK 2026-09-08 (a 0-volume
-            # bucket at Rs 183.30, between the POC and the session high). Not rare on
-            # real NSE 1-minute data. Skip the session rather than patch third-party
-            # internals - same treatment as a too-short session below.
+        tick = session_tick(sub["Close"].iloc[0], d)
+        hist = histogram(
+            sub["Low"].to_numpy(),
+            sub["High"].to_numpy(),
+            sub["Volume"].to_numpy(),
+            tick,
+            ROWS_PER_TICK,
+        )
+        vah, poc, val = finalize_profile(hist, value_area_pct / 100.0, tick * ROWS_PER_TICK)
+        if not np.isfinite(poc):
             continue
-        if s.poc_price is None:
-            continue
-        val, vah = s.value_area
-        rows[d] = (s.poc_price, val, vah)
+        rows[d] = (poc, val, vah)
 
-    # `from_dict` on an EMPTY dict (every session skipped - too short, or the library
-    # bug above) infers object dtype filled with Python `None`, not float NaN. That
-    # silently survives `reindex`/`shift` in `prev_session_value_area` and then blows
-    # up `np.isfinite(None)` deep inside a strategy's entry() - far from this file.
-    # Force float64 unconditionally so "no value area" is always a real NaN.
-    out = pd.DataFrame.from_dict(rows, orient="index", columns=["poc", "val", "vah"],
-                                 dtype="float64")
+    # Force float64 so "no value area" is always a real NaN, never a Python None that
+    # survives reindex/shift and fails deep inside a strategy's entry().
+    out = pd.DataFrame.from_dict(
+        rows, orient="index", columns=["poc", "val", "vah"], dtype="float64"
+    )
     out.index.name = "day"
     return out.sort_index()
 
 
 def value_area_at(
-    per_day: pd.DataFrame, day: pd.Series, lookback: int = 1,
+    per_day: pd.DataFrame,
+    day: pd.Series,
+    lookback: int = 1,
 ) -> tuple[pd.Series, pd.Series, pd.Series]:
     """POC/VAL/VAH from `lookback` sessions back, broadcast to every bar of the
     session `lookback` ahead - the only form of a value area a strategy's `prepare()`
@@ -148,7 +122,9 @@ def value_area_at(
 
 
 def prev_session_value_area(
-    df: pd.DataFrame, day: pd.Series, value_area_pct: float = 70.0,
+    df: pd.DataFrame,
+    day: pd.Series,
+    value_area_pct: float = 70.0,
 ) -> tuple[pd.Series, pd.Series, pd.Series]:
     """PPOC / PVAL / PVAH, shifted one session forward and broadcast to every bar
     of the NEXT session - the only form of this a strategy's `prepare()` may read.

@@ -8,10 +8,12 @@ WHY A STORE
     time, with the parameters stored beside the numbers.
 
 HOW EACH ROW IS BUILT
-    `signal_engine.features.value_area.session_value_areas`, the Pine-parity implementation
-    (volume spread over each bar's range, 70% from the POC outward, continuous session only,
-    rows of 5 ticks). Not `backtest/volume_profile.py`, which bins each bar's close only and gives
-    different levels. Tick is the symbol's current broker tick (SymToken), stored per row.
+    `signal_engine.features.value_area.session_value_areas`, the one value-area calculation
+    (BUG-012): volume spread evenly over each 1-minute bar's High-Low range, POC is the fullest
+    row, the area grows one row at a time toward the heavier neighbour until it holds 70%,
+    continuous session only (before 15:15, so NSE's closing auction cannot pin the POC). Rows are
+    5 ticks of the NSE tick in force on that session's date (tick_reference), stored per row.
+    `backtest/volume_profile.py` uses the same calculation, so a backtest and this dataset agree.
 
 UPDATED BY
     The close-day `value_areas` step (signal_engine/ops/value_areas.py) after the 1-minute
@@ -36,7 +38,9 @@ from signal_engine.features.value_area import session_value_areas
 from signal_engine.timeutils import IST
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "value_areas.db")
-METHOD = "pine-range-spread-v1"
+METHOD = (
+    "range-spread-nse-tick-v2"  # v1 (2026-10-31) used the current SymToken tick for every session
+)
 ROWS_PER_TICK = 5
 VA_PCT = 70.0
 CONTINUOUS_ONLY = True
@@ -68,25 +72,25 @@ def connect(db_path: str = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
-def _tick(symbol: str, last_close: float) -> float:
-    from signal_engine.features.instruments import tick_for_price, tick_size
+def rows_for(symbol: str, df1m: pd.DataFrame, tick: float | None = None) -> list[tuple]:
+    """One row per session in `df1m` (in-session 1-minute bars, IST index).
 
-    try:
-        return tick_size(symbol)
-    except LookupError:
-        return tick_for_price(last_close)
+    Each session's rows are 5 ticks of the NSE tick in force on that date for its opening
+    price (backtest/volume_profile.session_tick), the same grid the backtests use. `tick`
+    overrides it for every session (tests).
+    """
+    from signal_engine.backtest.volume_profile import session_tick
 
-
-def rows_for(symbol: str, df1m: pd.DataFrame, tick: float) -> list[tuple]:
-    """One row per session in `df1m` (in-session 1-minute bars, IST index)."""
     if df1m.empty:
         return []
-    va = session_value_areas(df1m, tick, ROWS_PER_TICK, VA_PCT, CONTINUOUS_ONLY)
-    by_day = df1m.groupby(df1m.index.date)
     stamp = datetime.now(IST).replace(microsecond=0).isoformat()
     out = []
-    for day, row in va.iterrows():
-        chunk = by_day.get_group(day)
+    for day, chunk in df1m.groupby(df1m.index.date, sort=True):
+        day_tick = tick or session_tick(chunk["Close"].iloc[0], day)
+        va = session_value_areas(chunk, day_tick, ROWS_PER_TICK, VA_PCT, CONTINUOUS_ONLY)
+        if va.empty:
+            continue
+        row = va.iloc[0]
         out.append(
             (
                 symbol,
@@ -97,7 +101,7 @@ def rows_for(symbol: str, df1m: pd.DataFrame, tick: float) -> list[tuple]:
                 None if pd.isna(row["val"]) else float(row["val"]),
                 float(chunk["Volume"].sum()),
                 int(len(chunk)),
-                float(tick),
+                float(day_tick),
                 ROWS_PER_TICK,
                 VA_PCT,
                 int(CONTINUOUS_ONLY),
@@ -162,7 +166,7 @@ def build(
                 bars = _bars_since(from_historify, symbol, start, end, historify_db)
                 if bars is None or bars.empty:
                     continue  # no session after the last stored one: nothing to add
-                rows = rows_for(symbol, bars, _tick(symbol, float(bars["Close"].iloc[-1])))
+                rows = rows_for(symbol, bars)
             except Exception as exc:  # noqa: BLE001 - one bad symbol must not stop the rest
                 failed.append(f"{symbol}: {type(exc).__name__}: {exc}"[:200])
                 continue

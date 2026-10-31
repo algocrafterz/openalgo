@@ -87,8 +87,8 @@ def test_rejection_fires_on_a_wick_below_val_that_closes_back_inside():
 def test_retest_flag_true_near_the_level_false_far_from_it():
     rows = [
         (100.5, 105.2, 100.4, 105.0, 50),   # bar0: breakout above VAH (100)
-        (105.0, 105.1, 99.9, 100.02, 50),   # bar1: pulls back to essentially AT the level
-        (100.02, 111.0, 99.9, 110.0, 50),   # bar2: far from the level - must NOT flag
+        (105.0, 105.1, 99.9, 100.10, 50),   # bar1: pulls back to essentially AT the level (VAH ~100.075)
+        (100.10, 111.0, 99.9, 110.0, 50),   # bar2: far from the level - must NOT flag
     ]
     p = params(use_retest=True)
     strat, c = _prepared_ctx(rows, p)
