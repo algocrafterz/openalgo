@@ -30,6 +30,10 @@ timeout at entry or exit, EXIT UNCERTAIN, a positionbook failure while held, a s
 held, or a place_order above 5s. Flagged versus untouched counts, P&L and R are descriptive with a
 small n. Do not read them as proof an incident caused a gain or loss.
 
+A REGRESSION line is an EXECUTION entry in the tracker (`bug-tracker` skill): `seen` on the open
+entry when it is the same symptom, `add` when it is new. An OK metric counts toward verifying a
+`fixed` entry only on a day its trigger (slow broker, stale feed) was present.
+
 ## First check per regression
 
 Findings from 2026-10-29 (sandbox mode, Flattrade data feed):

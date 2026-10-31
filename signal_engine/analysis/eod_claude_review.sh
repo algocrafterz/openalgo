@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Unattended daily /eod investigation - runs after eod.sh, REPORT-ONLY (never edits code).
+# Unattended daily close-day review (the `close-day` skill) - run by close_day.sh after its
+# deterministic steps, REPORT-ONLY (never edits code).
 #
 # WHY THIS EXISTS
 # eod.sh's own regression check is deterministic (fixed PASS/FAIL thresholds) - it can flag
@@ -22,15 +23,15 @@
 # a human applies it later via /eod, same as every fix in signal_engine/docs/PRD.md's 2026-09-21
 # entries was applied - with review, tests, and a considered decision on scope each time.
 #
-# Runs 15 minutes after eod.sh's own 15:25 IST cron, giving it time to finish and OpenAlgo's
-# end-of-day settlement to complete before the investigation reads trades.db/the tradebook.
+# Runs after close_day.sh has taken the tradebook snapshot and written the EOD and execution-health
+# reports, so the review reads final books and never re-runs those steps.
 #
 # USAGE
 #   ./signal_engine/analysis/eod_claude_review.sh            # today
 #   ./signal_engine/analysis/eod_claude_review.sh 2026-09-08  # a specific session
 #
-# CRON (weekdays, 15:40 IST):
-#   40 15 * * 1-5 /home/anand/github/openalgo/signal_engine/analysis/eod_claude_review.sh >> /home/anand/github/openalgo/signal_engine/logs/eod_claude_cron.log 2>&1
+# SCHEDULE: not a cron line of its own any more; close_day.sh (15:36 IST) runs it with a timeout
+# that ends before OpenAlgo's 16:00 stop. Hand-run for an earlier day as below.
 
 set -uo pipefail
 
@@ -57,21 +58,27 @@ if [ ! -x "$CLAUDE_BIN" ]; then
 fi
 
 read -r -d '' PROMPT <<PROMPT_EOF || true
-Read .claude/skills/eod/SKILL.md in this repository and follow its step 1 (get today's report)
-and step 2 (triage the regression check) exactly as written, for $DAY.
+Read .claude/skills/close-day/SKILL.md in this repository and run it for $DAY in its
+"Unattended run" mode. close_day.sh has already produced today's deterministic outputs (step
+status in signal_engine/reports/close-day-$DAY-status.tsv); read them, do not re-run them.
 
-Skip step 3 (fix) entirely. This is an unattended, REPORT-ONLY run: Edit, Write, and
-NotebookEdit are unavailable to you by design, and you must not attempt to work around that
-(no writing files via shell redirection, no git commit, no database UPDATE/DELETE/INSERT, no
-other mutating command of any kind). If you find a genuine, confirmed bug, describe it
-precisely in your written response instead - root cause, the evidence you checked it against,
-and the exact fix that would be needed - so a human can apply it later via /eod. Do not guess
-at a root cause you have not actually verified against trades.db, the broker tradebook, or the
-logs, the same standard the skill itself requires.
+This is an unattended, REPORT-ONLY run: Edit, Write, and NotebookEdit are unavailable to you by
+design, and you must not attempt to work around that (no writing files via shell redirection, no
+git commit, no database UPDATE/DELETE/INSERT, no other mutating command of any kind). Describe a
+confirmed bug precisely instead - root cause, the evidence you checked, the exact fix - so a
+human applies it later. Do not guess at a root cause you have not verified against trades.db,
+the broker tradebook, or the logs.
 
-Finish with step 4's required two-part summary: a short technical summary, then a plain-English
-layman recap with no jargon (trades taken, which strategy, won or lost how much, in terms a
-non-technical reader gets immediately).
+You have a hard time budget (the run is stopped before OpenAlgo shuts down at 16:00): follow
+the skill's order, and if time is short finish the verdict, the P&L table and the tracker block
+before anything else.
+
+The very last thing in your response is the bug-tracker block described in
+.claude/skills/bug-tracker/SKILL.md ("Unattended runs"): a fenced code block with the info
+string bug-tracker holding a JSON list (empty list if nothing applies). This script applies it.
+
+Your report is written to $OUT only after you finish, so that file is empty or missing while you
+run. That is expected: do not report it as a failure.
 PROMPT_EOF
 
 echo "=== EOD Claude review $DAY ==="
@@ -80,8 +87,19 @@ echo "=== EOD Claude review $DAY ==="
   --disallowedTools Edit,Write,NotebookEdit \
   --dangerously-skip-permissions \
   --output-format text \
-  > "$OUT" 2>&1
+  > "$OUT.partial" 2>&1
 status=$?
-
+mv -f "$OUT.partial" "$OUT"  # whole report or none: a reader never sees it half-written
 echo "report -> $OUT (exit $status)"
+
+# The review is read-only; the tracker is written here, through its validating CLI, and only
+# with the add/seen/note actions an unattended run may take (signal_engine/bugs/store.py).
+UV="$(command -v uv || echo /home/anand/.local/bin/uv)"  # cron has a minimal PATH
+APPLIED="$("$UV" run python -m signal_engine.bugs apply "$OUT" --origin "eod-cron-$DAY" 2>&1)"
+{
+  echo
+  echo "## Bug tracker updates (applied by eod_claude_review.sh)"
+  echo
+  echo "$APPLIED" | sed 's/^/- /'
+} >> "$OUT"
 exit "$status"

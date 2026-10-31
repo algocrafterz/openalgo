@@ -64,6 +64,10 @@ Convert every timestamp to IST before you compare it with a session time.
 - **TUNING-IDEA**: a possible parameter or design change. Always give the sample size and the overfit risk.
   Never recommend a change from fewer than 20 sessions.
 
+The same classes and severities are the tracker's. Check `uv run python -m signal_engine.bugs list
+--all` first and record every confirmed item there per the **`bug-tracker`** skill (`seen` for a
+tracked one, `add` for a new one). The review file names the tracker ids.
+
 ## 5. Output
 
 Write `signal_engine/docs/paper-monitoring/<DAY>-<STRATEGY>.md`, one file per strategy, plain text
@@ -84,3 +88,23 @@ Summary in plain words  4-8 sentences for a trader with no coding background
 
 Then reply in chat with: P&L per strategy, the BUG list with severities, whether the session counts
 as clean evidence, and the plain-words summary. Do not commit; the owner decides (see `isolated-commit`).
+
+## Weekly report
+
+For a week (Monday to Friday, IST), one report across every paper strategy, not a file per day:
+
+1. Per day: `pages_vs_fills --mode analyze <day>` (step 1). Use the **fills** column as each
+   strategy's gross P&L and its "Estimated charges" block for charges. The engine's own
+   `context.pnl` double counts partial exits: a final row's pnl includes its TP legs.
+2. Per strategy, a table: days traded, entries, gross, charges, net, and one note (one day carries
+   the week, retired or started mid-week, frozen). Counts from `trades` (`status='SUCCESS'`,
+   `trade_mode='analyze'`); declines grouped by reason.
+3. Strategy behaviour: win rate, average win and loss, exit-type mix (`context.exit_types`).
+4. Config changes in the week (`git log --since <monday> -- signal_engine/config.yaml`): a strategy
+   that stopped or started trading gets its recorded reason, not a guess.
+5. Clean-evidence count: which sessions qualify, and why the others do not.
+6. Tracker: the weekly sweep in the `bug-tracker` skill; fix scope ranked by severity, naming ids.
+7. Close in plain words with a ₹1,00,000-account example (standing preference).
+
+An interactive run replies in chat. On Fridays the scheduled close-day review includes this
+section, next to `weekly.sh`'s rollup (`signal_engine/reports/weekly-<monday>-to-<friday>.md`).

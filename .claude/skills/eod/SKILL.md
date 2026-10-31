@@ -5,13 +5,15 @@ description: Run and investigate OpenAlgo's signal_engine end-of-day review for 
 
 # Signal engine EOD analysis
 
-`signal_engine/analysis/eod.sh` already runs on cron at 15:25 IST every weekday and writes
-`signal_engine/reports/eod-YYYY-MM-DD.md`. This skill is the human-in-the-loop pass on
+`signal_engine/analysis/eod.sh` already runs every weekday from `close_day.sh` (cron 15:36 IST)
+and writes `signal_engine/reports/eod-YYYY-MM-DD.md`. For the whole end-of-day pass (system,
+paper strategies, risk, bugs, tomorrow) use the **`close-day`** skill; this skill is its
+regression-triage part. This skill is the human-in-the-loop pass on
 top of that report: don't just read the numbers back, **find out why anything failed and either
 fix it or explain precisely why it isn't a bug.**
 
-A second cron, `signal_engine/analysis/eod_claude_review.sh` at 15:40 IST, already runs this same
-investigation unattended every trading day (report-only — never edits code, see its own header
+`close_day.sh` then runs `signal_engine/analysis/eod_claude_review.sh`, which does this
+investigation unattended as part of the close-day review every trading day (report-only — never edits code, see its own header
 for the three enforcement layers), writing
 `signal_engine/reports/eod-YYYY-MM-DD-claude-review.md`. When invoked interactively,
 check whether that day's file already exists and read it first — it did the same root-causing
@@ -24,7 +26,7 @@ a fix once one is confirmed (that file only ever describes what fix would be nee
 DAY=$(date +%F)
 REPORT="signal_engine/reports/eod-$DAY.md"
 if [ ! -s "$REPORT" ]; then
-  ./signal_engine/analysis/eod.sh "$DAY"   # cron should have run this at 15:45 IST; re-run if missing
+  ./signal_engine/analysis/eod.sh "$DAY"   # close_day.sh runs this at 15:36 IST; re-run if missing
 fi
 cat "$REPORT"
 ```
@@ -40,6 +42,11 @@ The report's last section ("EOD regression check... posted to Telegram") has PAS
 grouped TRADE / SIGNAL / SYSTEM. Read every FAIL — do not skip past one just because a prior EOD
 already flagged something similar. For each FAIL, go to the matching subsection below before
 concluding anything.
+
+Start from the tracker, not from memory of earlier reports: `uv run python -m signal_engine.bugs
+list --all`. A FAIL caused by a tracked bug is another day of it (`seen`), not a new finding. Every
+confirmed cause is recorded per the **`bug-tracker`** skill; a bug marked `fixed` that today's
+session exercised gets checked against the evidence it was found with.
 
 ### TRADE — reconciliation mismatch (`Engine (trades.db): X | Broker (OpenAlgo): Y`)
 
@@ -163,10 +170,9 @@ abandoned), but confirm that's actually why before assuming the data gap is unex
   exact scenario found (see `test_close_accounting.py`'s
   `TestFinalLegAuditTrailIsNotMisattributedToTheEntry` for the pattern: real symbols/quantities/
   order_ids from the day that surfaced the bug, not synthetic placeholders).
-- Run at least the affected test file, then the full suite before calling it done:
-  ```bash
-  PYTHONPATH=. uv run pytest signal_engine/tests/ -q
-  ```
+- Run the affected test files (`PYTHONPATH=. uv run pytest <files> -q -p no:cacheprovider`); the
+  full suite runs only through `signal_engine/scripts/run_full_tests.sh` (one run per machine).
+- Move the tracker entry to `fixed` with the change and the test (see the `bug-tracker` skill).
 - Append a dated `## <Title> (YYYY-MM-DD)` section to `signal_engine/docs/PRD.md` — root cause, what
   changed, what deliberately wasn't fixed and why (see the 2026-09-21 reconciliation entry for the
   shape: root cause, fix, and an explicit "not fixed, and likely not a bug" paragraph for the
@@ -178,7 +184,8 @@ Two parts, always, in this order:
 
 1. **Technical summary, short**: what ran clean, what was found, what was fixed (with the
    regression test and full-suite result), what's still open and why (needs a product decision,
-   needs more days of data, etc). Skimmable, not a re-derivation of the whole investigation.
+   needs more days of data, etc). Name tracker ids (BUG-00N) instead of re-describing tracked
+   bugs. Skimmable, not a re-derivation of the whole investigation.
 2. **Layman-terms close, every time** — plain English, no jargon (or one clause defining a term
    that can't be avoided): how many trades, which strategy, won/lost how much, in money terms a
    non-technical reader gets immediately. This is a standing preference (not specific to EOD) —

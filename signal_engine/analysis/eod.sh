@@ -17,8 +17,8 @@
 #   ./signal_engine/analysis/eod.sh            # today
 #   ./signal_engine/analysis/eod.sh 2026-09-08 # a specific session
 #
-# CRON (weekdays, 15:45 IST — after the 15:30 close, before OpenAlgo is stopped):
-#   45 15 * * 1-5 /home/anand/github/openalgo/signal_engine/analysis/eod.sh >> /home/anand/github/openalgo/signal_engine/logs/eod_cron.log 2>&1
+# SCHEDULE: run by signal_engine/analysis/close_day.sh (cron 15:36 IST, after the engine stops at
+# 15:35 and before OpenAlgo stops at 16:00); no cron line of its own.
 
 set -uo pipefail
 

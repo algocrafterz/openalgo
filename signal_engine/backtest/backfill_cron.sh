@@ -20,7 +20,7 @@
 #     secondary-broker login. OpenAlgo's actual AutoStop task runs at 16:00 IST (Windows
 #     Scheduled Task, $stopTime in createTaskOpenAlgoScheduler.ps1 - NOT the 15:30 some
 #     older comments in this repo assume).
-# That leaves 15:30-16:00. Scheduled at 15:35 for a 5-minute buffer after close (in case
+# That leaves 15:30-16:00. Started at 15:36 (close_day.sh) for a 6-minute buffer after close (in case
 # the broker takes a moment to finalize/publish the last bar) and a 25-minute buffer
 # before AutoStop.
 #
@@ -36,8 +36,8 @@
 # USAGE
 #   ./signal_engine/backtest/backfill_cron.sh
 #
-# CRON (weekdays, 15:35 IST - after the 15:30 close, before the 16:00 AutoStop):
-#   35 15 * * 1-5 /home/anand/github/openalgo/signal_engine/backtest/backfill_cron.sh >> /home/anand/github/openalgo/signal_engine/logs/backfill_cron.log 2>&1
+# SCHEDULE: started first, in the background, by signal_engine/analysis/close_day.sh (cron 15:36
+# IST - after the 15:30 close, before the 16:00 AutoStop); no cron line of its own.
 
 set -uo pipefail
 
