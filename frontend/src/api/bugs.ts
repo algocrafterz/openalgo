@@ -13,6 +13,7 @@ export interface BugHistoryEntry {
 export interface Bug {
   id: string
   title: string
+  plain?: string
   kind: BugKind
   severity: BugSeverity
   status: BugStatus

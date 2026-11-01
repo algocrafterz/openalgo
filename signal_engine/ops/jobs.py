@@ -110,8 +110,5 @@ def run(day: str) -> str:
         checks += [task_check(name, at, tasks.get(name), day) for name, at in WINDOWS_TASKS.items()]
     checks.append(_cron_check())
     checks += _phase_checks(day)
-    summary = (
-        "Every scheduled job for the day. Windows tasks stop at 16:00, after this step, so "
-        "openAlgoAutoStop shows the previous day's run."
-    )
+    summary = "Did every scheduled job run today?"
     return write_phase("jobs", day, checks, summary)

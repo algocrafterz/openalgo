@@ -46,6 +46,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     add.add_argument("--seen", required=True, help="IST trading day, YYYY-MM-DD")
     add.add_argument("--impact", required=True, help="what it costs a trader, in plain words")
+    add.add_argument(
+        "--plain", default="", help="one or two plain sentences: what is wrong, what it means"
+    )
     add.add_argument("--strategy", action="append", default=[])
     add.add_argument("--evidence", action="append", default=[])
     add.add_argument("--root-cause", default="")
@@ -63,6 +66,7 @@ def _parser() -> argparse.ArgumentParser:
     update.add_argument("--status", choices=store.STATUSES)
     update.add_argument("--severity", choices=store.SEVERITIES)
     update.add_argument("--title")
+    update.add_argument("--plain")
     update.add_argument("--area")
     update.add_argument("--impact")
     update.add_argument("--root-cause")
@@ -110,6 +114,7 @@ def main(argv=None) -> int:
                 impact=args.impact,
                 strategies=args.strategy,
                 evidence=args.evidence,
+                plain=args.plain,
                 root_cause=args.root_cause,
                 sources=args.source,
                 status=args.status,
@@ -126,6 +131,7 @@ def main(argv=None) -> int:
                 note=args.note,
                 severity=args.severity,
                 title=args.title,
+                plain=args.plain,
                 area=args.area,
                 impact=args.impact,
                 root_cause=args.root_cause,

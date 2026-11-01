@@ -47,6 +47,9 @@ about a timed-out-exit fix: note it and wait for a session that exercised the pa
    - `--severity`: HIGH = can leave a position unprotected, send a wrong order, or misstate P&L the
      trader acts on; MEDIUM = wrong records or degraded execution with no direct position risk;
      LOW = wording, cosmetics, noise.
+   - `--plain`: one or two sentences a trader reads first on `/logs/bugs`: what is wrong and what
+     it means for them, no code names, ids or jargon (for example "After a restart, a strategy
+     could buy a stock it already held, and the old trade lost its safety stop.").
    - `--impact`: what it costs a trader, in plain words. `--evidence`: exact ids, rows, times.
    - `--area`: signal_engine, openalgo-core, sandbox, broker, data, strategy, ops.
 4. TUNING-IDEA entries never become code changes from fewer than 20 sessions, and frozen strategies
@@ -72,7 +75,7 @@ one fenced block, info string `bug-tracker`, holding a JSON list; the cron scrip
 [
   {"action": "seen", "id": "BUG-001", "date": "2026-11-02",
    "evidence": ["trades.db row 3501 booked under stop 2611..."], "sources": ["signal_engine/reports/eod-2026-11-02.md"]},
-  {"action": "add", "title": "...", "kind": "BUG", "severity": "HIGH", "area": "signal_engine",
+  {"action": "add", "title": "...", "plain": "<one plain sentence>", "kind": "BUG", "severity": "HIGH", "area": "signal_engine",
    "date": "2026-11-02", "impact": "...", "strategies": ["ORB"], "evidence": ["..."], "root_cause": "..."},
   {"action": "note", "id": "BUG-003", "text": "2026-11-02: path exercised (restart 10:41, ORB re-entry declined), held"}
 ]

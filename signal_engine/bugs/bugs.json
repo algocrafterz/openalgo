@@ -87,10 +87,16 @@
           "at": "2026-10-31T23:27:18+05:30",
           "status": "fixed",
           "note": "/resolve verify 2026-10-31: not exercised (no session since the fix, Saturday). Proves it: an exit that times out and then fills, booked in trades.db under the exit's own order id with its real label (not the stop id, not 'SL')."
+        },
+        {
+          "at": "2026-11-01T07:50:57+05:30",
+          "status": "fixed",
+          "note": "plain summary added"
         }
       ],
       "created_at": "2026-10-31T14:15:18+05:30",
-      "updated_at": "2026-10-31T23:27:18+05:30"
+      "updated_at": "2026-11-01T07:50:57+05:30",
+      "plain": "When the broker was slow to confirm a sale, the system wrote the wrong order number on the trade and called it a stop-loss exit. The money was right; the record was wrong."
     },
     {
       "id": "BUG-002",
@@ -162,10 +168,16 @@
           "at": "2026-10-31T17:17:55+05:30",
           "status": "verified",
           "note": "verified on the reconciliation that found it"
+        },
+        {
+          "at": "2026-11-01T07:50:57+05:30",
+          "status": "verified",
+          "note": "plain summary added"
         }
       ],
       "created_at": "2026-10-31T14:15:19+05:30",
-      "updated_at": "2026-10-31T17:17:55+05:30"
+      "updated_at": "2026-11-01T07:50:57+05:30",
+      "plain": "A 66-share SUNPHARMA position that never existed sat on two strategy pages after a restart, so those pages showed profit and loss that did not happen."
     },
     {
       "id": "BUG-003",
@@ -213,10 +225,16 @@
           "at": "2026-10-31T23:27:18+05:30",
           "status": "fixed",
           "note": "/resolve verify 2026-10-31: not exercised (no session since the fix, Saturday). Proves it: an engine restart during the session while a strategy holds a position: the log shows the restored position counted and a new entry on that symbol for that strategy declined ('symbol already held by this strategy')."
+        },
+        {
+          "at": "2026-11-01T07:50:57+05:30",
+          "status": "fixed",
+          "note": "plain summary added"
         }
       ],
       "created_at": "2026-10-31T14:15:20+05:30",
-      "updated_at": "2026-10-31T23:27:18+05:30"
+      "updated_at": "2026-11-01T07:50:57+05:30",
+      "plain": "After a restart, a strategy could buy a stock it already held. The new trade replaced the old one in the system, and the old trade lost its safety stop."
     },
     {
       "id": "BUG-004",
@@ -264,10 +282,16 @@
           "at": "2026-10-31T23:27:18+05:30",
           "status": "fixed",
           "note": "/resolve verify 2026-10-31: not exercised (no session since the fix, Saturday). Proves it: a restart after one strategy's stop filled while another strategy still holds the same symbol: a 'Reconciled at startup: ... closed by this strategy's own order' line and an EXIT row with that order id."
+        },
+        {
+          "at": "2026-11-01T07:50:57+05:30",
+          "status": "fixed",
+          "note": "plain summary added"
         }
       ],
       "created_at": "2026-10-31T14:15:21+05:30",
-      "updated_at": "2026-10-31T23:27:18+05:30"
+      "updated_at": "2026-11-01T07:50:57+05:30",
+      "plain": "After a restart, a trade closed by its stop-loss was never recorded if another strategy held the same stock. The loss (HDFCBANK, Rs 1,049) was missing from the books."
     },
     {
       "id": "BUG-005",
@@ -317,10 +341,16 @@
           "at": "2026-10-31T14:15:22+05:30",
           "status": "verified",
           "note": "two clean sessions"
+        },
+        {
+          "at": "2026-11-01T07:50:57+05:30",
+          "status": "verified",
+          "note": "plain summary added"
         }
       ],
       "created_at": "2026-10-31T14:15:21+05:30",
-      "updated_at": "2026-10-31T14:15:22+05:30"
+      "updated_at": "2026-11-01T07:50:57+05:30",
+      "plain": "The 2:45 pm exit for one strategy closed every strategy's open trades, and the system did not record those extra closes."
     },
     {
       "id": "BUG-006",
@@ -367,10 +397,16 @@
           "at": "2026-10-31T23:27:18+05:30",
           "status": "fixed",
           "note": "/resolve verify 2026-10-31: not exercised (no session since the fix, Saturday). Proves it: a sizing decline in trades.db whose message names the price band or the risk budget (for example 'below the strategy's minimum price 300')."
+        },
+        {
+          "at": "2026-11-01T07:50:57+05:30",
+          "status": "fixed",
+          "note": "plain summary added"
         }
       ],
       "created_at": "2026-10-31T14:15:22+05:30",
-      "updated_at": "2026-10-31T23:27:18+05:30"
+      "updated_at": "2026-11-01T07:50:57+05:30",
+      "plain": "A skipped trade said the price was too high when the real reason was that it was below the strategy's minimum price. Only the message was wrong."
     },
     {
       "id": "BUG-007",
@@ -442,10 +478,16 @@
           "at": "2026-10-31T23:27:18+05:30",
           "status": "fixed",
           "note": "/resolve verify 2026-10-31: not exercised (no session since the fix, Saturday). Proves it: a burst of 4+ orders after a candle close with no 'Timeout sending order' in the engine log (Slow sandbox place_order lines above 5 s are expected and now absorbed)."
+        },
+        {
+          "at": "2026-11-01T07:50:57+05:30",
+          "status": "fixed",
+          "note": "plain summary added"
         }
       ],
       "created_at": "2026-10-31T14:15:22+05:30",
-      "updated_at": "2026-10-31T23:27:18+05:30"
+      "updated_at": "2026-11-01T07:50:57+05:30",
+      "plain": "When several orders went out together after a 5-minute candle, the sandbox filled them one at a time. Orders that took over 5 seconds looked failed to the engine, which caused the record-keeping problems above."
     },
     {
       "id": "BUG-008",
@@ -483,10 +525,16 @@
           "at": "2026-10-31T17:36:41+05:30",
           "status": "open",
           "note": "seen on 2026-10-30"
+        },
+        {
+          "at": "2026-11-01T07:50:57+05:30",
+          "status": "open",
+          "note": "plain summary added"
         }
       ],
       "created_at": "2026-10-31T14:15:24+05:30",
-      "updated_at": "2026-10-31T17:36:41+05:30"
+      "updated_at": "2026-11-01T07:50:57+05:30",
+      "plain": "EVWAP-EARLY-PY trades so often that brokerage and taxes cost more than it earns before costs. It is frozen for observation, so this is noted, not changed."
     },
     {
       "id": "BUG-009",
@@ -535,10 +583,16 @@
           "at": "2026-10-31T23:27:18+05:30",
           "status": "verified",
           "note": "verified by /resolve verify"
+        },
+        {
+          "at": "2026-11-01T07:50:57+05:30",
+          "status": "verified",
+          "note": "plain summary added"
         }
       ],
       "created_at": "2026-10-31T17:00:13+05:30",
-      "updated_at": "2026-10-31T23:27:18+05:30"
+      "updated_at": "2026-11-01T07:50:57+05:30",
+      "plain": "Re-running an old day's end-of-day report showed today's BreakingTrade scanner results instead of that day's."
     },
     {
       "id": "BUG-010",
@@ -579,10 +633,16 @@
           "at": "2026-10-31T20:06:36+05:30",
           "status": "verified",
           "note": "updated"
+        },
+        {
+          "at": "2026-11-01T07:50:57+05:30",
+          "status": "verified",
+          "note": "plain summary added"
         }
       ],
       "created_at": "2026-10-31T17:17:55+05:30",
-      "updated_at": "2026-10-31T20:06:36+05:30"
+      "updated_at": "2026-11-01T07:50:57+05:30",
+      "plain": "On 26 Oct an exit order went out three times, and the extra copies made the TCS and ICICIBANK strategy pages wrong."
     },
     {
       "id": "BUG-011",
@@ -624,10 +684,16 @@
           "at": "2026-10-31T23:27:18+05:30",
           "status": "verified",
           "note": "verified by /resolve verify"
+        },
+        {
+          "at": "2026-11-01T07:50:57+05:30",
+          "status": "verified",
+          "note": "plain summary added"
         }
       ],
       "created_at": "2026-10-31T17:34:48+05:30",
-      "updated_at": "2026-10-31T23:27:18+05:30"
+      "updated_at": "2026-11-01T07:50:57+05:30",
+      "plain": "The end-of-day report's error list was always empty, so errors were easy to miss. Errors now have their own report."
     },
     {
       "id": "BUG-012",
@@ -668,10 +734,16 @@
           "at": "2026-10-31T22:39:21+05:30",
           "status": "verified",
           "note": "updated"
+        },
+        {
+          "at": "2026-11-01T07:50:58+05:30",
+          "status": "verified",
+          "note": "plain summary added"
         }
       ],
       "created_at": "2026-10-31T18:54:09+05:30",
-      "updated_at": "2026-10-31T22:39:21+05:30"
+      "updated_at": "2026-11-01T07:50:58+05:30",
+      "plain": "Two parts of the system calculated value areas (VAH / POC / VAL) differently, so backtest results from one did not match the other."
     }
   ]
 }

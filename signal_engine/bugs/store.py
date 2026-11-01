@@ -121,6 +121,7 @@ def add(
     root_cause: str = "",
     sources: list[str] | None = None,
     status: str = "open",
+    plain: str = "",
     path: str | None = None,
 ) -> dict:
     """Record a new bug and return it. Refuses a title that an open bug already has."""
@@ -145,6 +146,8 @@ def add(
         bug = {
             "id": _next_id(data),
             "title": title.strip(),
+            #: One or two sentences for a trader: what is wrong and what it means for them.
+            "plain": plain.strip(),
             "kind": kind,
             "severity": severity,
             "status": status,
@@ -220,6 +223,7 @@ def update(
     path = path or TRACKER_PATH
     editable = {
         "title",
+        "plain",
         "severity",
         "area",
         "impact",
@@ -301,6 +305,7 @@ def apply_actions(actions: list, *, origin: str, path: str | None = None) -> lis
                     evidence=item.get("evidence"),
                     root_cause=item.get("root_cause", ""),
                     sources=item.get("sources"),
+                    plain=item.get("plain", ""),
                     path=path,
                 )
                 results.append(f"added {bug['id']}: {bug['title']} ({origin})")

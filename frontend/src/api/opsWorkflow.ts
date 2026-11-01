@@ -16,6 +16,7 @@ export interface WorkflowCheck {
   name: string
   status: 'OK' | 'WARN' | 'FAIL' | 'NOT VERIFIED'
   evidence: string
+  plain?: string
 }
 
 export interface WorkflowCheckResult {

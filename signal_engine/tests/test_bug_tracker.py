@@ -134,3 +134,9 @@ def test_a_re_run_of_a_day_before_the_fix_does_not_reopen(path):
     later = "2099-01-02"
     assert later > fixed_day
     assert store.seen("BUG-001", later, path=path)["status"] == "open"
+
+
+def test_a_bug_carries_a_plain_summary(path):
+    bug = _add(path, plain="The record was wrong; the money was right.")
+    assert bug["plain"] == "The record was wrong; the money was right."
+    assert store.update("BUG-001", plain="Shorter.", path=path)["plain"] == "Shorter."

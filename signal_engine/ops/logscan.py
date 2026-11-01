@@ -86,9 +86,8 @@ def run(day: str) -> str:
     new = sum(1 for k in kinds.values() if k == "NEW")
     rising = sum(1 for k in kinds.values() if k == "RISING")
     summary = (
-        f"{sum(today.values())} error records in {len(today)} signatures (signal_engine errors_{day}.jsonl "
-        f"and log/errors.jsonl); {new} NEW, {rising} RISING against the previous 5 weekdays. "
-        "log/errors.jsonl keeps only its last 1000 records, so older baselines can be short."
+        f"{sum(today.values())} errors today, of {len(today)} kinds; {new} new and {rising} "
+        "happening more than usual, compared with the previous 5 trading days."
     )
     return write_phase(
         "logs", day, checks or [Check("errors", OK, "no error records today")], summary

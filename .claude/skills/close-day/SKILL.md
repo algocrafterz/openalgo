@@ -45,7 +45,10 @@ next start. Say so; do not pretend the numbers are fill-backed.
 
 ## The report (both modes, in this order)
 
-Lead with the verdict; keep each section short. Every number names its source. Words: the
+Start with **At a glance**: at most five short lines a trader reads in 30 seconds (the verdict,
+net P&L after charges, anything open or unprotected, the one thing to do before the next open,
+or "nothing needs attention"). No ids, file names or jargon there. Then the sections below, each
+opening with one plain sentence before its technical detail. Every number names its source. Words: the
 simulated account is **sandbox** (or analyzer mode), never "paper trading"; no emojis.
 
 1. **Verdict, three lines.** Did the system run clean (yes / with issues / no)? Today's P&L, gross

@@ -41,8 +41,7 @@ def run(day: str) -> str:
         )
     )
     summary = (
-        "Each session's own VAH / POC / VAL, stored the same evening as its 1-minute and daily "
-        "bars (signal_engine/data/value_areas.db, one row per symbol per session). A strategy "
-        "that trades off the previous session's levels reads the prior day's row."
+        "Were today's value-area levels (VAH / POC / VAL) saved for every stock that traded? "
+        "Strategies that trade off the previous session's levels read yesterday's row."
     )
     return write_phase("value-areas", day, checks, summary)

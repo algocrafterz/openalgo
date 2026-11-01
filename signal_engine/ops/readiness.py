@@ -228,7 +228,7 @@ def open_day(day: str) -> str:
         *_morning_tasks(day),
         _yesterday_close(day),
     ]
-    summary = "Ready for the 09:15 open? Read-only checks; the engine's own startup checks are read from its log."
+    summary = "Is everything ready before the market opens at 09:15?"
     return write_phase("open-day", day, checks, summary)
 
 
@@ -294,8 +294,5 @@ def _storm(day: str, now_hhmm: str) -> list[Check]:
 
 def liveness(day: str, now_hhmm: str) -> str:
     checks = [_first_cycle(day), _first_poll(day), *_storm(day, now_hhmm)]
-    summary = (
-        "Is the engine trading after the open, not just running? Tick freshness is read from the "
-        "runner cycle (symbols evaluated, late bars) and stale-price warnings."
-    )
+    summary = "Is the engine actually trading in the first minutes after the open?"
     return write_phase("liveness", day, checks, summary)

@@ -79,3 +79,18 @@ def test_close_day_sends_the_review_line_every_day(tmp_path):
     text = verdict.message("close-day", "2026-11-02", folder)
     assert text.startswith("Close-day 2026-11-02: GREEN. Net +1,200")
     assert "Steps failed: logs." in text
+
+
+def test_every_check_gets_a_plain_sentence_that_names_its_subject(tmp_path):
+    from signal_engine.ops.plain import plain_for
+
+    assert plain_for("clock (NTP)", OK) == "The PC clock is correct, so broker login codes work."
+    assert plain_for("phase liveness", FAIL) == "The after-the-open checkpoint had a failed step or did not run."
+    assert plain_for("task openAlgoAutoStart", FAIL).startswith("The Windows task openAlgoAutoStart")
+    assert plain_for("anything", "NOT VERIFIED") == "Could not be checked this time."
+    write_phase("open-day", "2026-11-02", [Check("disk", FAIL, "2.1 GB free")], "s", folder=str(tmp_path))
+    data = read_phase("open-day", "2026-11-02", folder=str(tmp_path))
+    assert data["checks"][0]["plain"] == "The disk is nearly full."
+    report = (tmp_path / "open-day-2026-11-02.md").read_text()
+    assert report.startswith("# Before the open, 2026-11-02: action needed (RED)")
+    assert "1 of 1 checks need a look" in report
