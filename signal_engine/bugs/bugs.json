@@ -82,10 +82,15 @@
           "at": "2026-10-31T20:05:20+05:30",
           "status": "fixed",
           "note": "reopened in error by the 10-31 re-run of 10-30 (before the fix); seen() no longer reopens for a day on or before the fix"
+        },
+        {
+          "at": "2026-10-31T23:27:18+05:30",
+          "status": "fixed",
+          "note": "/resolve verify 2026-10-31: not exercised (no session since the fix, Saturday). Proves it: an exit that times out and then fills, booked in trades.db under the exit's own order id with its real label (not the stop id, not 'SL')."
         }
       ],
       "created_at": "2026-10-31T14:15:18+05:30",
-      "updated_at": "2026-10-31T20:05:20+05:30"
+      "updated_at": "2026-10-31T23:27:18+05:30"
     },
     {
       "id": "BUG-002",
@@ -203,10 +208,15 @@
           "at": "2026-10-31T17:36:41+05:30",
           "status": "fixed",
           "note": "[eod-cron-2026-10-30] 2026-10-30: path not exercised (no restart after the 08:51 start)"
+        },
+        {
+          "at": "2026-10-31T23:27:18+05:30",
+          "status": "fixed",
+          "note": "/resolve verify 2026-10-31: not exercised (no session since the fix, Saturday). Proves it: an engine restart during the session while a strategy holds a position: the log shows the restored position counted and a new entry on that symbol for that strategy declined ('symbol already held by this strategy')."
         }
       ],
       "created_at": "2026-10-31T14:15:20+05:30",
-      "updated_at": "2026-10-31T17:36:41+05:30"
+      "updated_at": "2026-10-31T23:27:18+05:30"
     },
     {
       "id": "BUG-004",
@@ -249,10 +259,15 @@
           "at": "2026-10-31T17:36:41+05:30",
           "status": "fixed",
           "note": "[eod-cron-2026-10-30] 2026-10-30: path not exercised (no restart)"
+        },
+        {
+          "at": "2026-10-31T23:27:18+05:30",
+          "status": "fixed",
+          "note": "/resolve verify 2026-10-31: not exercised (no session since the fix, Saturday). Proves it: a restart after one strategy's stop filled while another strategy still holds the same symbol: a 'Reconciled at startup: ... closed by this strategy's own order' line and an EXIT row with that order id."
         }
       ],
       "created_at": "2026-10-31T14:15:21+05:30",
-      "updated_at": "2026-10-31T17:36:41+05:30"
+      "updated_at": "2026-10-31T23:27:18+05:30"
     },
     {
       "id": "BUG-005",
@@ -347,10 +362,15 @@
           "at": "2026-10-31T17:36:41+05:30",
           "status": "fixed",
           "note": "[eod-cron-2026-10-30] 2026-10-30: path not exercised (no minimum-price sizing decline; declines were validator R:R)"
+        },
+        {
+          "at": "2026-10-31T23:27:18+05:30",
+          "status": "fixed",
+          "note": "/resolve verify 2026-10-31: not exercised (no session since the fix, Saturday). Proves it: a sizing decline in trades.db whose message names the price band or the risk budget (for example 'below the strategy's minimum price 300')."
         }
       ],
       "created_at": "2026-10-31T14:15:22+05:30",
-      "updated_at": "2026-10-31T17:36:41+05:30"
+      "updated_at": "2026-10-31T23:27:18+05:30"
     },
     {
       "id": "BUG-007",
@@ -417,10 +437,15 @@
           "at": "2026-10-31T22:39:21+05:30",
           "status": "fixed",
           "note": "verify: a session with a burst of 4+ simultaneous orders and no 'Timeout sending order'"
+        },
+        {
+          "at": "2026-10-31T23:27:18+05:30",
+          "status": "fixed",
+          "note": "/resolve verify 2026-10-31: not exercised (no session since the fix, Saturday). Proves it: a burst of 4+ orders after a candle close with no 'Timeout sending order' in the engine log (Slow sandbox place_order lines above 5 s are expected and now absorbed)."
         }
       ],
       "created_at": "2026-10-31T14:15:22+05:30",
-      "updated_at": "2026-10-31T22:39:21+05:30"
+      "updated_at": "2026-10-31T23:27:18+05:30"
     },
     {
       "id": "BUG-008",
@@ -468,7 +493,7 @@
       "title": "eod.sh re-run for a past day reviews the BreakingTrade scanner for the run date, not the requested day",
       "kind": "BUG",
       "severity": "LOW",
-      "status": "fixed",
+      "status": "verified",
       "area": "signal_engine",
       "strategies": [
         "BREAKINGTRADE",
@@ -488,7 +513,7 @@
       "root_cause": "The --review CLI path has no day argument, so review.report() falls back to ist_today(). Fix: add --day to the breakingtrade CLI, pass it to review.report(day), call it with --day \"$DAY\" from eod.sh; add a test that a past-day review reads that day.",
       "fix": "breakingtrade --review --day; eod.sh passes $DAY. Test: test_breakingtrade_review_day.py.",
       "fix_commit": "",
-      "verification": "",
+      "verification": "2026-10-31 17:34 re-run of 2026-10-30: reports/eod-2026-10-30.md:139 'INTRADAY PAPER REVIEW - 2026-10-30 (Friday)' (the unfixed re-run printed 2026-10-31 Saturday, 0 signals).",
       "sources": [],
       "history": [
         {
@@ -505,10 +530,15 @@
           "at": "2026-10-31T17:36:41+05:30",
           "status": "fixed",
           "note": "[eod-cron-2026-10-30] 2026-10-30: path not exercised (first run for 2026-10-30, not a re-run)"
+        },
+        {
+          "at": "2026-10-31T23:27:18+05:30",
+          "status": "verified",
+          "note": "verified by /resolve verify"
         }
       ],
       "created_at": "2026-10-31T17:00:13+05:30",
-      "updated_at": "2026-10-31T17:36:41+05:30"
+      "updated_at": "2026-10-31T23:27:18+05:30"
     },
     {
       "id": "BUG-010",
@@ -559,7 +589,7 @@
       "title": "eod.sh 'Errors logged today' section was always empty",
       "kind": "BUG",
       "severity": "LOW",
-      "status": "fixed",
+      "status": "verified",
       "area": "signal_engine",
       "strategies": [],
       "first_seen": "2026-10-31",
@@ -572,7 +602,7 @@
       "root_cause": "It parsed a loguru 'record' wrapper the JSON error log no longer writes (keys are time/level/logger/message), and swallowed every line.",
       "fix": "Section removed from eod.sh; error analysis is the close-day 'logs' step (signal_engine/ops/logscan.py), tested in test_ops_phases.py.",
       "fix_commit": "",
-      "verification": "",
+      "verification": "2026-10-31 re-run of 2026-10-30: eod report has no errors section; reports/logs-2026-10-30.md: 79 error records in 20 signatures.",
       "sources": [],
       "history": [
         {
@@ -589,10 +619,15 @@
           "at": "2026-10-31T17:36:41+05:30",
           "status": "fixed",
           "note": "[eod-cron-2026-10-30] 2026-10-30: path exercised, logs section populated with 79 error records in 20 signatures; held"
+        },
+        {
+          "at": "2026-10-31T23:27:18+05:30",
+          "status": "verified",
+          "note": "verified by /resolve verify"
         }
       ],
       "created_at": "2026-10-31T17:34:48+05:30",
-      "updated_at": "2026-10-31T17:36:41+05:30"
+      "updated_at": "2026-10-31T23:27:18+05:30"
     },
     {
       "id": "BUG-012",
