@@ -12,20 +12,24 @@ coordination matters. File count is not a complexity proxy.
 
 ## Models
 
-- Sonnet: exploration, search, debugging with a discoverable root cause, implementation,
-  tests, refactoring, logging, docs, UI, data processing, implementing an approved design,
-  routine review, summaries.
-- A cheaper model is fine for simple, repetitive, or retrieval tasks.
-- Opus: only a genuinely hard reasoning problem where a cheaper model could plausibly get
-  it wrong, such as:
+- Haiku: simple searches, file discovery, log summaries, straightforward code
+  explanations, mechanical edits. General-purpose subagents default to it.
+- Sonnet: normal implementation, debugging, test writing, refactoring, code review,
+  logging, docs, UI, data processing, implementing an approved design.
+- Opus: complex root-cause analysis, concurrency issues (eventlet/gthread races),
+  the trading-engine order lifecycle (claims, fills, exits, stops), architecture
+  decisions, high-risk reviews, and any genuinely hard reasoning problem where a
+  cheaper model could plausibly get it wrong, such as:
   - materially different interpretations that repository evidence cannot resolve;
   - a novel architecture or algorithm decision with large consequences;
   - ambiguous trading, P&L, cost, fill, or execution semantics that matter;
   - a major data or migration decision that evidence cannot settle;
   - a genuine Sonnet reasoning dead-end;
   - the user asks for Opus.
-- Trading, backtest, financial, market-data, database, migration, security, architecture,
-  and broker work need strong validation. They do not by themselves need Opus.
+- Other trading, backtest, financial, market-data, database, migration, security and
+  broker work needs strong validation. It does not by itself need Opus.
+- Choose each subagent's model from its own task, not one model for all. Escalate a
+  subagent with the Agent tool's `model` parameter.
 
 ## Opus discipline
 
