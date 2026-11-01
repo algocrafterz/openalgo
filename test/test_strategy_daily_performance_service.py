@@ -53,7 +53,6 @@ def test_other_periods_omit_trade_list_but_carry_enrichment():
 
 
 def test_charge_drag_is_in_the_summary_and_the_comparison_row(monkeypatch):
-    monkeypatch.setattr(svc, "list_strategies", lambda: ["ORB"])
     ok, r, _ = svc.get_daily_performance(None, "7d")
     assert ok and r["charges_pct_of_gross"] == pytest.approx(100 * r["est_costs"] / 50.0, abs=0.01)  # gross is +100 - 50
     assert r["turnover"] > 0 and r["charges_pct_of_turnover"] > 0
@@ -120,7 +119,6 @@ def test_comparison_groups_one_query_by_strategy(monkeypatch):
         return _session_trades()
 
     monkeypatch.setattr(svc, "get_closed_trades", fake)
-    monkeypatch.setattr(svc, "list_strategies", lambda: ["ORB", "VWAP"])
     monkeypatch.setattr(svc, "_today", lambda: date(2026, 11, 1))
     ok, r, _ = svc.get_strategy_comparison("1d")
     assert ok and len(calls) == 1
@@ -133,9 +131,17 @@ def test_comparison_groups_one_query_by_strategy(monkeypatch):
 
 def test_comparison_custom_range(monkeypatch):
     monkeypatch.setattr(svc, "get_closed_trades", lambda **kw: _session_trades())
-    monkeypatch.setattr(svc, "list_strategies", lambda: ["ORB", "VWAP"])
     monkeypatch.setattr(svc, "_today", lambda: date(2026, 11, 1))
     ok, r, _ = svc.get_strategy_comparison("custom", start="2026-10-29", end="2026-10-29")
     assert ok and [row["strategy"] for row in r["strategies"]] == ["ORB"]
     ok, _, code = svc.get_strategy_comparison("custom", start="bad", end="2026-10-29")
     assert not ok and code == 400
+
+
+def test_comparison_lists_strategies_from_the_trades_not_the_position_book(monkeypatch):
+    """A strategy with closed trades but no position row (reset, pruned, or
+    reconstructed history) must still appear in the comparison table."""
+    monkeypatch.setattr(svc, "get_closed_trades", lambda **kw: _session_trades())
+    monkeypatch.setattr(svc, "_today", lambda: date(2026, 11, 1))
+    ok, r, _ = svc.get_strategy_comparison("15d")
+    assert ok and sorted(row["strategy"] for row in r["strategies"]) == ["ORB", "VWAP"]

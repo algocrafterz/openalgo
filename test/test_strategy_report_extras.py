@@ -179,7 +179,6 @@ def ledger(monkeypatch, tmp_path):
     monkeypatch.setattr(svc, "get_closed_trades", lambda **kw: list(trades))
     monkeypatch.setattr(svc, "_current_mode", lambda: "analyze")
     monkeypatch.setattr(svc, "_today", lambda: date(2026, 11, 1))
-    monkeypatch.setattr(svc, "list_strategies", lambda: ["ORB", "EMA"])
     monkeypatch.setattr(
         "services.strategy_trade_enrichment.SIGNAL_TRADES_DB", tmp_path / "absent.db"
     )

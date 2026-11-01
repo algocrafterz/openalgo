@@ -15,7 +15,7 @@ from datetime import date, datetime
 from typing import Any
 
 from database.settings_db import get_analyze_mode
-from database.strategy_book_db import get_closed_trades, list_strategies
+from database.strategy_book_db import get_closed_trades
 from services.strategy_metrics_service import (
     LEDGER_RELIABLE_SINCE,
     compute_metrics,
@@ -166,11 +166,11 @@ def get_strategy_comparison(
     for t in _in_range(all_trades, start_date, end_date):
         by_strategy[t["strategy"]].append(t)
 
+    # Strategies come from the trades themselves: one whose position row was
+    # reset or pruned still has history worth comparing.
     rows = []
-    for name in list_strategies():
-        trades_in_range = by_strategy.get(name)
-        if not trades_in_range:
-            continue
+    for name in sorted(by_strategy):
+        trades_in_range = by_strategy[name]
         m = compute_metrics(trades_in_range, start_date, end_date)
         costs = summarize_costs(trades_in_range)
         holds = hold_stats(trades_in_range)

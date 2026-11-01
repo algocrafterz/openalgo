@@ -165,7 +165,6 @@ def _patch(monkeypatch, tmp_path):
     monkeypatch.setattr(svc, "get_closed_trades", lambda **kw: list(trades))
     monkeypatch.setattr(svc, "_current_mode", lambda: "analyze")
     monkeypatch.setattr(svc, "_today", lambda: date(2026, 10, 30))
-    monkeypatch.setattr(svc, "list_strategies", lambda: ["ORB"])
     monkeypatch.setattr(enr, "SIGNAL_TRADES_DB", tmp_path / "absent.db")
     monkeypatch.setattr("services.strategy_metrics_service.LEDGER_RELIABLE_SINCE", date(2020, 1, 1))
 
