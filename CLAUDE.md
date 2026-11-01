@@ -163,7 +163,7 @@ the source file in `docs/` and every reader sees the change.
 
 Detailed procedures live in `.claude/skills/` and load on demand:
 
-- **`ai-model-workflow`** — before any non-trivial task or any subagent spawn: which model (`opus` or `sonnet` alias only) does which phase
+- **`ai-model-workflow`** — before any non-trivial task or any subagent spawn: which model (`haiku`, `sonnet` or `opus` alias only) does which phase
 - **`open-day`** — the start-of-day entry point (`/open-day`): reads the 09:12 readiness and 09:27 liveness checks (`signal_engine/ops/run_phase.sh`), Telegram only when RED; all phases on `/logs/workflow`
 - **`close-day`** — the single end-of-day entry point (`/close-day`): system health, sandbox strategy P&L, risk, bugs, data and tomorrow readiness; scheduled part is `signal_engine/analysis/close_day.sh` (cron 15:36 IST, done by 16:00)
 - **`resolve`** — work a tracker issue to closed (`/resolve`, `/resolve BUG-00N`, `/resolve verify`): reproduce from stored evidence, find the cause, fix, prove against the check that found it, record
@@ -463,122 +463,20 @@ User indicators live in `strategies/indicators/*.js` (gitignored, mirroring
 
 ### /trading is a full-screen terminal
 
-Traders compare /trading with the best charting terminals they use, so its
-finish is held to that bar: borrow their craft (density, crispness, one icon
-weight, quiet states), never their layout, grouping or wording, and **no brand or
-product names anywhere in /trading**: code, comments, class names, tooltips and
-copy describe things generically.
+No app navbar, no brand or product names anywhere in /trading (code, comments,
+copy), and every glyph comes from the chart engine. Full rules, including the
+toolbar, rail and three-look theming:
+[`.claude/skills/chart-indicator/reference/trading-terminal.md`](.claude/skills/chart-indicator/reference/trading-terminal.md).
+Read it before changing /trading.
 
-- **No app navbar on /trading.** The terminal takes the whole viewport. Its one
-  toolbar band carries a Dashboard link at the left and the account controls at
-  the right: broker badge, Live or Analyze badge, mode switch, theme toggle and
-  profile menu. Both the navbar and the terminal render the same
-  `components/layout/AccountControls.tsx`; never fork that logic into the
-  terminal, or mode switching and its warning toasts drift apart.
-- **Those four (Dashboard, mode switch, theme toggle, profile menu) are visible
-  at every width**, outside the toolbar's scrolling part. Everything else gives
-  way first: labels collapse to icons with tooltips on narrower screens, and the
-  row must fit at 1366 px. `Trading.test.tsx` pins the four by accessible name.
-- **Every glyph comes from the chart engine**, through the generated
-  `chromeIcons.ts` and `drawingToolMetadata.ts` and the `ChromeIcon` component in
-  `lib/trading/glyphs.tsx`, at the engine's line weight. The toolbar never imports
-  `openalgo-charts/draw` for an icon: that would load the drawing renderer with
-  the toolbar. Where the engine has no glyph, the app icon kept in its place is
-  drawn at the same weight.
-- **The drawing rail follows the engine's reference host rail**
-  (`examples/yfinance/src/rail.js` in openalgo-charts): glyph sizes, group carets
-  and flyouts, held-tool and magnet dots, the pinned controls block, and the fold
-  with its tab at the chart's lower left (`oa-trading-rail-folded` in local
-  storage). Change both together, or the two drift.
-- **Three looks, one source.** Live light, live dark and analyzer (the violet
-  accent) all come from the app's theme tokens through
-  `lib/trading/chartTheme.ts` and the tokens in `index.css`; no component carries
-  a palette of its own. A visual change is checked in all three, and the theme
-  toggle stays disabled in analyzer, as it is in the navbar.
-- **The chart the toolbar drives** is chosen from the layout menu ("Selected
-  chart"), and the focused pane's frame shows the accent. Keep the toolbar's
-  `data-toolbar-pane` attribute: the browser harness reads it.
+### Bumping openalgo-charts or openalgo-script also updates its skill
 
-### Bumping openalgo-charts also updates the chart-indicator skill
-
-The skill documents a specific build. `reference/api.md` carries the full export
-index and `pitfalls.md` carries the built-in ids a custom module can shadow, so
-a version bump that touches neither leaves the skill describing a library that
-is no longer installed. **Upgrading the pin and updating the skill are one
-change, not two.**
-
-```sh
-cd frontend && npm install openalgo-charts@<version> --save-exact
-node .claude/skills/chart-indicator/generate-api-index.mjs   # regenerates the index
-node .claude/skills/chart-indicator/coverage.mjs             # must print COVERAGE COMPLETE
-node scripts/generate-drawing-tools.mjs                       # rail glyphs and names, from the installed draw tier
-node scripts/generate-chrome-icons.mjs                        # toolbar and rail chrome glyphs
-```
-
-The two generators write `src/lib/trading/drawingToolMetadata.ts` and
-`src/lib/trading/chromeIcons.ts`; CI runs both with `--check`, so a bump that
-changes a glyph and skips them fails the build. Never edit either file by hand,
-and never run a formatter over them: `frontend/biome.json` leaves them out, because
-the check compares the generator's exact output and a reformatted file fails it.
-
-A bump that changes what /trading loads also runs the browser harness that lives
-in the openalgo-charts repo: `node scripts/check-openalgo-compat.mjs --frontend
-<worktree>/frontend --browser <chromium|firefox|webkit> --navigation true` (14
-checks). It needs a linked `git worktree` of this repo with `node_modules`
-copied, not linked. On Windows copy it with `robocopy <src> <dst> /E /XJ`: without
-`/XJ` robocopy follows the junctions inside `node_modules` and copies the same
-trees over and over (9 GB instead of 730 MB), which once filled the system drive.
-
-Then read the upstream changelog for the range you skipped and update the prose
-by hand: **Recent changes worth knowing** in `SKILL.md`, the *What arrived
-after* table in `api.md`, and the id-collision list in `pitfalls.md` if the
-registry grew. The generator only owns the export index; nothing generates the
-teaching.
-
-The `chart-indicator-skill` CI job runs both checks, so a stale skill fails the
-build. It exists because both scripts were already in the repo and nothing ran
-them: the index sat on 1.8.1 advertising "337 names" while `/trading` shipped
-2.1.5 with 363, and the eleven studies added in 1.8.3 were absent from the
-reference an indicator author reads.
-
-### Bumping openalgo-script also updates the openscript skill
-
-The same rule as the chart above, for the same reason: `reference/library.md`
-carries all 350 names with their warmups and marks the 95 that are **planned and
-not implemented**, so a bump that leaves it behind has an author reading a page
-about a compiler that is no longer installed. The marking is the part that
-matters most, because reaching for a planned name is refused at the call with
-`OS2020` and nothing warns first.
-
-```sh
-cd frontend && npm install openalgo-script@<version> --save-exact
-node .claude/skills/openscript/generate-reference.mjs    # rewrites the name table
-node .claude/skills/openscript/coverage.mjs              # must print COVERAGE COMPLETE
-node .claude/skills/openscript/check-pitfalls.mjs        # must print PITFALLS VERIFIED
-```
-
-The third is specific to this skill. `reference/pitfalls.md` teaches by naming
-diagnostic codes, and an author trusts a code; the script compiles both halves
-of every entry, so the wrong spelling must still produce the code named and the
-fix offered must still come out clean. It also holds the page and the script to
-the same set of codes, so neither drifts alone.
-
-The `openscript-skill` CI job runs all three. The generator owns the name table
-and nothing generates the teaching: after a bump, read the upstream changelog
-and update the prose in `SKILL.md`, `pitfalls.md` and `strategies.md` by hand,
-particularly wherever they say a name is planned. A version that implements one
-turns three pages stale at once.
-
-Two built-in pages exercise the streaming stack end to end: **`/websocket/test`**
-(market data; `/20`, `/30`, `/50` variants request those depth levels) and
-**`/websocket/order`** (account-level order/trade update stream). Use them to
-verify a broker feed rather than writing a throwaway client.
-
-**React routes do not all have Flask routes**, and that is fine — the `app.py`
-404 handler falls through to `serve_react_app()`, so React Router handles them.
-The reason to still register a route in `blueprints/react_app.py` is that
-unregistered paths hit `Error404Tracker` for *unauthenticated* visitors and
-count toward an IP ban.
+Upgrading the pin and updating the skill are one change. Procedures:
+[`bumping-openalgo-charts.md`](.claude/skills/chart-indicator/reference/bumping-openalgo-charts.md)
+and
+[`bumping-openalgo-script.md`](.claude/skills/openscript/reference/bumping-openalgo-script.md).
+CI fails a stale skill. Never hand-edit or reformat the generated
+`drawingToolMetadata.ts` and `chromeIcons.ts`.
 
 ### Architecture changes also update the docs diagrams
 
@@ -791,105 +689,10 @@ link, drop the emoji in front of it.
 
 ### The ChatGPT subscription model list is ours to maintain
 
-The `chatgpt/` provider authenticates with a ChatGPT Plus or Pro plan by OAuth
-device flow instead of an API key, and it reaches **Codex**, not the ChatGPT web
-app. Everything about the agent's provider catalogue is read live from LiteLLM
-precisely so a package bump brings new models with it. This provider is the one
-exception, and it needs a person.
-
-**The symptom, if you do not know this.** LiteLLM's registry lags the backend:
-at 1.104.0 its bundled map carries fourteen `chatgpt/*` entries, newest the
-`gpt-5.6` variants, while the backend serves more. The map LiteLLM fetches from
-GitHub at import is usually ahead of the bundled one, so check both. A model
-absent from that registry has no `mode`, so LiteLLM routes it through the
-chat-completions bridge instead of `/v1/responses`. The request never reaches
-the API: it lands on a Cloudflare interstitial and returns
-`403 Enable JavaScript and cookies to continue`. That reads like a network
-problem, an account problem or a bot block, and is none of them. Registering the
-entry with `mode: responses` is the entire fix.
-
-**The distinction that makes a candidate testable.** The backend refuses a model
-it does not serve in plain words:
-
-```
-{"detail":"The 'gpt-5.6' model is not supported when using Codex with a ChatGPT account."}
-```
-
-So a clean 400 naming the model means **not available**; a 403 HTML page means
-**not registered**, and is your bug, not OpenAI's. Anything else, read it.
-
-**Adding a model.** `services/agent/chatgpt_models.py` holds the supplement,
-registered into LiteLLM by `catalog._build()` and by `builder.build_model()`.
-Both are needed: a run resolving a stored row never touches the catalogue. It is
-deliberately NOT done in `chatgpt_oauth.ensure_ready()`, which runs inside a
-request and must import no LiteLLM and do no network work -- a hook placed there
-was caught by `test_the_gate_does_no_network_work`. To add a name, verify it
-first against a real
-subscription rather than guessing, because the set is not derivable from a
-pattern -- `gpt-5.6` is refused while `gpt-5.6-sol`, `-luna` and `-terra` all
-work:
-
-```python
-litellm.register_model({"chatgpt/<name>": {"litellm_provider": "chatgpt", "mode": "responses"}})
-litellm.responses(model="chatgpt/<name>", input=[{"role": "user", "content": "ok"}], stream=True)
-```
-
-Then add it to `SUPPLEMENTAL` with its context window.
-
-**Three rules for that file.**
-
-- **Never write cost keys.** A plan turn has no per-token price, and
-  `catalog.estimate_cost` returning None is what makes the usage badge report
-  tokens and no cost. Reporting `$0.00` claims the turn was free when it
-  consumed plan quota; falling back to the API price is worse.
-- **Never overwrite a LiteLLM entry, and test the provider, not the name.**
-  Eight of these models share a bare name with an OpenAI API model, so
-  `"gpt-5.6-sol" in litellm.model_cost` is True because of *OpenAI's* entry. A
-  guard written that way skips every model it exists to add. Match on
-  `litellm_provider == "chatgpt"`.
-- **Fail quietly.** The supplement is a convenience; a LiteLLM whose registry
-  has a different shape should cost these models, not a working agent.
-
-**Availability is per plan, not per provider.** These are the models the backend
-serves; which a given account may use is between the operator and OpenAI. The
-catalogue is advisory, and the model test on the config page is what answers for
-one account. That test **streams**, deliberately: LiteLLM's non-streaming reader
-for this provider raises `Unknown items in responses API response: []` on a
-reply that streams back perfectly (upstream #26179, open; its fix #27562 was
-closed unmerged), and the agent only ever runs `stream=True` anyway.
-
-Delete the file when LiteLLM ships these names. Its entries win automatically.
-
-**Strategy logic changes must get a layman summary in that strategy's STRATEGY-LOG.md**
-(e.g. `signal_engine/strategy_library/intraday/breaking-trade/STRATEGY-LOG.md`) — any change to
-entry, exit, stop-loss, take-profit, or filters that decide which signals become trades.
-Dated entry (`### YYYY-MM-DD HH:MM — Title`, from `git log --format="%ad" --date=format:"%Y-%m-%d %H:%M"`
-if already committed), five fields, one to two sentences each, no financial/technical jargon
-(define a term in one clause if it can't be avoided):
-
-- **What changed**
-- **Entry** — does this change how or when a position opens?
-- **Exit (SL)** — does this change the stop-loss?
-- **Exit (TP)** — does this change how profit is taken?
-- **Consideration** — anything a trader should watch for or weigh
-
-Say "Not affected" for a field the change doesn't touch — don't omit it. A fuller technical
-explanation (file/function names, formulas, edge cases) goes in a trailing **NOTE:** block, kept
-out of the five fields above.
-
-**All strategy and analysis timestamps are IST — this platform trades only Indian NSE/BSE
-markets, never anything else.** Convert any external timestamp (broker/data API responses, raw
-epoch seconds, an ISO datetime carrying its own offset) to IST the moment it is parsed, at the
-boundary where it enters the codebase — never assume an API already returns IST, and never
-compare a value that might not be IST against a naive-IST constant (session cutoffs, market-hour
-windows, `IB_START`/`IB_END`-style literals) without converting first. Prefer
-`signal_engine/timeutils.py`'s `IST` timezone object over redefining the offset locally. This is
-not theoretical: `validate.fetch_bars()` silently left OpenAlgo's epoch-second bar timestamps in
-UTC instead of shifting to IST, and every BreakingTrade trade-confirmation check compared
-against them — so the confirmation step was structurally incapable of succeeding, for every
-symbol, every day, from when the strategy was built until the bug was found (2026-09-08). No
-exception, no error, nothing to search logs for — it just never worked, silently. See
-`signal_engine/strategy_library/intraday/breaking-trade/STRATEGY-LOG.md`'s 2026-09-08 13:52 entry.
+LiteLLM's registry lags the `chatgpt/` backend. A model missing from it returns a
+Cloudflare 403 that looks like a network problem; the fix is registering it with
+`mode: responses` in `services/agent/chatgpt_models.py`. Never write cost keys.
+Procedure and rules: [`docs/chatgpt-subscription-models.md`](docs/chatgpt-subscription-models.md).
 
 ## Frontend build
 

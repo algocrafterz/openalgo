@@ -45,6 +45,7 @@ need → drill into the specific file. Don't load everything at once.
 |---|---|
 | Agent (`/agent`) | [design/55-agent/README.md](design/55-agent/README.md) |
 | Scalping Terminal (`/scalping`) | [scalping/PRD.md](scalping/PRD.md) |
+| ChatGPT subscription model list (maintenance) | [chatgpt-subscription-models.md](chatgpt-subscription-models.md) |
 | Scanner architecture | [scanner-architecture.md](scanner-architecture.md) |
 | WhatsApp alerts | [whatsapp.md](whatsapp.md) |
 | Telegram chart rendering | [telegram-chart-rendering.md](telegram-chart-rendering.md) |
