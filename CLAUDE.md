@@ -663,6 +663,19 @@ component files, TanStack Query for server state.
 
 **Commits.** Conventional Commits: `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`.
 
+**When to commit.** One commit per completed, verified unit of work: one fixed issue, one
+finished feature, or one atomic refactor. Commit when all of these hold:
+
+- The change does one thing, and its tests (the targeted files) pass.
+- The commit carries its own tests and any doc or PRD update the change requires.
+- It is not work in progress. A half-built feature, a failing test, or a debug line waits.
+- The working tree holds no unrelated edits in the staged set. Stage explicit paths only.
+
+Do not commit after every edit, and do not split one fix across several commits. Fold a fix
+and its follow-up into one commit before it is shared. Do not commit experiments, generated
+output, or another session's files. A separate issue gets a separate commit, even when found
+in the same session. Aim for a handful of commits per working session, not dozens.
+
 **Nothing is published without a changelog entry, and the entry is part of the
 publish rather than a follow-up.** Whatever is going out (a platform release, a
 version bump, a package pushed to a registry) carries its own stanza in
