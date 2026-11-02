@@ -48,8 +48,11 @@ def test_seen_appends_days_once_and_moves_last_seen(path):
     assert bug["last_seen"] == "2026-10-30" and bug["evidence"] == ["rows 3392, 3404"]
 
 
-def test_a_fixed_bug_seen_again_reopens(path):
+def test_a_fixed_bug_seen_again_reopens(path, monkeypatch):
     _add(path)
+    # The fix is stamped from the clock; pin it to the day before the sighting, so the
+    # sighting is a session after the fix whatever today's date is.
+    monkeypatch.setattr(store, "_now", lambda: "2026-11-01T10:00:00+05:30")
     store.update("BUG-001", status="fixed", fix="set sl_order_id from the sweep", path=path)
     bug = store.seen("BUG-001", "2026-11-02", path=path)
     assert bug["status"] == "open"
