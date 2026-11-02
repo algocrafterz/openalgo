@@ -7,6 +7,7 @@ same pattern as `blueprints/strategy_portfolio.py`.
 """
 
 import csv
+import hashlib
 import io
 import os
 
@@ -25,6 +26,7 @@ from services.strategy_daily_performance_service import (
 from services.strategy_performance_service import get_strategy_performance
 from utils.logging import get_logger
 from utils.session import check_session_validity
+from utils.single_flight import SingleFlight
 
 logger = get_logger(__name__)
 
@@ -59,6 +61,13 @@ def _with_data_health(response: dict, status_code: int) -> dict:
         return response
 
 
+# The P&L page refreshes every 30 s, and every tab that has it open refreshes on its own schedule.
+# Each read costs a broker position-book call, so reads that overlap (or come back within the
+# window) share one result. Keyed by user and broker; the broker token enters the key as a hash.
+_PNL_READ_TTL_S = 3.0
+_pnl_flights = SingleFlight(join_window=5.0, wait_timeout=60.0)
+
+
 @strategy_pnl_bp.route("/api/strategy-pnl", methods=["GET"])
 @check_session_validity
 @limiter.limit(STRATEGY_PNL_READ_LIMIT)
@@ -75,7 +84,13 @@ def strategy_pnl():
         logger.error("Broker not set in session")
         return jsonify({"status": "error", "message": "Broker not set in session"}), 400
 
-    _success, response, status_code = get_strategy_performance(login_username, auth_token, broker)
+    token_tag = hashlib.sha256(str(auth_token).encode()).hexdigest()[:12]
+    key = ("performance", login_username, broker, token_tag)
+    _success, response, status_code = _pnl_flights.do(
+        key,
+        lambda: get_strategy_performance(login_username, auth_token, broker),
+        ttl=_PNL_READ_TTL_S,
+    )
     return jsonify(_with_data_health(response, status_code)), status_code
 
 
@@ -88,8 +103,13 @@ def strategy_pnl_daily():
     `period=custom` takes `start` and `end` as YYYY-MM-DD."""
     strategy = request.args.get("strategy") or None
     period = request.args.get("period", "30d")
-    _success, response, status_code = get_daily_performance(
-        strategy, period, start=request.args.get("start"), end=request.args.get("end")
+    start = request.args.get("start")
+    end = request.args.get("end")
+    key = ("daily", session["user"], strategy, period, start, end)
+    _success, response, status_code = _pnl_flights.do(
+        key,
+        lambda: get_daily_performance(strategy, period, start=start, end=end),
+        ttl=_PNL_READ_TTL_S,
     )
     return jsonify(_with_data_health(response, status_code)), status_code
 

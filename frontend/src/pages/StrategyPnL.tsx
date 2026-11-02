@@ -366,6 +366,9 @@ export default function StrategyPnL() {
     queryKey: ['strategy-pnl'],
     queryFn: () => strategyPnlApi.get(),
     refetchInterval: POLL_MS,
+    // Focusing the window refetches only when the data is older than half a poll, so a tab that
+    // was just polled does not send a second, overlapping read.
+    staleTime: POLL_MS / 2,
     refetchOnWindowFocus: true,
   })
 
@@ -375,6 +378,7 @@ export default function StrategyPnL() {
     queryKey: ['strategy-pnl-session'],
     queryFn: () => strategyPnlApi.daily(null, '1d'),
     refetchInterval: POLL_MS,
+    staleTime: POLL_MS / 2,
     refetchOnWindowFocus: true,
   })
 
