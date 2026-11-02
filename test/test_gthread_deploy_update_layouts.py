@@ -161,7 +161,17 @@ class UpdateBox:
 
     def _checkout(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
-        _git("clone", "-q", str(self.origin), str(path), cwd=self.root)
+        # Pinned in the clone's own config, so neither this checkout nor the updater's later
+        # pulls inherit a developer's global core.autocrlf=true: CRLF breaks update.sh in bash.
+        _git(
+            "clone",
+            "-q",
+            "--config",
+            "core.autocrlf=false",
+            str(self.origin),
+            str(path),
+            cwd=self.root,
+        )
         (path / ".env").write_text("APP_KEY = 'x'\nTRUST_PROXY_HEADERS = 'TRUE'\n")
         return path
 
