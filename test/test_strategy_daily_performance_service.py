@@ -145,3 +145,95 @@ def test_comparison_lists_strategies_from_the_trades_not_the_position_book(monke
     monkeypatch.setattr(svc, "_today", lambda: date(2026, 11, 1))
     ok, r, _ = svc.get_strategy_comparison("15d")
     assert ok and sorted(row["strategy"] for row in r["strategies"]) == ["ORB", "VWAP"]
+
+
+def _filter_trades():
+    def trade(strategy, symbol, pnl, day):
+        return {
+            **_t(symbol, pnl, f"{day}T10:00:00", trade_date=day),
+            "strategy": strategy,
+        }
+
+    return [
+        trade("ORB", "AAA", 100.0, "2026-10-28"),
+        trade("ORB", "AAA", -30.0, "2026-10-29"),
+        trade("VWAP", "BBB", 50.0, "2026-10-29"),
+        trade("VWAP", "BBB", -80.0, "2026-10-30"),
+        trade("EMA", "CCC", 40.0, "2026-10-30"),
+        trade("LATE", "DDD", 10.0, "2026-10-31"),
+    ]
+
+
+@pytest.fixture
+def filter_ledger(monkeypatch):
+    monkeypatch.setattr(svc, "get_closed_trades", lambda **kw: _filter_trades())
+    monkeypatch.setattr(svc, "_today", lambda: date(2026, 11, 1))
+
+
+def test_include_only_pools_just_those_strategies(filter_ledger):
+    ok, r, _ = svc.get_daily_performance("ORB", "all", include=["VWAP"])
+    assert ok and r["trades_count"] == 4
+    assert r["net_profit"] == 40.0
+    assert r["included"] == ["ORB", "VWAP"] and r["excluded"] == []
+    assert r["strategy"] == "ORB"
+
+
+def test_exclude_only_means_all_except(filter_ledger):
+    ok, r, _ = svc.get_daily_performance(None, "all", exclude=["VWAP"])
+    assert ok and r["trades_count"] == 4
+    assert r["included"] == ["EMA", "LATE", "ORB"]
+    assert r["excluded"] == ["VWAP"]
+
+
+def test_include_and_exclude_together(filter_ledger):
+    ok, r, _ = svc.get_daily_performance(
+        None, "all", include=["ORB", "VWAP", "EMA"], exclude=["EMA"]
+    )
+    assert ok and r["included"] == ["ORB", "VWAP"] and r["trades_count"] == 4
+
+
+def test_exclusion_wins_over_inclusion(filter_ledger):
+    ok, r, _ = svc.get_daily_performance("ORB", "all", include=["VWAP"], exclude=["ORB"])
+    assert ok and r["included"] == ["VWAP"] and r["trades_count"] == 2
+    ok, r, _ = svc.get_daily_performance("ORB", "all", exclude=["ORB"])
+    assert ok and r["trades_count"] == 0 and r["included"] == []
+
+
+def test_pooled_ratios_come_from_the_filtered_trades(filter_ledger):
+    from services.strategy_metrics_service import compute_metrics
+
+    ok, r, _ = svc.get_daily_performance(None, "all", exclude=["VWAP", "LATE"])
+    kept = [t for t in _filter_trades() if t["strategy"] in ("ORB", "EMA")]
+    direct = compute_metrics(kept, r["start_date"], r["end_date"])
+    assert ok
+    assert r["sharpe_ratio"] == direct["sharpe_ratio"]
+    assert r["max_drawdown"] == direct["max_drawdown"]
+    assert r["net_profit"] == direct["net_profit"]
+
+
+def test_comparison_rows_are_filtered_but_all_strategies_is_not(filter_ledger):
+    ok, r, _ = svc.get_strategy_comparison("all", include=["ORB", "VWAP"], exclude=["VWAP"])
+    assert ok and [row["strategy"] for row in r["strategies"]] == ["ORB"]
+    assert r["all_strategies"] == ["EMA", "LATE", "ORB", "VWAP"]
+    assert r["included"] == ["ORB"] and r["excluded"] == ["VWAP"]
+
+
+def test_export_is_filtered(filter_ledger):
+    ok, r, _ = svc.get_trades_for_export(None, "all", exclude=["VWAP", "ORB"])
+    assert ok and {t["strategy"] for t in r["trades"]} == {"EMA", "LATE"}
+    ok, r, _ = svc.get_trades_for_export("ORB", "all", include=["EMA"])
+    assert ok and {t["strategy"] for t in r["trades"]} == {"ORB", "EMA"}
+
+
+def test_one_day_window_ignores_the_filter(filter_ledger):
+    """LATE traded on the latest session; filtering it out must not move 1D."""
+    ok, r, _ = svc.get_daily_performance(None, "1d", exclude=["LATE"])
+    assert ok and r["start_date"] == r["end_date"] == "2026-10-31"
+    assert r["trades_count"] == 0
+    ok, c, _ = svc.get_strategy_comparison("1d", exclude=["LATE"])
+    assert ok and c["start_date"] == "2026-10-31" and c["strategies"] == []
+
+
+def test_unknown_name_contributes_nothing(filter_ledger):
+    ok, r, _ = svc.get_daily_performance(None, "all", include=["NOPE"])
+    assert ok and r["trades_count"] == 0 and r["included"] == []

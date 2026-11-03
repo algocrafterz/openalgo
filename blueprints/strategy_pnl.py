@@ -94,21 +94,73 @@ def strategy_pnl():
     return jsonify(_with_data_health(response, status_code)), status_code
 
 
+_MAX_FILTER_NAMES = 100
+_MAX_NAME_LENGTH = 64
+
+
+def _names(key: str) -> list[str]:
+    """Repeated query values: whitespace stripped, empties dropped, duplicates
+    removed with the first order kept."""
+    seen: dict[str, None] = {}
+    for raw in request.args.getlist(key):
+        name = raw.strip()
+        if name:
+            seen.setdefault(name, None)
+    return list(seen)
+
+
+def _strategy_filter():
+    """Read the strategy filter from the query string.
+
+    Returns (strategy, include, exclude, None) or (None, None, None, error
+    response). The first included name goes in `strategy` and the rest in
+    `include`, so a plain `?strategy=ORB` reaches the service as before.
+    """
+    included = _names("strategy")
+    excluded = _names("exclude")
+    if len(included) + len(excluded) > _MAX_FILTER_NAMES:
+        message = (
+            f"Too many strategies selected. Choose at most {_MAX_FILTER_NAMES} "
+            "strategies to include or exclude."
+        )
+    elif any(len(name) > _MAX_NAME_LENGTH for name in included + excluded):
+        message = (
+            f"A strategy name is too long. Names can have at most {_MAX_NAME_LENGTH} characters."
+        )
+    else:
+        strategy = included[0] if included else None
+        return strategy, included[1:], excluded, None
+    return None, None, None, (jsonify({"status": "error", "message": message}), 400)
+
+
 @strategy_pnl_bp.route("/api/strategy-pnl/daily", methods=["GET"])
 @check_session_validity
 @limiter.limit(STRATEGY_PNL_READ_LIMIT)
 def strategy_pnl_daily():
-    """Day-by-day metrics, daily P&L series and equity curve for one
-    strategy, or the pooled portfolio if `strategy` is omitted.
+    """Day-by-day metrics, daily P&L series and equity curve for the chosen
+    strategies (repeat `strategy` to include several, `exclude` to leave some
+    out), or the pooled portfolio if neither is given.
     `period=custom` takes `start` and `end` as YYYY-MM-DD."""
-    strategy = request.args.get("strategy") or None
+    strategy, include, exclude, error = _strategy_filter()
+    if error:
+        return error
     period = request.args.get("period", "30d")
     start = request.args.get("start")
     end = request.args.get("end")
-    key = ("daily", session["user"], strategy, period, start, end)
+    key = (
+        "daily",
+        session["user"],
+        tuple(sorted(([strategy] if strategy else []) + include)),
+        tuple(sorted(exclude)),
+        period,
+        start,
+        end,
+    )
     _success, response, status_code = _pnl_flights.do(
         key,
-        lambda: get_daily_performance(strategy, period, start=start, end=end),
+        lambda: get_daily_performance(
+            strategy, period, start=start, end=end, include=include, exclude=exclude
+        ),
         ttl=_PNL_READ_TTL_S,
     )
     return jsonify(_with_data_health(response, status_code)), status_code
@@ -118,11 +170,20 @@ def strategy_pnl_daily():
 @check_session_validity
 @limiter.limit(STRATEGY_PNL_READ_LIMIT)
 def strategy_pnl_compare():
-    """Condensed metrics for every strategy in the current mode, side by
-    side - the bird's-eye-view comparison table."""
+    """Condensed metrics for the chosen strategies in the current mode (all of
+    them when no filter is given), side by side - the bird's-eye-view
+    comparison table."""
+    strategy, include, exclude, error = _strategy_filter()
+    if error:
+        return error
     period = request.args.get("period", "30d")
+    names = ([strategy] if strategy else []) + include
     _success, response, status_code = get_strategy_comparison(
-        period, start=request.args.get("start"), end=request.args.get("end")
+        period,
+        start=request.args.get("start"),
+        end=request.args.get("end"),
+        include=names,
+        exclude=exclude,
     )
     return jsonify(_with_data_health(response, status_code)), status_code
 
@@ -215,10 +276,17 @@ def strategy_pnl_trades_export():
       mfe, mae         best and worst open excursion in INR, an upper bound
                        from 1-minute bars; blank when a range exceeds 2000 trades
     """
-    strategy = request.args.get("strategy") or None
+    strategy, include, exclude, error = _strategy_filter()
+    if error:
+        return error
     period = request.args.get("period", "30d")
     success, body, status_code = get_trades_for_export(
-        strategy, period, start=request.args.get("start"), end=request.args.get("end")
+        strategy,
+        period,
+        start=request.args.get("start"),
+        end=request.args.get("end"),
+        include=include,
+        exclude=exclude,
     )
     if not success:
         return jsonify(body), status_code

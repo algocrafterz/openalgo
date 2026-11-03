@@ -123,7 +123,7 @@ def test_daily_route_passes_query_params_and_returns_metrics(monkeypatch):
     monkeypatch.setattr(limiter, "enabled", False)
     captured = {}
 
-    def fake_get_daily_performance(strategy, period, start=None, end=None):
+    def fake_get_daily_performance(strategy, period, start=None, end=None, **kw):
         captured["strategy"] = strategy
         captured["period"] = period
         captured["range"] = (start, end)
@@ -147,7 +147,7 @@ def test_daily_route_defaults_period_to_30d_and_strategy_to_none(monkeypatch):
     monkeypatch.setattr(limiter, "enabled", False)
     captured = {}
 
-    def fake_get_daily_performance(strategy, period, start=None, end=None):
+    def fake_get_daily_performance(strategy, period, start=None, end=None, **kw):
         captured["strategy"] = strategy
         captured["period"] = period
         return True, {"status": "success"}, 200
@@ -201,11 +201,11 @@ def test_daily_and_compare_routes_pass_custom_range(monkeypatch):
     monkeypatch.setattr(limiter, "enabled", False)
     captured = {}
 
-    def fake_daily(strategy, period, start=None, end=None):
+    def fake_daily(strategy, period, start=None, end=None, **kw):
         captured["daily"] = (period, start, end)
         return True, {"status": "success"}, 200
 
-    def fake_compare(period, start=None, end=None):
+    def fake_compare(period, start=None, end=None, **kw):
         captured["compare"] = (period, start, end)
         return True, {"status": "success", "strategies": []}, 200
 
@@ -222,3 +222,147 @@ def test_daily_and_compare_routes_pass_custom_range(monkeypatch):
 
     assert captured["daily"] == ("custom", "2026-10-01", "2026-10-15")
     assert captured["compare"] == ("custom", "2026-10-01", "2026-10-15")
+
+
+def test_repeated_params_reach_the_service(monkeypatch):
+    monkeypatch.setattr(limiter, "enabled", False)
+    captured = {}
+
+    def fake_daily(strategy, period, start=None, end=None, *, include=None, exclude=None):
+        captured["daily"] = (strategy, include, exclude)
+        return True, {"status": "success"}, 200
+
+    def fake_compare(period, start=None, end=None, *, include=None, exclude=None):
+        captured["compare"] = (include, exclude)
+        return True, {"status": "success", "strategies": []}, 200
+
+    monkeypatch.setattr(strategy_pnl_module, "get_daily_performance", fake_daily)
+    monkeypatch.setattr(strategy_pnl_module, "get_strategy_comparison", fake_compare)
+
+    app = _app()
+    with app.test_client() as client:
+        session_utils = _log_in(client)
+        monkeypatch.setattr(session_utils, "is_session_expiry_disabled", lambda: True)
+        q = "strategy=A&strategy=%20B%20&strategy=A&strategy=&exclude=C&exclude=D"
+        client.get(f"/api/strategy-pnl/daily?{q}")
+        client.get(f"/api/strategy-pnl/compare?{q}")
+
+    assert captured["daily"] == ("A", ["B"], ["C", "D"])
+    assert captured["compare"] == (["A", "B"], ["C", "D"])
+
+
+def test_exclude_only_leaves_strategy_none(monkeypatch):
+    monkeypatch.setattr(limiter, "enabled", False)
+    captured = {}
+
+    def fake_daily(strategy, period, start=None, end=None, *, include=None, exclude=None):
+        captured["args"] = (strategy, include, exclude)
+        return True, {"status": "success"}, 200
+
+    monkeypatch.setattr(strategy_pnl_module, "get_daily_performance", fake_daily)
+    app = _app()
+    with app.test_client() as client:
+        session_utils = _log_in(client)
+        monkeypatch.setattr(session_utils, "is_session_expiry_disabled", lambda: True)
+        client.get("/api/strategy-pnl/daily?exclude=X")
+
+    assert captured["args"] == (None, [], ["X"])
+
+
+def test_filter_size_limits_return_a_plain_400(monkeypatch):
+    monkeypatch.setattr(limiter, "enabled", False)
+    calls = []
+
+    def fake(*a, **k):
+        calls.append(1)
+        return True, {"status": "success"}, 200
+
+    monkeypatch.setattr(strategy_pnl_module, "get_daily_performance", fake)
+    monkeypatch.setattr(strategy_pnl_module, "get_strategy_comparison", fake)
+    monkeypatch.setattr(strategy_pnl_module, "get_trades_for_export", fake)
+
+    app = _app()
+    with app.test_client() as client:
+        session_utils = _log_in(client)
+        monkeypatch.setattr(session_utils, "is_session_expiry_disabled", lambda: True)
+        many = (
+            "&".join(f"strategy=S{i}" for i in range(60))
+            + "&"
+            + "&".join(f"exclude=E{i}" for i in range(41))
+        )
+        long_name = "x" * 65
+        for path in ("daily", "compare", "trades/export"):
+            for query in (many, f"strategy={long_name}"):
+                response = client.get(f"/api/strategy-pnl/{path}?{query}")
+                assert response.status_code == 400
+                body = response.get_json()
+                assert body["status"] == "error" and body["message"]
+    assert calls == []
+
+
+def test_same_filter_in_another_order_shares_one_service_call(monkeypatch):
+    monkeypatch.setattr(limiter, "enabled", False)
+    from utils.single_flight import SingleFlight
+
+    monkeypatch.setattr(
+        strategy_pnl_module, "_pnl_flights", SingleFlight(join_window=5, wait_timeout=10)
+    )
+    monkeypatch.setattr(strategy_pnl_module, "_with_data_health", lambda r, _c: r)
+    calls = []
+
+    def fake_daily(strategy, period, start=None, end=None, *, include=None, exclude=None):
+        calls.append(strategy)
+        return True, {"status": "success"}, 200
+
+    monkeypatch.setattr(strategy_pnl_module, "get_daily_performance", fake_daily)
+    app = _app()
+    with app.test_client() as client:
+        session_utils = _log_in(client)
+        monkeypatch.setattr(session_utils, "is_session_expiry_disabled", lambda: True)
+        client.get("/api/strategy-pnl/daily?strategy=A&strategy=B&exclude=X&exclude=Y")
+        client.get("/api/strategy-pnl/daily?strategy=B&strategy=A&exclude=Y&exclude=X")
+
+    assert len(calls) == 1
+
+
+def test_export_route_passes_repeated_params(monkeypatch):
+    monkeypatch.setattr(limiter, "enabled", False)
+    captured = {}
+
+    def fake_export(strategy, period, start=None, end=None, *, include=None, exclude=None):
+        captured["args"] = (strategy, include, exclude)
+        return True, {"status": "success", "trades": []}, 200
+
+    monkeypatch.setattr(strategy_pnl_module, "get_trades_for_export", fake_export)
+    app = _app()
+    with app.test_client() as client:
+        session_utils = _log_in(client)
+        monkeypatch.setattr(session_utils, "is_session_expiry_disabled", lambda: True)
+        client.get("/api/strategy-pnl/trades/export?strategy=A&strategy=B&exclude=C&exclude=D")
+
+    assert captured["args"] == ("A", ["B"], ["C", "D"])
+
+
+def test_different_filters_do_not_share_one_service_call(monkeypatch):
+    monkeypatch.setattr(limiter, "enabled", False)
+    from utils.single_flight import SingleFlight
+
+    monkeypatch.setattr(
+        strategy_pnl_module, "_pnl_flights", SingleFlight(join_window=5, wait_timeout=10)
+    )
+    monkeypatch.setattr(strategy_pnl_module, "_with_data_health", lambda r, _c: r)
+    calls = []
+
+    def fake_daily(strategy, period, start=None, end=None, *, include=None, exclude=None):
+        calls.append((strategy, include, exclude))
+        return True, {"status": "success"}, 200
+
+    monkeypatch.setattr(strategy_pnl_module, "get_daily_performance", fake_daily)
+    app = _app()
+    with app.test_client() as client:
+        session_utils = _log_in(client)
+        monkeypatch.setattr(session_utils, "is_session_expiry_disabled", lambda: True)
+        client.get("/api/strategy-pnl/daily?strategy=X")
+        client.get("/api/strategy-pnl/daily?exclude=X")
+
+    assert len(calls) == 2

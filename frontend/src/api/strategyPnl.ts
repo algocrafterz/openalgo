@@ -1,3 +1,4 @@
+import { type StrategyFilter, strategyFilterParams } from '@/lib/strategyFilter'
 import { webClient } from './client'
 
 export interface DataHealthMismatch {
@@ -67,8 +68,26 @@ export interface DateRange {
   end: string
 }
 
-function periodParams(period: PerformancePeriod, range?: DateRange): URLSearchParams {
+/** A strategy filter, or one strategy name (or null for all) as older callers pass it. */
+export type StrategySelection = string | null | StrategyFilter
+
+const NOTHING_SELECTED = 'Select at least one strategy.'
+
+/** True when the selection is a filter the user cleared on purpose: never a whole-portfolio request. */
+function isNoneSelection(selection?: StrategySelection): boolean {
+  return typeof selection === 'object' && selection !== null && selection.none === true
+}
+
+function periodParams(
+  period: PerformancePeriod,
+  range?: DateRange,
+  selection?: StrategySelection
+): URLSearchParams {
   const params = new URLSearchParams({ period })
+  if (selection) {
+    const filter = typeof selection === 'string' ? { include: [selection], exclude: [] } : selection
+    for (const [key, value] of strategyFilterParams(filter)) params.append(key, value)
+  }
   if (period === 'custom' && range) {
     params.set('start', range.start)
     params.set('end', range.end)
@@ -98,6 +117,10 @@ export interface StrategyDailyPerformance {
   mode?: 'live' | 'analyze'
   strategy?: string | null
   period?: PerformancePeriod
+  /** Strategies that contributed trades in the window, sorted. */
+  included?: string[]
+  /** The exclude list as requested, sorted. */
+  excluded?: string[]
   message?: string
   data_health?: DataHealth
   start_date?: string
@@ -283,7 +306,10 @@ export interface StrategyComparisonResponse {
   start_date?: string
   end_date?: string
   strategies?: StrategyComparisonRow[]
+  /** Every strategy with trades, whatever the filter, so an excluded one can be added back. */
   all_strategies?: string[]
+  included?: string[]
+  excluded?: string[]
   message?: string
   data_health?: DataHealth
 }
@@ -323,20 +349,25 @@ export const strategyPnlApi = {
   },
 
   daily: (
-    strategy: string | null,
+    strategy: StrategySelection,
     period: PerformancePeriod,
     range?: DateRange
   ): Promise<StrategyDailyPerformance> => {
-    const params = periodParams(period, range)
-    if (strategy) params.set('strategy', strategy)
+    if (isNoneSelection(strategy)) return Promise.reject(new Error(NOTHING_SELECTED))
+    const params = periodParams(period, range, strategy)
     return unwrap(
       webClient.get<StrategyDailyPerformance>(`/api/strategy-pnl/daily?${params.toString()}`),
       'Failed to fetch daily performance'
     )
   },
 
-  compare: (period: PerformancePeriod, range?: DateRange): Promise<StrategyComparisonResponse> => {
-    const params = periodParams(period, range)
+  compare: (
+    period: PerformancePeriod,
+    range?: DateRange,
+    filter?: StrategyFilter
+  ): Promise<StrategyComparisonResponse> => {
+    if (isNoneSelection(filter)) return Promise.reject(new Error(NOTHING_SELECTED))
+    const params = periodParams(period, range, filter)
     return unwrap(
       webClient.get<StrategyComparisonResponse>(`/api/strategy-pnl/compare?${params.toString()}`),
       'Failed to fetch strategy comparison'
@@ -345,12 +376,12 @@ export const strategyPnlApi = {
 
   /** Downloads the closed trades of a range as CSV; throws an Error with a trader-readable message. */
   exportTrades: async (
-    strategy: string | null,
+    strategy: StrategySelection,
     period: PerformancePeriod,
     range?: DateRange
   ): Promise<{ blob: Blob; filename: string }> => {
-    const params = periodParams(period, range)
-    if (strategy) params.set('strategy', strategy)
+    if (isNoneSelection(strategy)) throw new Error(NOTHING_SELECTED)
+    const params = periodParams(period, range, strategy)
     try {
       const res = await webClient.get<Blob>(
         `/api/strategy-pnl/trades/export?${params.toString()}`,

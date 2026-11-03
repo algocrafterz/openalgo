@@ -30,6 +30,7 @@ import { HoldStatsRow } from '@/components/strategy-pnl/HoldStats'
 import { MetricCard } from '@/components/strategy-pnl/MetricCard'
 import { SessionSummary } from '@/components/strategy-pnl/SessionSummary'
 import { SessionTrades } from '@/components/strategy-pnl/SessionTrades'
+import { StrategyFilterPicker } from '@/components/strategy-pnl/StrategyFilterPicker'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -50,6 +51,12 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
+import {
+  onlyStrategy,
+  parseStrategyFilter,
+  type StrategyFilter,
+  writeStrategyFilter,
+} from '@/lib/strategyFilter'
 import {
   chargesHint,
   edgeShortLabel,
@@ -90,7 +97,6 @@ function validRange(range: DateRange): boolean {
   return ISO_DATE.test(range.start) && ISO_DATE.test(range.end) && range.start <= range.end
 }
 
-const PORTFOLIO_VALUE = '__portfolio__'
 const POLL_MS = 60_000
 
 /** Colour for a charges-to-profit share: half the profit is a warning, all of it a loss. */
@@ -474,8 +480,7 @@ export default function StrategyDailyPerformance() {
   const [searchParams, setSearchParams] = useSearchParams()
   const rawPeriod = searchParams.get('period') ?? '7d'
   const period = (PERIOD_VALUES.has(rawPeriod) ? rawPeriod : '7d') as PerformancePeriod
-  const selectedStrategy = searchParams.get('strategy') || PORTFOLIO_VALUE
-  const strategyParam = selectedStrategy === PORTFOLIO_VALUE ? null : selectedStrategy
+  const filter = useMemo(() => parseStrategyFilter(searchParams), [searchParams])
   const appliedRange = useMemo<DateRange>(
     () => ({ start: searchParams.get('start') ?? '', end: searchParams.get('end') ?? '' }),
     [searchParams]
@@ -529,7 +534,7 @@ export default function StrategyDailyPerformance() {
   const exportCsv = async () => {
     setExporting(true)
     try {
-      const { blob, filename } = await strategyPnlApi.exportTrades(strategyParam, period, range)
+      const { blob, filename } = await strategyPnlApi.exportTrades(filter, period, range)
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
@@ -545,8 +550,19 @@ export default function StrategyDailyPerformance() {
     }
   }
 
-  const setSelectedStrategy = (value: string) =>
-    updateParams({ strategy: value === PORTFOLIO_VALUE ? null : value })
+  const setFilter = useCallback(
+    (next: StrategyFilter) => {
+      setSearchParams((prev) => writeStrategyFilter(prev, next), { replace: true })
+    },
+    [setSearchParams]
+  )
+
+  // Every strategy seen on this page in the current mode, kept while the filter
+  // hides some of them, so an excluded one can be added back.
+  const [knownNames, setKnownNames] = useState<string[]>([])
+  const knownMode = useRef<string | undefined>(undefined)
+  const nothingSelected = filter.none === true
+  const queriesEnabled = rangeReady && !nothingSelected
 
   const applyDraftRange = () => {
     if (validRange(draftRange)) updateParams({ start: draftRange.start, end: draftRange.end })
@@ -557,16 +573,18 @@ export default function StrategyDailyPerformance() {
   // also picks up fills the server-side reconcile recovers from the broker.
   // TanStack Query pauses this while the tab is hidden.
   const compareQuery = useQuery({
-    queryKey: ['strategy-daily-compare', period, range?.start, range?.end],
-    queryFn: () => strategyPnlApi.compare(period, range),
+    queryKey: ['strategy-daily-compare', filter, period, range?.start, range?.end],
+    // With nothing selected this is one unfiltered request that only fills the
+    // picker's strategy list; its rows are never shown.
+    queryFn: () => strategyPnlApi.compare(period, range, nothingSelected ? undefined : filter),
     enabled: rangeReady,
-    refetchInterval: POLL_MS,
+    refetchInterval: nothingSelected ? false : POLL_MS,
   })
 
   const dailyQuery = useQuery({
-    queryKey: ['strategy-daily', strategyParam, period, range?.start, range?.end],
-    queryFn: () => strategyPnlApi.daily(strategyParam, period, range),
-    enabled: rangeReady,
+    queryKey: ['strategy-daily', filter, period, range?.start, range?.end],
+    queryFn: () => strategyPnlApi.daily(filter, period, range),
+    enabled: queriesEnabled,
     refetchInterval: POLL_MS,
   })
 
@@ -583,11 +601,25 @@ export default function StrategyDailyPerformance() {
   }, [refresh])
 
   const strategies = compareQuery.data?.strategies ?? []
-  const strategyNames = useMemo(() => {
-    const names = compareQuery.data?.all_strategies ?? strategies.map((s) => s.strategy)
-    return strategyParam && !names.includes(strategyParam) ? [...names, strategyParam] : names
-  }, [compareQuery.data?.all_strategies, strategies, strategyParam])
+  const listedNames = compareQuery.data?.all_strategies
+  const listedMode = compareQuery.data?.mode
+  useEffect(() => {
+    if (!listedNames) return
+    const modeChanged = knownMode.current !== undefined && knownMode.current !== listedMode
+    knownMode.current = listedMode
+    setKnownNames((prev) => {
+      const base = modeChanged ? [] : prev
+      const merged = [...new Set([...base, ...listedNames])].sort()
+      return merged.length === prev.length && !modeChanged ? prev : merged
+    })
+  }, [listedNames, listedMode])
+  const strategyNames = useMemo(
+    () => [...new Set([...knownNames, ...filter.include, ...filter.exclude])].sort(),
+    [knownNames, filter]
+  )
   const daily = dailyQuery.data
+  const includedChips = daily?.included ?? []
+  const excludedChips = daily?.excluded ?? filter.exclude
   const dailyError = daily?.status === 'error' ? daily.message : null
   const isFetching = compareQuery.isFetching || dailyQuery.isFetching
   // One resolved day (1D, or a one-day custom range) shows the trade list
@@ -620,21 +652,26 @@ export default function StrategyDailyPerformance() {
               )}
             </p>
           )}
+          {!nothingSelected && (includedChips.length > 0 || excludedChips.length > 0) && (
+            <div className="flex flex-wrap items-center gap-1.5 mt-2">
+              {includedChips.map((name) => (
+                <span key={`in-${name}`} className="rounded-full border px-2 py-0.5 text-xs">
+                  {name}
+                </span>
+              ))}
+              {excludedChips.map((name) => (
+                <span
+                  key={`out-${name}`}
+                  className="rounded-full border border-red-600/40 px-2 py-0.5 text-xs text-red-600"
+                >
+                  Excluded: {name}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Select value={selectedStrategy} onValueChange={setSelectedStrategy}>
-            <SelectTrigger className="w-[220px]">
-              <SelectValue placeholder="Portfolio (all strategies)" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={PORTFOLIO_VALUE}>Portfolio (all strategies)</SelectItem>
-              {strategyNames.map((name) => (
-                <SelectItem key={name} value={name}>
-                  {name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <StrategyFilterPicker filter={filter} names={strategyNames} onChange={setFilter} />
           <Select value={period} onValueChange={(v) => setPeriod(v as PerformancePeriod)}>
             <SelectTrigger className="w-[100px]">
               <SelectValue />
@@ -695,7 +732,7 @@ export default function StrategyDailyPerformance() {
             variant="outline"
             size="sm"
             onClick={exportCsv}
-            disabled={!rangeReady || exporting}
+            disabled={!queriesEnabled || exporting}
           >
             <Download className={cn('h-4 w-4 mr-2', exporting && 'animate-pulse')} />
             Export CSV
@@ -722,6 +759,8 @@ export default function StrategyDailyPerformance() {
         <div className="text-center py-12 text-muted-foreground">
           Choose a start and end date, then press Apply.
         </div>
+      ) : nothingSelected ? (
+        <div className="text-center py-12 text-muted-foreground">Select at least one strategy.</div>
       ) : dailyQuery.isLoading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-8 w-8 animate-spin" />
@@ -878,7 +917,11 @@ export default function StrategyDailyPerformance() {
           <CardTitle>Strategy Comparison</CardTitle>
         </CardHeader>
         <CardContent className="py-0">
-          {compareQuery.isLoading ? (
+          {nothingSelected ? (
+            <div className="text-center py-12 text-muted-foreground">
+              Select at least one strategy.
+            </div>
+          ) : compareQuery.isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-8 w-8 animate-spin" />
             </div>
@@ -924,9 +967,11 @@ export default function StrategyDailyPerformance() {
                     key={row.strategy}
                     className={cn(
                       'cursor-pointer',
-                      selectedStrategy === row.strategy && 'bg-muted/50'
+                      filter.include.length === 1 &&
+                        filter.include[0] === row.strategy &&
+                        'bg-muted/50'
                     )}
-                    onClick={() => setSelectedStrategy(row.strategy)}
+                    onClick={() => setFilter(onlyStrategy(row.strategy))}
                   >
                     <TableCell className="font-medium">{row.strategy}</TableCell>
                     <TableCell className="text-right font-mono">{row.trades_count}</TableCell>
