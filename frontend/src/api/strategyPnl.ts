@@ -150,6 +150,38 @@ export interface CapitalView {
 
 export type Grade = 'poor' | 'acceptable' | 'good' | 'excellent'
 
+export type ValidationState =
+  | 'not_enough_data'
+  | 'not_encouraging'
+  | 'preliminary'
+  | 'under_validation'
+  | 'validated'
+
+export interface ValidationCheck {
+  id: string
+  dimension: 'performance' | 'statistical' | 'robustness' | 'execution'
+  label: string
+  status: 'pass' | 'fail' | 'pending' | 'not_assessed'
+  detail: string
+  needed_for: 'preliminary' | 'under_validation' | 'validated'
+}
+
+export interface ValidationStatus {
+  status: ValidationState
+  label: string
+  summary: string
+  next_level: 'preliminary' | 'under_validation' | 'validated' | null
+  next_level_label: string | null
+  dimensions: Record<string, 'pass' | 'fail' | 'pending' | 'not_assessed'>
+  checks: ValidationCheck[]
+  failed: string[]
+  waiting: string[]
+  blocking: string[]
+  passed_count: number
+  total_count: number
+  mode: string | null
+}
+
 export interface StrategyConcentration {
   trades: number
   net: number
@@ -246,6 +278,7 @@ export interface GradingReport {
 }
 
 export interface PerformanceInsights {
+  validation: ValidationStatus
   concentration: ConcentrationStats
   drawdown: NetDrawdown
   streaks: {
@@ -545,6 +578,9 @@ export interface StrategyComparisonRow {
   top5_days_share_pct?: number | null
   overall_grade?: Grade | null
   preliminary_grade?: Grade | null
+  validation_status?: ValidationState
+  validation_label?: string
+  validation_summary?: string
   overall_note?: string | null
 }
 
@@ -557,6 +593,9 @@ export interface ComparisonPortfolio {
   recovery_factor: number | null
   overall_grade: Grade | null
   preliminary_grade: Grade | null
+  validation_status?: ValidationState
+  validation_label?: string
+  validation_summary?: string
   overall_note: string | null
 }
 

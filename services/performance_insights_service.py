@@ -32,6 +32,8 @@ def trade_rows(enriched: list[dict]) -> list[dict]:
             "closed_quantity": t.get("closed_quantity"),
             "net": float(t["realized_pnl"]) - float(t.get("cost") or 0.0),
             "net_r": t.get("net_r_multiple"),
+            "cost": float(t.get("cost") or 0.0),
+            "entry_slippage": t.get("entry_slippage"),
             "data_flag": t.get("data_flag"),
         }
         for t in enriched
@@ -49,8 +51,11 @@ def _core(
     strategies: int,
     sharpe: float | None,
     sortino: float | None,
+    edge: dict | None = None,
+    mode: str | None = None,
 ) -> dict:
-    """Concentration, net drawdown, streaks and the grade for one set of trades."""
+    """Concentration, net drawdown, streaks, the grade and the validation status for one set
+    of trades. `edge` is the edge-check result for the same trades (the caller already has it)."""
     base = float(REFERENCE_CAPITAL_PER_STRATEGY * max(1, strategies))
     values = _session_values(rows, sessions)
     ordered = [r["net"] for r in ps.ordered_trades(rows)]
@@ -76,13 +81,39 @@ def _core(
         trades=len(rows),
         sessions=len(sessions),
     )
+    rolling = ps.rolling_series(rows)
+    last_exp20 = next((p["exp20"] for p in reversed(rolling) if p["exp20"] is not None), None)
+    validation = ps.validation_status(
+        trades=len(rows),
+        sessions=len(sessions),
+        net_pf=pf,
+        net_expectancy=sum(nets) / len(nets) if nets else None,
+        edge_verdict=edge["edge_verdict"] if edge else None,
+        concentration_stats=conc,
+        drawdown=drawdown,
+        last_exp20=last_exp20,
+        stressed_pf=ps.stressed_profit_factor(rows),
+        slippage_coverage_share=ps.slippage_coverage(rows),
+        mode=mode,
+    )
     return {
+        "_rolling_combined": rolling,
+        "validation": validation,
         "concentration": conc,
         "drawdown": drawdown,
         "streaks": ps.losing_streaks(rows),
         "gross_profit_factor": _round(ps.profit_factor(float(t["realized_pnl"]) for t in enriched)),
         "net_profit_factor": _round(pf),
         "grading": grade,
+    }
+
+
+def _validation_brief(v: dict) -> dict:
+    """The compact form shown in the comparison table: status, its label and the sentence."""
+    return {
+        "validation_status": v["status"],
+        "validation_label": v["label"],
+        "validation_summary": v["summary"],
     }
 
 
@@ -95,16 +126,19 @@ def build_insights(
     sessions: list[str],
     sharpe: float | None,
     sortino: float | None,
+    edge: dict | None = None,
+    mode: str | None = None,
 ) -> dict:
     """Everything the Insights panel shows for the selected trades."""
     rows = trade_rows(enriched)
     names = sorted({r["strategy"] for r in rows})
-    out = _core(rows, enriched, sessions, len(names), sharpe, sortino)
+    out = _core(rows, enriched, sessions, len(names), sharpe, sortino, edge, mode)
+    rolling_combined = out.pop("_rolling_combined")
     out.update(
         {
             "deployment": ps.deployment(rows),
             "rolling": {
-                "combined": ps.rolling_series(rows),
+                "combined": rolling_combined,
                 "by_strategy": {
                     n: ps.rolling_series([r for r in rows if r["strategy"] == n]) for n in names
                 },
@@ -123,17 +157,21 @@ def comparison_extras(
     enriched_by_strategy: dict[str, list[dict]],
     sessions: list[str],
     ratios: dict[str, tuple[float | None, float | None]],
+    edges: dict[str, dict] | None = None,
+    mode: str | None = None,
 ) -> dict:
     """Extra columns per strategy, plus the combined portfolio, correlation and contribution.
 
-    `ratios` maps a strategy name (and "__portfolio__") to its (sharpe, sortino).
+    `ratios` maps a strategy name (and "__portfolio__") to its (sharpe, sortino); `edges` maps
+    the same names to their edge-check results. Every status comes from the same `_core`.
     """
+    edges = edges or {}
     per_strategy = {}
     all_enriched = [t for items in enriched_by_strategy.values() for t in items]
     for name, items in enriched_by_strategy.items():
         rows = trade_rows(items)
         sharpe, sortino = ratios.get(name, (None, None))
-        core = _core(rows, items, sessions, 1, sharpe, sortino)
+        core = _core(rows, items, sessions, 1, sharpe, sortino, edges.get(name), mode)
         r_values = [r["net_r"] for r in rows if r["net_r"] is not None]
         per_strategy[name] = {
             "gross_profit_factor": core["gross_profit_factor"],
@@ -148,13 +186,23 @@ def comparison_extras(
             "overall_grade": core["grading"]["overall"],
             "preliminary_grade": core["grading"]["preliminary"],
             "overall_note": core["grading"]["overall_note"],
+            **_validation_brief(core["validation"]),
         }
     portfolio = None
     series = {}
     if all_enriched:
         sharpe, sortino = ratios.get("__portfolio__", (None, None))
         rows = trade_rows(all_enriched)
-        core = _core(rows, all_enriched, sessions, len(enriched_by_strategy), sharpe, sortino)
+        core = _core(
+            rows,
+            all_enriched,
+            sessions,
+            len(enriched_by_strategy),
+            sharpe,
+            sortino,
+            edges.get("__portfolio__"),
+            mode,
+        )
         portfolio = {
             "net": core["drawdown"]["net"],
             "net_profit_factor": core["net_profit_factor"],
@@ -165,6 +213,7 @@ def comparison_extras(
             "overall_grade": core["grading"]["overall"],
             "preliminary_grade": core["grading"]["preliminary"],
             "overall_note": core["grading"]["overall_note"],
+            **_validation_brief(core["validation"]),
         }
         series = {
             name: _session_values(trade_rows(items), sessions)

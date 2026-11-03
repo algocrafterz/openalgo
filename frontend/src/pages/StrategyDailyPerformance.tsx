@@ -31,6 +31,7 @@ import { HoldStatsRow } from '@/components/strategy-pnl/HoldStats'
 import { ExcursionCard, GradeBadge, InsightsPanel } from '@/components/strategy-pnl/InsightsPanel'
 import { PortfolioComparison } from '@/components/strategy-pnl/PortfolioComparison'
 import { MetricCard } from '@/components/strategy-pnl/MetricCard'
+import { ValidationBadge, ValidationStatusCard } from '@/components/strategy-pnl/ValidationStatusCard'
 import { SessionSummary } from '@/components/strategy-pnl/SessionSummary'
 import { SessionTrades } from '@/components/strategy-pnl/SessionTrades'
 import { StrategyFilterPicker } from '@/components/strategy-pnl/StrategyFilterPicker'
@@ -1129,6 +1130,10 @@ export default function StrategyDailyPerformance() {
             <p className="text-xs text-muted-foreground">{rExcludedText(daily.r_excluded)}.</p>
           )}
 
+          {!isToday && daily.insights?.validation && (
+            <ValidationStatusCard validation={daily.insights.validation} />
+          )}
+
           {!isToday && <EdgeCheckCard daily={daily} formatCurrency={formatCurrency} />}
 
           {daily.hold_stats && <HoldStatsRow stats={daily.hold_stats} />}
@@ -1286,6 +1291,7 @@ export default function StrategyDailyPerformance() {
                   {!isToday && <TableHead className="text-right">Recovery</TableHead>}
                   {!isToday && <TableHead className="text-right">Best day share</TableHead>}
                   {!isToday && <TableHead className="text-right">Grade</TableHead>}
+                  {!isToday && <TableHead className="text-right">Validation</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1394,6 +1400,13 @@ export default function StrategyDailyPerformance() {
                         </TableCell>
                         <TableCell className="text-right" title={row.overall_note ?? undefined}>
                           <GradeBadge grade={row.overall_grade} preliminary={row.preliminary_grade} />
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <ValidationBadge
+                            state={row.validation_status}
+                            label={row.validation_label}
+                            title={row.validation_summary}
+                          />
                         </TableCell>
                       </>
                     )}

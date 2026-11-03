@@ -1092,3 +1092,435 @@ def grade_report(values: dict[str, float | None], trades: int, sessions: int) ->
         ),
         "sample": {"trades": trades, "sessions": sessions},
     }
+
+
+# ---------------------------------------------------------------- validation status
+
+# Thresholds for the validation checks. The performance and sample gates reuse the
+# constants above (MIN_TRADES_FOR_GRADE, MIN_SESSIONS_FOR_RETURN_GRADE, MIN_SESSIONS).
+VALIDATION_MIN_NET_PF = 1.3  # net profit factor for the validated level (the "good" band)
+VALIDATION_MAX_BEST_DAY_SHARE_PCT = 40.0
+VALIDATION_COST_STRESS = 0.5  # estimated charges raised by half
+VALIDATION_MIN_STRESSED_PF = 1.0
+VALIDATION_MIN_SLIPPAGE_COVERAGE = 0.8
+
+VALIDATION_LABELS = {
+    "not_enough_data": "Not enough data yet",
+    "not_encouraging": "Not encouraging so far",
+    "preliminary": "Preliminary",
+    "under_validation": "Under validation",
+    "validated": "Validated",
+}
+_ENCOURAGING_IDS = ("net_pf_above_1", "net_expectancy_positive", "edge_not_negative")
+_CHECK_RANK = {"fail": 0, "pending": 1, "not_assessed": 2, "pass": 3}
+
+
+def stressed_profit_factor(rows: list[dict], extra_cost_share: float = VALIDATION_COST_STRESS):
+    """Net profit factor if every trade's estimated charges were `extra_cost_share` higher.
+    Rows carry `net` (after charges) and `cost`; an unknown cost counts as 0."""
+    return profit_factor(
+        float(r["net"]) - extra_cost_share * float(r.get("cost") or 0.0) for r in rows
+    )
+
+
+def slippage_coverage(rows: list[dict]) -> float | None:
+    """Share of trades with a reliable entry time whose entry fill could be compared with the
+    alert price. None when no trade has a reliable entry time."""
+    reliable = [r for r in rows if not r.get("data_flag")]
+    if not reliable:
+        return None
+    return sum(1 for r in reliable if r.get("entry_slippage") is not None) / len(reliable)
+
+
+def _finite_or_none(value):
+    return value if isinstance(value, int | float) and math.isfinite(value) else None
+
+
+def _check(cid, dimension, label, status, detail, needed_for):
+    return {
+        "id": cid,
+        "dimension": dimension,
+        "label": label,
+        "status": status,
+        "detail": detail,
+        "needed_for": needed_for,
+    }
+
+
+def validation_status(
+    *,
+    trades: int,
+    sessions: int,
+    net_pf: float | None,
+    net_expectancy: float | None,
+    edge_verdict: str | None,
+    concentration_stats: dict | None,
+    drawdown: dict | None,
+    last_exp20: float | None,
+    stressed_pf: float | None,
+    slippage_coverage_share: float | None,
+    mode: str | None,
+) -> dict:
+    """How far the observed results can be trusted: one status from many named checks.
+
+    Status: `not_enough_data` (under 30 trades or 10 sessions, or a profit figure is
+    unavailable), `not_encouraging` (enough data, but net profit factor is not above 1, net
+    expectancy is not positive, or the edge check does not show a positive average),
+    `preliminary` (encouraging and the edge check has not failed, but under 60 sessions or the
+    edge check cannot judge yet),
+    `under_validation` (60 sessions and a verdict of at least positive-but-inconclusive, with
+    other checks failed, pending or not assessed) and `validated` (EVERY check passes).
+
+    Four dimensions: performance, statistical, robustness, execution. Each check is `pass`,
+    `fail`, `pending` (more data would settle it) or `not_assessed` (the evidence is
+    unavailable). Missing evidence never passes. A failed check blocks `validated` but never
+    lowers a status or hides the result. Execution cannot be assessed for Sandbox fills.
+    Detail text carries percentages and counts only, so rupee scaling never makes it stale.
+    """
+    # a non-finite number is unavailable evidence, never a pass or a failure
+    net_pf, net_expectancy, last_exp20, stressed_pf, slippage_coverage_share = (
+        _finite_or_none(v)
+        for v in (net_pf, net_expectancy, last_exp20, stressed_pf, slippage_coverage_share)
+    )
+    conc = concentration_stats or {}
+    dd = drawdown or {}
+    enough = trades >= MIN_TRADES_FOR_GRADE and sessions >= MIN_SESSIONS_FOR_RETURN_GRADE
+    waiting = "Not assessed until there are enough trades and sessions."
+
+    def settled(cid, dim, label, status, detail, needed):
+        # below the sample minimum nothing else is judged: it would be noise
+        if not enough:
+            return _check(cid, dim, label, "pending", waiting, needed)
+        return _check(cid, dim, label, status, detail, needed)
+
+    # every trade made the same positive result: the edge check returns inconclusive on it
+    flat_positive = (
+        edge_verdict == VERDICT_INCONCLUSIVE and net_expectancy is not None and net_expectancy > 0
+    )
+    checks = [
+        _check(
+            "sample",
+            "performance",
+            "Enough trades and sessions",
+            "pass" if enough else "pending",
+            f"Needs {MIN_TRADES_FOR_GRADE} trades over {MIN_SESSIONS_FOR_RETURN_GRADE} trading "
+            f"sessions; this selection has {trades} trades over {sessions} sessions.",
+            "preliminary",
+        ),
+        settled(
+            "net_pf_above_1",
+            "performance",
+            "Net profit factor above 1.0",
+            "not_assessed" if net_pf is None else "pass" if net_pf > 1.0 else "fail",
+            "Net profit factor is not available (no losing trade or no data)."
+            if net_pf is None
+            else f"Net profit factor after charges is {net_pf:.3f}.",
+            "preliminary",
+        ),
+        settled(
+            "net_expectancy_positive",
+            "performance",
+            "Positive net result per trade",
+            "not_assessed" if net_expectancy is None else "pass" if net_expectancy > 0 else "fail",
+            "The average result per trade after charges is not available."
+            if net_expectancy is None
+            else "The average result per trade after charges is "
+            + ("positive." if net_expectancy > 0 else "not positive."),
+            "preliminary",
+        ),
+        settled(
+            "net_pf_validated",
+            "performance",
+            f"Net profit factor above {VALIDATION_MIN_NET_PF}",
+            "not_assessed"
+            if net_pf is None
+            else "pass"
+            if net_pf > VALIDATION_MIN_NET_PF
+            else "fail",
+            "Net profit factor is not available."
+            if net_pf is None
+            else f"Net profit factor is {net_pf:.4f}; the validated level needs more than "
+            f"{VALIDATION_MIN_NET_PF}.",
+            "validated",
+        ),
+    ]
+    verdict = edge_verdict
+    if verdict is None:
+        nn_status, nn_detail = "not_assessed", "The edge check was not run."
+        sup_status, sup_detail = nn_status, nn_detail
+    elif verdict == VERDICT_SUPPORTED:
+        nn_status, nn_detail = "pass", "The edge check says the average is positive."
+        sup_status, sup_detail = "pass", "The edge check supports a positive average."
+    elif verdict == VERDICT_POSITIVE_INCONCLUSIVE:
+        nn_status, nn_detail = "pass", "The edge check says the average is positive."
+        sup_status = "pending"
+        sup_detail = "Positive so far, but the evidence is not strong enough to rule out luck."
+    elif verdict == VERDICT_INSUFFICIENT:
+        nn_status = sup_status = "pending"
+        nn_detail = sup_detail = "The edge check has too few trading days to say."
+    elif flat_positive:
+        # still not encouraging (the check cannot show a positive average), but say why
+        nn_status = sup_status = "fail"
+        nn_detail = sup_detail = (
+            "Every trade made the same positive result, so the edge check has no spread to "
+            "test and cannot show that the average is real."
+        )
+    elif verdict == VERDICT_NEGATIVE:
+        nn_status = sup_status = "fail"
+        nn_detail = sup_detail = "The edge check says the average is negative."
+    else:  # inconclusive on an average that is not positive
+        nn_status = sup_status = "fail"
+        nn_detail = sup_detail = (
+            "The average is not positive, and the evidence does not settle whether it is "
+            "negative or just noise."
+        )
+    checks.append(
+        settled(
+            "edge_not_negative",
+            "statistical",
+            "Edge at least positive but inconclusive",
+            nn_status,
+            nn_detail,
+            "under_validation",
+        )
+    )
+    checks.append(
+        settled(
+            "edge_supported",
+            "statistical",
+            "Edge statistically supported",
+            sup_status,
+            sup_detail,
+            "validated",
+        )
+    )
+    checks.append(
+        _check(
+            "history",
+            "robustness",
+            f"{MIN_SESSIONS} trading sessions of history",
+            "pass" if sessions >= MIN_SESSIONS else "pending",
+            f"{sessions} of {MIN_SESSIONS} trading sessions.",
+            "under_validation",
+        )
+    )
+    top1 = conc.get("top1_days_share_pct")
+    if not conc:
+        top1_status, top1_detail = "not_assessed", "Day-by-day results are not available."
+    elif top1 is None:
+        top1_status, top1_detail = "fail", "There is no net profit to spread across days."
+    else:
+        top1_status = "pass" if top1 < VALIDATION_MAX_BEST_DAY_SHARE_PCT else "fail"
+        top1_detail = (
+            f"The best day is {top1:.1f}% of net profit; the limit is "
+            f"{VALIDATION_MAX_BEST_DAY_SHARE_PCT:.0f}%."
+        )
+    checks.append(
+        settled(
+            "best_day_share",
+            "robustness",
+            "No single day carries the profit",
+            top1_status,
+            top1_detail,
+            "validated",
+        )
+    )
+    for cid, key, label, none_status, none_detail in (
+        (
+            "positive_ex_best_day",
+            "net_ex_best_day",
+            "Still profitable without the best day",
+            "not_assessed",
+            "Day-by-day results are not available.",
+        ),
+        (
+            "positive_ex_best_five",
+            "net_ex_best_five_days",
+            "Still profitable without the best five days",
+            "pending",
+            "Needs more than five traded days.",
+        ),
+    ):
+        val = conc.get(key)
+        none_s = none_status if conc else "not_assessed"
+        checks.append(
+            settled(
+                cid,
+                "robustness",
+                label,
+                none_s if val is None else "pass" if val > 0 else "fail",
+                none_detail
+                if val is None
+                else "Profit stays positive without those days."
+                if val > 0
+                else "Profit is not positive without those days.",
+                "validated",
+            )
+        )
+    checks.append(
+        settled(
+            "recent_expectancy",
+            "robustness",
+            "Last 20 trades still positive",
+            "pending" if last_exp20 is None else "pass" if last_exp20 > 0 else "fail",
+            "Needs 20 trades."
+            if last_exp20 is None
+            else "The average of the last 20 trades is "
+            + ("positive." if last_exp20 > 0 else "not positive."),
+            "validated",
+        )
+    )
+    if "max_drawdown" not in dd:
+        rec_status, rec_detail = "not_assessed", "Drawdown is not available."
+    elif dd["max_drawdown"] == 0:
+        rec_status, rec_detail = "pass", "There has been no drawdown."
+    elif dd.get("drawdown_recovered"):
+        rec_status, rec_detail = "pass", "The largest drawdown has been recovered."
+    else:
+        rec_status, rec_detail = "fail", "The largest drawdown has not been recovered yet."
+    checks.append(
+        settled(
+            "drawdown_recovered",
+            "robustness",
+            "Largest drawdown recovered",
+            rec_status,
+            rec_detail,
+            "validated",
+        )
+    )
+    is_live = mode == "live"
+    checks.append(
+        _check(
+            "live_fills",
+            "execution",
+            "Evidence from live fills",
+            "pass" if is_live else "not_assessed",
+            "Results come from live trading."
+            if is_live
+            else "Sandbox fills are simulated, so they do not establish how live orders would "
+            "execute."
+            if mode
+            else "The trading mode is not known.",
+            "validated",
+        )
+    )
+    checks.append(
+        settled(
+            "cost_stress",
+            "execution",
+            "Still profitable if charges were 50% higher",
+            "not_assessed"
+            if stressed_pf is None
+            else "pass"
+            if stressed_pf > VALIDATION_MIN_STRESSED_PF
+            else "fail",
+            "The stressed profit factor is not available."
+            if stressed_pf is None
+            else f"Net profit factor with charges 50% higher is {stressed_pf:.3f}.",
+            "validated",
+        )
+    )
+    cov = slippage_coverage_share
+    checks.append(
+        settled(
+            "slippage_coverage",
+            "execution",
+            "Entry slippage measured on most trades",
+            "not_assessed"
+            if cov is None
+            else "pass"
+            if cov >= VALIDATION_MIN_SLIPPAGE_COVERAGE
+            else "fail",
+            "No trade has a reliable entry time, so slippage cannot be measured."
+            if cov is None
+            else f"Entry slippage is measured on {cov * 100:.1f}% of trades with a reliable entry "
+            f"time; at least {VALIDATION_MIN_SLIPPAGE_COVERAGE * 100:.0f}% is needed.",
+            "validated",
+        )
+    )
+
+    by_id = {c["id"]: c["status"] for c in checks}
+    sample_ok = by_id["sample"] == "pass"
+    prelim_ok = sample_ok and all(
+        by_id[i] == "pass" for i in ("net_pf_above_1", "net_expectancy_positive")
+    )
+    uv_ok = prelim_ok and by_id["history"] == "pass" and by_id["edge_not_negative"] == "pass"
+    all_ok = all(c["status"] == "pass" for c in checks)
+    perf_ids = ("net_pf_above_1", "net_expectancy_positive")
+    edge_failed = by_id["edge_not_negative"] == "fail"
+    if not sample_ok:
+        status = "not_enough_data"
+    elif edge_failed or any(by_id[i] == "fail" for i in perf_ids):
+        # Profit figures that are not positive, or an edge check that does not show a positive
+        # average (negative, or inconclusive on a non-positive average): not encouraging, at
+        # any history length. An edge check that cannot judge yet is pending, not failed.
+        status = "not_encouraging"
+    elif not prelim_ok:
+        status = "not_enough_data"  # a performance figure is unavailable: not judged, not passed
+    elif all_ok:
+        status = "validated"
+    elif uv_ok:
+        status = "under_validation"
+    else:
+        status = "preliminary"
+    next_level = {
+        "not_enough_data": "preliminary",
+        "not_encouraging": "preliminary",
+        "preliminary": "under_validation",
+        "under_validation": "validated",
+        "validated": None,
+    }[status]
+    blocking = [c for c in checks if c["needed_for"] == next_level and c["status"] != "pass"]
+    if status == "not_enough_data" and not sample_ok:
+        blocking = [c for c in blocking if c["id"] == "sample"]  # the rest waits on the sample
+    if status == "not_encouraging":
+        blocking = [c for c in checks if c["status"] == "fail" and c["id"] in _ENCOURAGING_IDS]
+    dimensions = {}
+    for dim in ("performance", "statistical", "robustness", "execution"):
+        mine = [c["status"] for c in checks if c["dimension"] == dim]
+        dimensions[dim] = min(mine, key=lambda s: _CHECK_RANK[s])
+    failed = [c for c in checks if c["status"] == "fail"]
+    waiting_on = [c for c in checks if c["status"] in ("pending", "not_assessed")]
+    summaries = {
+        "not_enough_data": (
+            f"Too early to judge. At least {MIN_TRADES_FOR_GRADE} trades over "
+            f"{MIN_SESSIONS_FOR_RETURN_GRADE} trading sessions are needed; there are {trades} "
+            f"trades over {sessions} sessions."
+            if not sample_ok
+            else "The profit figures for this selection are not available, so it cannot be "
+            "assessed yet."
+        ),
+        "not_encouraging": (
+            "There is enough data to look at, but the results are not encouraging so far: "
+            + (
+                "the edge check says the average result per trade is negative."
+                if verdict == VERDICT_NEGATIVE
+                else "the edge check does not show a positive average result per trade."
+                if edge_failed
+                else "net profit factor and the average result per trade need to be above "
+                "their break-even levels."
+            )
+        ),
+        "preliminary": "Early results are encouraging, but the history is not long enough, or "
+        "the edge check cannot judge yet, for a deeper review.",
+        "under_validation": "The average is positive and the history is long enough for a "
+        f"deeper review. {len(failed)} check(s) failed and {len(waiting_on)} are pending or "
+        "not assessed.",
+        "validated": "Every performance, statistical, robustness and execution check passes. "
+        "This describes the evidence so far and is not a guarantee of future results.",
+    }
+    return {
+        "status": status,
+        "label": VALIDATION_LABELS[status],
+        "summary": summaries[status],
+        "next_level": next_level,
+        "next_level_label": VALIDATION_LABELS.get(next_level) if next_level else None,
+        "dimensions": dimensions,
+        "checks": checks,
+        "failed": [c["id"] for c in failed],
+        "waiting": [c["id"] for c in waiting_on],
+        "blocking": [c["id"] for c in blocking],
+        "passed_count": sum(1 for c in checks if c["status"] == "pass"),
+        "total_count": len(checks),
+        "mode": mode,
+    }

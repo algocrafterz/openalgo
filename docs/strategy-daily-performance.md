@@ -617,7 +617,96 @@ They are screening guides, not guarantees.
 | Net R | a signal stop and a known charge | counted in `r_excluded` |
 | Concentration shares | total net profit above zero | dash |
 | Rolling series | 20 / 50 trades | "not enough trades yet" |
+| Validated status | all 15 validation checks, including live fills | Under validation at most (Sandbox), with the missing check listed as not assessed |
 | Single-day views | | the trade list instead of the sections above |
+
+### Validation status
+
+One status says how far the observed results can be trusted. It sits under the metric
+cards on the Performance page, and a compact badge appears in the comparison table. The
+formula is one function, `validation_status` in `services/performance_stats.py`; it reuses
+the grading, edge check, concentration, rolling, drawdown and slippage figures already
+described above. The same function assesses the combined selection, the portfolio row and
+each strategy, so the results are consistent (the status ignores the capital box).
+
+**The five states**
+
+| State | Meaning |
+|---|---|
+| Not enough data yet | Under 30 trades or under 10 trading sessions. Nothing else is judged. Also shown when a profit figure is unavailable, because missing evidence is never read as a pass. |
+| Not encouraging so far | Enough data, but net profit factor is not above 1.0, the average net result per trade is not positive, **or the edge check does not show a positive average** (a negative verdict, or an inconclusive one on a non-positive average). It applies at any history length, including 60 sessions or more with positive profit figures. |
+| Preliminary | The profit figures are positive and the edge check has not failed, but there are fewer than 60 sessions, or the edge check cannot judge yet (too few trading days, or not run). |
+| Under validation | 60 sessions or more and an edge verdict of at least "positive but inconclusive", with one or more other checks failed, pending or not assessed. |
+| Validated | Every check passes. |
+
+A failed robustness or execution check blocks Validated but never lowers the status and is
+never hidden. "Negative" and "inconclusive" edge verdicts stay distinct: the check text says
+"negative average" for the first and "does not settle whether it is negative or just noise"
+for the second, and the summary names which one applies.
+
+**The four dimensions and their checks** (15 checks; `needed_for` is the level each one gates)
+
+| Dimension | Check | Passes when | Gates |
+|---|---|---|---|
+| Performance | Enough trades and sessions | 30 trades over 10 sessions | Preliminary |
+| Performance | Net profit factor above 1.0 | net profit factor above 1.0 | Preliminary |
+| Performance | Positive net result per trade | average net P&L per trade above 0 | Preliminary |
+| Performance | Net profit factor above 1.3 | net profit factor above 1.3 | Validated |
+| Statistical | Edge at least positive but inconclusive | verdict `positive_supported` or `positive_inconclusive` | Under validation |
+| Statistical | Edge statistically supported | verdict `positive_supported` | Validated |
+| Robustness | 60 trading sessions of history | 60 sessions | Under validation |
+| Robustness | No single day carries the profit | best day under 40% of net profit | Validated |
+| Robustness | Still profitable without the best day | net P&L without it above 0 | Validated |
+| Robustness | Still profitable without the best five days | net P&L without them above 0 (needs more than five traded days) | Validated |
+| Robustness | Last 20 trades still positive | average of the last 20 trades above 0 | Validated |
+| Robustness | Largest drawdown recovered | recovered, or no drawdown | Validated |
+| Execution | Evidence from live fills | the trading mode is Live | Validated |
+| Execution | Still profitable if charges were 50% higher | net profit factor with estimated charges raised by half is above 1.0 | Validated |
+| Execution | Entry slippage measured on most trades | slippage measured on at least 80% of trades with a reliable entry time | Validated |
+
+The thresholds are constants in `performance_stats.py` (`VALIDATION_*`), next to the sample
+gates they reuse (`MIN_TRADES_FOR_GRADE`, `MIN_SESSIONS_FOR_RETURN_GRADE`, `MIN_SESSIONS`).
+Trades flagged as unreliable (overnight intraday, no entry time) are not counted in the
+slippage coverage. Check text carries percentages and counts only, never rupee amounts, so
+the capital what-if scaling cannot make it stale.
+
+**Why Sandbox cannot be Validated.** Sandbox fills are simulated, so they say nothing about
+how live orders would execute. "Evidence from live fills" is `not_assessed` whenever the mode
+is not Live (or unknown), and Validated needs every check to pass. A Sandbox selection can
+therefore reach Under validation at most, however good its figures. The cost and slippage
+checks are still computed and shown in Sandbox, but they do not stand in for live fills.
+
+**Edge cases.** A figure that is not a finite number is treated as unavailable evidence (not
+assessed), never as a pass or a failure. Every threshold is strict where the table says
+"above" (a net profit factor of exactly 1.0 or 1.3 does not pass) and inclusive where it
+says "at least" (slippage coverage of exactly 80% passes); detail text shows enough decimals
+to explain a result that fails by a hair. If every trade made exactly the same positive
+result, the edge check has no spread to test and returns inconclusive; the status is then
+Not encouraging with a message saying so, not a claim that the average is not positive.
+Strategy rows in the comparison table use the same trading-session list as the combined
+portfolio, so a session on which only another strategy traded (a special session on a
+holiday or weekend) counts for every row; the single-strategy view counts only its own
+traded dates, and the two can differ by that session near a threshold.
+
+**Failed, pending and not assessed.** Each check has one of four results, and the card keeps
+them apart:
+
+- **Failed:** the evidence is there and does not meet the requirement (for example the best
+  day is 45% of profit). Shown in red, listed on its own, and it blocks the level that needs it.
+- **Pending:** more data would settle it (for example 40 of 60 sessions, or fewer than six
+  traded days for the best-five-days check). Not a failure.
+- **Not assessed:** the evidence is unavailable (no edge result, no drawdown figure, Sandbox
+  fills for live execution). Shown as not assessed and never counted as a pass.
+- **Passed:** the requirement is met.
+
+Below 30 trades or 10 sessions every data-dependent check is shown as pending, so a handful
+of trades cannot produce a misleading failure.
+
+The response carries `insights.validation` for the selection (status, label, summary,
+`dimensions`, `checks`, and the lists `failed`, `waiting` and `blocking`, plus the next
+level) and `validation_status`, `validation_label` and `validation_summary` on each
+comparison row and the portfolio row. The status describes the evidence so far; it is not a
+guarantee of future results.
 
 ### Not built
 

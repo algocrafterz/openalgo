@@ -169,6 +169,7 @@ def get_daily_performance(
     enriched = enrich_trades(trades_in_range, start_date, end_date)
     included = sorted({t["strategy"] for t in trades_in_range})
     sessions = _sessions(start_date, end_date, trades_in_range)
+    edge = _edge_from_costs(trades_in_range, [t["cost"] for t in enriched])
     metrics = compute_metrics(
         trades_in_range,
         start_date,
@@ -186,7 +187,7 @@ def get_daily_performance(
         "excluded": sorted(set(exclude or ())),
         **metrics,
         **summarize_enrichment(enriched),
-        **_edge_from_costs(trades_in_range, [t["cost"] for t in enriched]),
+        **edge,
         "by_symbol": symbol_breakdown(trades_in_range),
         "by_hour": hour_breakdown(trades_in_range),
         "by_weekday": weekday_breakdown(trades_in_range),
@@ -194,7 +195,7 @@ def get_daily_performance(
         "by_entry_hour": entry_hour_breakdown(trades_in_range),
         "by_hold_bucket": hold_bucket_breakdown(trades_in_range),
         "insights": build_insights(
-            enriched, sessions, metrics["sharpe_ratio"], metrics["sortino_ratio"]
+            enriched, sessions, metrics["sharpe_ratio"], metrics["sortino_ratio"], edge, mode
         ),
     }
     response["equity_curve_net"], response["equity_net_cost_coverage"] = net_equity_curve(
@@ -260,6 +261,7 @@ def get_strategy_comparison(
     for t in enriched_all:
         enriched_by_strategy[t["strategy"]].append(t)
     ratios: dict[str, tuple[float | None, float | None]] = {}
+    edges: dict[str, dict] = {}
     rows = []
     for name in sorted(by_strategy):
         trades_in_range = by_strategy[name]
@@ -276,6 +278,7 @@ def get_strategy_comparison(
         costs = summarize_costs(trades_in_range)
         holds = hold_stats(trades_in_range)
         edge = _edge_from_costs(trades_in_range, trade_costs)
+        edges[name] = edge
         rows.append(
             {
                 "strategy": name,
@@ -315,7 +318,8 @@ def get_strategy_comparison(
         portfolio_metrics["sharpe_ratio"],
         portfolio_metrics["sortino_ratio"],
     )
-    extras = comparison_extras(dict(enriched_by_strategy), sessions, ratios)
+    edges["__portfolio__"] = _edge_from_costs(all_in_range, [t["cost"] for t in enriched_all])
+    extras = comparison_extras(dict(enriched_by_strategy), sessions, ratios, edges, mode)
     for row in rows:
         row.update(extras["per_strategy"].get(row["strategy"], {}))
     rows.sort(key=lambda r: r["net_profit"], reverse=True)

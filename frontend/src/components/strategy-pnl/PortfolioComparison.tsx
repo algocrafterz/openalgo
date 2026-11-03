@@ -1,5 +1,6 @@
 import type { StrategyComparisonResponse } from '@/api/strategyPnl'
 import { GradeBadge } from '@/components/strategy-pnl/InsightsPanel'
+import { ValidationBadge } from '@/components/strategy-pnl/ValidationStatusCard'
 import {
   Table,
   TableBody,
@@ -37,6 +38,7 @@ export function PortfolioComparison({
             <TableHead className="text-right">Max drawdown (net)</TableHead>
             <TableHead className="text-right">Recovery</TableHead>
             <TableHead className="text-right">Grade</TableHead>
+            <TableHead className="text-right">Validation</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -56,6 +58,13 @@ export function PortfolioComparison({
             </TableCell>
             <TableCell className="text-right" title={p.overall_note ?? undefined}>
               <GradeBadge grade={p.overall_grade} preliminary={p.preliminary_grade} />
+            </TableCell>
+            <TableCell className="text-right">
+              <ValidationBadge
+                state={p.validation_status}
+                label={p.validation_label}
+                title={p.validation_summary}
+              />
             </TableCell>
           </TableRow>
         </TableBody>
