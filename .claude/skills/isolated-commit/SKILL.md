@@ -30,6 +30,16 @@ A file can hold both in-scope and foreign hunks. `git add -p` is interactive and
 the in-scope hunks to a patch and stage it with `git apply --cached <patch>`, then check that the work tree
 still holds the foreign hunks.
 
+When two changesets overlap on the same lines (so no hunk boundary separates them), split by content:
+
+1. Number the hunks with `git diff -U0 -- <file>` and classify each as A, B or overlapping. Write the manifest first.
+2. Build file B1 = working file with the other changeset's hunks reversed (match by exact line text and assert one match; keep the file's line endings). Never edit the working file.
+3. Stage it without touching the work tree: `sha=$(git hash-object -w --path=<f> <B1>)` then `git update-index --cacheinfo <mode>,$sha,<f>`.
+4. Prepare the second commit in a separate index: `GIT_INDEX_FILE=<tmp> git add -- <explicit paths>`, then `git write-tree` for both indexes.
+5. Prove each commit stands alone: `git archive <tree>` into a scratch dir, link `.venv`, `node_modules` and `db`, create `log/test`, then run the targeted tests, `tsc` and the build there. Check `git diff --name-only <tree2>` against the work tree: only the foreign paths may differ.
+6. Re-check `git log -1` before finishing; other sessions commit while you work.
+7. When the user has approved the exact split, do not re-verify it: stage the explicit list for commit 1, confirm the staged diff equals the prepared patch, commit, then repeat for commit 2 (reset nothing; use the separate index or `git apply --cached`). Report hashes, files, and the untouched foreign paths.
+
 ## 2. Stage explicit paths only
 
 ```bash
