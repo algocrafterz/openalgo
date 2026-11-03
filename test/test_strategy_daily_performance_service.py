@@ -267,11 +267,17 @@ def test_capital_view_matches_the_response_metrics():
     ok, r, _ = svc.get_daily_performance(None, "7d", capital=50000.0)
     v = r["capital_view"]
     assert v["capital"] == 50000.0
-    assert v["return_pct"] == round(r["net_profit"] / 50000.0 * 100, 2)
-    assert v["return_net_pct"] == round(r["net_after_costs"] / 50000.0 * 100, 2)
-    assert v["max_drawdown_pct_of_capital"] == round(r["max_drawdown"] / 50000.0 * 100, 2)
-    assert v["best_day_pct"] == round(r["best_day"] / 50000.0 * 100, 2)
-    assert v["worst_day_pct"] == round(r["worst_day"] / 50000.0 * 100, 2)
+    n = max(1, len(r["included"]))
+    assert v["strategies"] == n
+    assert v["total_capital"] == 50000.0 * n
+    assert v["scale"] == 0.5
+    ref = 100000.0 * n
+    assert v["scaled"]["net_profit"] == round(r["net_profit"] * 0.5, 2)
+    assert v["return_pct"] == round(r["net_profit"] / ref * 100, 2)
+    assert v["return_net_pct"] == round(r["net_after_costs"] / ref * 100, 2)
+    assert v["max_drawdown_pct_of_capital"] == round(r["max_drawdown"] / ref * 100, 2)
+    assert v["best_day_pct"] == round(r["best_day"] / ref * 100, 2)
+    assert v["worst_day_pct"] == round(r["worst_day"] / ref * 100, 2)
 
 
 def test_capital_with_a_filter_is_invariant_and_uses_the_filtered_set(filter_ledger):
@@ -281,7 +287,11 @@ def test_capital_with_a_filter_is_invariant_and_uses_the_filtered_set(filter_led
     )
     assert ok
     assert _without_capital_view(with_cap) == plain
-    assert with_cap["capital_view"]["return_pct"] == 4.0  # 40 rupees on 1000
+    view = with_cap["capital_view"]
+    assert view["strategies"] == len(with_cap["included"])
+    assert view["total_capital"] == 1000.0 * view["strategies"]
+    assert view["scaled"]["net_profit"] == 0.4  # 40 rupees x (1000 / 100000)
+    assert view["return_pct"] == round(40.0 / (100000.0 * view["strategies"]) * 100, 2)
 
 
 def test_capital_on_an_empty_selection_is_safe(filter_ledger):

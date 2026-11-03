@@ -351,31 +351,75 @@ def _pct_of(value, capital: float) -> float | None:
     return round(float(value) / capital * 100.0, 2)
 
 
-def compute_capital_view(metrics: dict, capital: float) -> dict:
-    """Percent-of-capital view of the rupee metrics already computed for a selection.
+# Assumption: the recorded (Sandbox) trades are sized on this much capital per strategy.
+# The capital view scales recorded results by (capital per strategy / this amount).
+REFERENCE_CAPITAL_PER_STRATEGY = 100_000
 
-    Pure: no I/O, and `metrics` is read, never changed. `metrics` holds the keys
-    `net_profit`, `net_after_costs` (may be None), `max_drawdown`, `best_day` and
-    `worst_day`. Every percentage divides by the one fixed `capital`, applied to
-    the whole window; none of it is a record of capital used at the time. A
-    percentage that cannot be computed is None.
+_SCALED_KEYS = (
+    "net_profit",
+    "net_after_costs",
+    "est_costs",
+    "max_drawdown",
+    "best_day",
+    "worst_day",
+)
+
+
+def _scaled(value, scale: float | None) -> float | None:
+    """`value` times `scale`, rounded to 2 places; None when either is unknown."""
+    if value is None or scale is None:
+        return None
+    return round(float(value) * scale, 2)
+
+
+def compute_capital_view(metrics: dict, capital: float, strategies: int = 1) -> dict:
+    """What-if view of the recorded rupee metrics at a different capital per strategy.
+
+    Pure: no I/O, and `metrics` is read, never changed. `capital` is the amount per
+    strategy and `strategies` the number of strategies that contributed trades. Each
+    scaled value is the recorded value times capital / REFERENCE_CAPITAL_PER_STRATEGY,
+    a straight-line estimate and not a record. Each percentage is the scaled value over
+    the total capital (capital x strategies). A value that cannot be computed is None.
     """
+    n = max(1, int(strategies or 1))
+    valid = bool(capital) and capital > 0 and capital == capital
+    scale = capital / REFERENCE_CAPITAL_PER_STRATEGY if valid else None
+    total = capital * n if valid else None
+    scaled = {key: _scaled(metrics.get(key), scale) for key in _SCALED_KEYS}
+    basis_tail = "of the total capital: your amount per strategy x number of strategies"
     return {
         "capital": capital,
-        "return_pct": _pct_of(metrics.get("net_profit"), capital),
-        "return_net_pct": _pct_of(metrics.get("net_after_costs"), capital),
-        "max_drawdown_pct_of_capital": _pct_of(metrics.get("max_drawdown"), capital),
-        "best_day_pct": _pct_of(metrics.get("best_day"), capital),
-        "worst_day_pct": _pct_of(metrics.get("worst_day"), capital),
+        "strategies": n,
+        "total_capital": total,
+        "reference_capital": REFERENCE_CAPITAL_PER_STRATEGY,
+        "scale": round(scale, 6) if scale is not None else None,
+        "scaled": scaled,
+        "return_pct": _pct_of(metrics.get("net_profit"), REFERENCE_CAPITAL_PER_STRATEGY * n)
+        if valid
+        else None,
+        "return_net_pct": _pct_of(
+            metrics.get("net_after_costs"), REFERENCE_CAPITAL_PER_STRATEGY * n
+        )
+        if valid
+        else None,
+        "max_drawdown_pct_of_capital": _pct_of(
+            metrics.get("max_drawdown"), REFERENCE_CAPITAL_PER_STRATEGY * n
+        )
+        if valid
+        else None,
+        "best_day_pct": _pct_of(metrics.get("best_day"), REFERENCE_CAPITAL_PER_STRATEGY * n)
+        if valid
+        else None,
+        "worst_day_pct": _pct_of(metrics.get("worst_day"), REFERENCE_CAPITAL_PER_STRATEGY * n)
+        if valid
+        else None,
         "basis": {
-            "return_pct": "Gross realised P&L over the fixed capital entered by you",
-            "return_net_pct": (
-                "Realised P&L after estimated charges over the fixed capital entered by you"
-            ),
+            "return_pct": f"Gross realised P&L, scaled, {basis_tail}",
+            "return_net_pct": f"Realised P&L after estimated charges, scaled, {basis_tail}",
             "max_drawdown_pct_of_capital": (
-                "Largest fall in cumulative P&L over the fixed capital entered by you"
+                f"Largest fall in cumulative P&L, scaled, {basis_tail}"
             ),
-            "best_day_pct": "Best day's P&L over the fixed capital entered by you",
-            "worst_day_pct": "Worst day's P&L over the fixed capital entered by you",
+            "best_day_pct": f"Best day's P&L, scaled, {basis_tail}",
+            "worst_day_pct": f"Worst day's P&L, scaled, {basis_tail}",
         },
     }

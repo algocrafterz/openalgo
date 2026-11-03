@@ -11,6 +11,7 @@ import {
   parseCapital,
   planCapitalForMode,
   saveStoredCapital,
+  scaleRupeeFigures,
 } from './capital'
 
 describe('parseCapital', () => {
@@ -166,5 +167,53 @@ describe('storage', () => {
     expect(loadStoredCapital('live')).toBeNull()
     expect(() => saveStoredCapital('live', 1)).not.toThrow()
     expect(() => clearStoredCapital('live')).not.toThrow()
+  })
+})
+
+describe('scaleRupeeFigures', () => {
+  const daily = {
+    net_profit: 5000,
+    gross_loss: -2000,
+    win_rate: 55,
+    sharpe_ratio: 1.2,
+    trades_count: 10,
+    expectancy_ci95: [-100, 300] as [number, number],
+    daily_pnl: [{ date: '2026-10-01', pnl: 1000 }],
+    equity_curve: [{ date: '2026-10-01', value: 1000 }],
+    by_symbol: [{ symbol: 'A', trades: 2, net_pnl: 400, win_rate: 50 }],
+    trades: [{ symbol: 'A', entry_price: 100, closed_quantity: 10, realized_pnl: 300, cost: 20 }],
+    capital_view: { capital: 10000, scaled: { net_profit: 500 } },
+  }
+
+  it('scales rupee figures and leaves ratios, counts, prices and quantities', () => {
+    const out = scaleRupeeFigures(daily, 0.1)
+    expect(out.net_profit).toBeCloseTo(500)
+    expect(out.gross_loss).toBeCloseTo(-200)
+    expect(out.win_rate).toBe(55)
+    expect(out.sharpe_ratio).toBe(1.2)
+    expect(out.trades_count).toBe(10)
+    expect(out.expectancy_ci95[1]).toBeCloseTo(30)
+    expect(out.daily_pnl[0].pnl).toBeCloseTo(100)
+    expect(out.equity_curve[0].value).toBeCloseTo(100)
+    expect(out.by_symbol[0].net_pnl).toBeCloseTo(40)
+    expect(out.by_symbol[0].trades).toBe(2)
+    expect(out.trades[0].realized_pnl).toBeCloseTo(30)
+    expect(out.trades[0].cost).toBeCloseTo(2)
+    expect(out.trades[0].entry_price).toBe(100)
+    expect(out.trades[0].closed_quantity).toBe(10)
+    expect(out.capital_view).toBe(daily.capital_view)
+  })
+
+  it('does not change its input', () => {
+    scaleRupeeFigures(daily, 0.1)
+    expect(daily.net_profit).toBe(5000)
+    expect(daily.trades[0].realized_pnl).toBe(300)
+  })
+
+  it('returns the input for a missing or neutral factor', () => {
+    expect(scaleRupeeFigures(daily, null)).toBe(daily)
+    expect(scaleRupeeFigures(daily, undefined)).toBe(daily)
+    expect(scaleRupeeFigures(daily, 1)).toBe(daily)
+    expect(scaleRupeeFigures(undefined, 0.1)).toBeUndefined()
   })
 })

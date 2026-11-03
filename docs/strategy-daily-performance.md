@@ -81,15 +81,16 @@ a side-by-side comparison across all strategies.
    are valid for comparing one strategy's risk-adjusted consistency against
    another's, but are **not** directly comparable to a %-based benchmark
    (e.g. a fund's Sharpe), and they do not change with capital. The page
-   accepts one optional capital (`capital` query value on
-   `/api/strategy-pnl/daily`, rupees, above zero, at most 1,000,000,000,000)
-   that applies to the whole selected set for the whole window. When it is
-   given, the response adds one `capital_view` object: gross return, return
-   net of estimated charges, max drawdown, and best and worst day, each as a
-   percent of that fixed capital (`compute_capital_view` in
-   `services/strategy_metrics_service.py`). Without a capital the response is
-   unchanged. The comparison table and the CSV export stay in rupees. A
-   per-strategy allocated capital is still not built (see Future work).
+   accepts one optional capital per strategy (`capital` query value on
+   `/api/strategy-pnl/daily`, rupees, above zero, at most 1,000,000,000,000).
+   The recorded trades are taken as sized on Rs 1,00,000 per strategy. When a
+   capital is given, the response adds one `capital_view` object: the rupee
+   metrics scaled by capital / 1,00,000 (a straight-line what-if, not a
+   record), plus return, drawdown and best and worst day as a percent of the
+   total capital (capital x number of strategies in the selection;
+   `compute_capital_view` in `services/strategy_metrics_service.py`). Without
+   a capital the response is unchanged. The comparison table and the CSV
+   export stay in rupees and unscaled.
 
 4. **Zero-trade days are included as 0-P&L days** in every metrics
    computation. Excluding them (only counting days with a trade) inflates
@@ -286,7 +287,7 @@ daily and comparison endpoints.
 - **Wire `upgrade/backfill_strategy_daily_performance.py --verify --date <today>` into the daily `eod` workflow** so a strategy_positions vs. strategy_closed_trades mismatch is caught automatically every trading day, rather than only when someone happens to compare two pages by eye — which is how the TCS mismatch above was actually found. Not wired up yet.
 - Backfill for Flow / Python Strategy Host trades — no per-trade exit log exists anywhere to source this from today; would need one added at the point those paths close a position, mirroring what `save_tracker_exit()` already does for signal_engine.
 - Backfill for dates further back than `signal_engine/data/trades.db` retains (check retention before assuming full history is recoverable).
-- Per-strategy allocated-capital config for %-normalized Sharpe/Sortino/Calmar/CAGR. (An optional pooled capital for %-of-capital return and drawdown figures is built; per-strategy capital and ratio normalisation are not.)
+- Per-strategy allocated-capital config for %-normalized Sharpe/Sortino/Calmar/CAGR. (An optional capital per strategy for a scaled what-if view and %-of-capital figures is built; ratio normalisation is not.)
 - Rolling-window metrics (trailing 20/50 trades) for trend detection.
 - Trade-level drill-down UI (currently day-level only).
 

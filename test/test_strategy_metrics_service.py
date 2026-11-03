@@ -363,6 +363,11 @@ def test_capital_view_known_numbers():
     }
     v = compute_capital_view(metrics, 100000.0)
     assert v["capital"] == 100000.0
+    assert v["strategies"] == 1
+    assert v["total_capital"] == 100000.0
+    assert v["reference_capital"] == 100000
+    assert v["scale"] == 1.0
+    assert v["scaled"]["net_profit"] == 5000.0
     assert v["return_pct"] == 5.0
     assert v["return_net_pct"] == 4.5
     assert v["max_drawdown_pct_of_capital"] == -2.0
@@ -398,9 +403,11 @@ def test_capital_view_does_not_change_its_input():
 def test_capital_view_unknown_net_and_missing_keys_give_none():
     from services.strategy_metrics_service import compute_capital_view
 
-    v = compute_capital_view({"net_profit": 10.0, "net_after_costs": None}, 1000.0)
-    assert v["return_pct"] == 1.0
+    v = compute_capital_view({"net_profit": 10.0, "net_after_costs": None}, 100000.0)
+    assert v["return_pct"] == 0.01
     assert v["return_net_pct"] is None
+    assert v["scaled"]["net_after_costs"] is None
+    assert v["scaled"]["est_costs"] is None
     assert v["best_day_pct"] is None
 
 
@@ -410,6 +417,7 @@ def test_capital_view_never_divides_by_zero():
     for bad in (0, 0.0, -5.0, float("nan")):
         v = compute_capital_view({"net_profit": 10.0, "max_drawdown": -1.0}, bad)
         assert v["return_pct"] is None
+        assert v["scaled"]["net_profit"] is None
         assert v["max_drawdown_pct_of_capital"] is None
 
 
@@ -418,8 +426,56 @@ def test_capital_view_works_on_a_real_compute_metrics_result():
 
     trades = [_trade(100, "2026-01-01"), _trade(-50, "2026-01-02"), _trade(30, "2026-01-03")]
     m = compute_metrics(trades, "2026-01-01", "2026-01-03")
-    v = compute_capital_view(m, 1000.0)
-    assert v["return_pct"] == 8.0
-    assert v["max_drawdown_pct_of_capital"] == round(m["max_drawdown"] / 10.0, 2)
-    assert v["best_day_pct"] == 10.0
-    assert v["worst_day_pct"] == -5.0
+    v = compute_capital_view(m, 100000.0)
+    assert v["return_pct"] == 0.08
+    assert v["max_drawdown_pct_of_capital"] == round(m["max_drawdown"] / 1000.0, 2)
+    assert v["best_day_pct"] == 0.1
+    assert v["worst_day_pct"] == -0.05
+
+
+_METRICS = {
+    "net_profit": 5000.0,
+    "net_after_costs": 4500.0,
+    "est_costs": 500.0,
+    "max_drawdown": -2000.0,
+    "best_day": 3000.0,
+    "worst_day": -1000.0,
+}
+
+
+def test_capital_view_scales_one_strategy_by_a_tenth():
+    from services.strategy_metrics_service import compute_capital_view
+
+    v = compute_capital_view(_METRICS, 10000.0, 1)
+    assert v["scale"] == 0.1
+    assert v["total_capital"] == 10000.0
+    assert v["scaled"] == {
+        "net_profit": 500.0,
+        "net_after_costs": 450.0,
+        "est_costs": 50.0,
+        "max_drawdown": -200.0,
+        "best_day": 300.0,
+        "worst_day": -100.0,
+    }
+    assert v["return_pct"] == 5.0  # 500 on 10,000
+
+
+def test_capital_view_three_strategies_total_capital_and_percent():
+    from services.strategy_metrics_service import (
+        REFERENCE_CAPITAL_PER_STRATEGY,
+        compute_capital_view,
+    )
+
+    v = compute_capital_view(_METRICS, 10000.0, 3)
+    assert v["strategies"] == 3
+    assert v["total_capital"] == 30000.0
+    assert v["scaled"]["net_profit"] == 500.0
+    assert v["return_pct"] == round(5000.0 / (REFERENCE_CAPITAL_PER_STRATEGY * 3) * 100, 2)
+    assert v["return_pct"] == round(v["scaled"]["net_profit"] / v["total_capital"] * 100, 2)
+    assert v["max_drawdown_pct_of_capital"] == round(-200.0 / 30000.0 * 100, 2)
+
+
+def test_capital_view_treats_zero_strategies_as_one():
+    from services.strategy_metrics_service import compute_capital_view
+
+    assert compute_capital_view(_METRICS, 1000.0, 0)["strategies"] == 1

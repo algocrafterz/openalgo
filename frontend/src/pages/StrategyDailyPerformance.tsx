@@ -60,7 +60,9 @@ import {
   loadStoredCapital,
   parseCapital,
   planCapitalForMode,
+  REFERENCE_CAPITAL_PER_STRATEGY,
   saveStoredCapital,
+  scaleRupeeFigures,
 } from '@/lib/capital'
 import {
   onlyStrategy,
@@ -483,15 +485,46 @@ function fmtPct(value: number | null): string {
   return value === null ? '—' : `${value.toFixed(2)}%`
 }
 
-/** Percent-of-capital figures; each one names the capital it was divided by. */
-function CapitalViewBlock({ view }: { view: CapitalView }) {
-  const basis = `of your capital Rs ${view.capital.toLocaleString('en-IN')}`
+/** Scaled what-if rupee figures and percent-of-total-capital figures for a capital per strategy. */
+function CapitalViewBlock({
+  view,
+  formatCurrency,
+}: {
+  view: CapitalView
+  formatCurrency: (value: number) => string
+}) {
+  const inr = (v: number) => v.toLocaleString('en-IN')
+  const total = view.total_capital ?? view.capital * view.strategies
+  const basis = `of Rs ${inr(total)}`
   const tone = (v: number | null) => ({
     positive: v !== null && v > 0,
     negative: v !== null && v < 0,
   })
+  const money = (v: number | null) => (v === null ? '—' : formatCurrency(v))
+  const s = view.scaled
+  const scaleText = view.scale === null ? '' : ` (${Number(view.scale.toPrecision(4))}x)`
   return (
     <div className="space-y-2">
+      <h3 className="text-sm font-medium">
+        If you had allocated Rs {inr(view.capital)} per strategy ({view.strategies}{' '}
+        {view.strategies === 1 ? 'strategy' : 'strategies'}, Rs {inr(total)} in total)
+      </h3>
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <MetricCard label="Net P&L (scaled)" value={money(s.net_profit)} {...tone(s.net_profit)} />
+        {s.net_after_costs !== null && (
+          <MetricCard
+            label="After est. charges (scaled)"
+            value={money(s.net_after_costs)}
+            {...tone(s.net_after_costs)}
+          />
+        )}
+        <MetricCard
+          label="Max drawdown (scaled)"
+          value={money(s.max_drawdown === null ? null : Math.abs(s.max_drawdown))}
+        />
+        <MetricCard label="Best day (scaled)" value={money(s.best_day)} {...tone(s.best_day)} />
+        <MetricCard label="Worst day (scaled)" value={money(s.worst_day)} {...tone(s.worst_day)} />
+      </div>
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <MetricCard
           label="Return (gross)"
@@ -524,9 +557,16 @@ function CapitalViewBlock({ view }: { view: CapitalView }) {
           {...tone(view.worst_day_pct)}
         />
       </div>
+      <p className="text-xs font-medium text-amber-600 dark:text-amber-400">
+        Every rupee figure on this page (cards, tables, charts, trades) is scaled to this amount.
+        Quantities and prices are as recorded, and the CSV export is not scaled.
+      </p>
       <p className="text-xs text-muted-foreground">
-        Percentages use the capital you entered, applied to the whole period. They are a view of the
-        same realised rupee P&L, not a record of capital used at the time.
+        This scales the recorded results as if each strategy had been traded with Rs{' '}
+        {inr(view.capital)} instead of Rs {inr(view.reference_capital)}
+        {scaleText}. It is a straight-line estimate: real quantities, lot sizes, charges and
+        slippage would not scale exactly. Percentages do not change with the amount. Recorded P&L is
+        unchanged.
       </p>
     </div>
   )
@@ -785,7 +825,17 @@ export default function StrategyDailyPerformance() {
     return () => unsubscribe()
   }, [refreshCompare])
 
-  const strategies = compareQuery.data?.strategies ?? []
+  // With a capital entered, every rupee figure on the page is shown scaled to it.
+  // The factor comes from the daily report; before it arrives, from the typed capital.
+  const scaleFactor =
+    capital === null
+      ? null
+      : (dailyQuery.data?.capital_view?.scale ?? capital / REFERENCE_CAPITAL_PER_STRATEGY)
+  const scaledCompare = useMemo(
+    () => scaleRupeeFigures(compareQuery.data, scaleFactor),
+    [compareQuery.data, scaleFactor]
+  )
+  const strategies = scaledCompare?.strategies ?? []
   const listedNames = compareQuery.data?.all_strategies
   const listedMode = compareQuery.data?.mode
   useEffect(() => {
@@ -802,7 +852,10 @@ export default function StrategyDailyPerformance() {
     () => [...new Set([...knownNames, ...filter.include, ...filter.exclude])].sort(),
     [knownNames, filter]
   )
-  const daily = dailyQuery.data
+  const daily = useMemo(
+    () => scaleRupeeFigures(dailyQuery.data, scaleFactor),
+    [dailyQuery.data, scaleFactor]
+  )
   const dailyMode = daily?.mode
   // The response mode is only a hint. If it differs from the app's mode (another
   // device may have switched), ask the server for its mode, as AuthSync does. A
@@ -879,8 +932,8 @@ export default function StrategyDailyPerformance() {
             <Input
               type="text"
               inputMode="decimal"
-              aria-label="Capital (Rs)"
-              placeholder="Capital (Rs)"
+              aria-label="Capital per strategy (Rs)"
+              placeholder="Capital per strategy (Rs)"
               className="w-[150px]"
               value={capitalText}
               onChange={(e) => onCapitalInput(e.target.value)}
@@ -970,11 +1023,12 @@ export default function StrategyDailyPerformance() {
           History starts from the day this page was deployed - trades closed before that are not
           reconstructed. Metrics stay in rupees, on each strategy's own realized P&L. Sharpe,
           Sortino and Calmar are computed on rupee daily P&L and do not change with capital.
-          Percentage-of-capital figures appear only when you enter a capital. Est. charges use the
-          India intraday schedule (the placing broker's own brokerage, plus STT, exchange fees,
-          stamp duty, GST), count each entry order once however many exit legs follow, and exclude
-          slippage. "% of profit" is estimated charges divided by gross profit: 100% means charges
-          took all of it. R is shown only for trades whose signal stop could be identified.
+          Percentage-of-capital figures appear only when you enter a capital per strategy. Est.
+          charges use the India intraday schedule (the placing broker's own brokerage, plus STT,
+          exchange fees, stamp duty, GST), count each entry order once however many exit legs
+          follow, and exclude slippage. "% of profit" is estimated charges divided by gross profit:
+          100% means charges took all of it. R is shown only for trades whose signal stop could be
+          identified.
         </span>
       </div>
 
@@ -998,7 +1052,9 @@ export default function StrategyDailyPerformance() {
         />
       ) : (
         <>
-          {daily.capital_view && <CapitalViewBlock view={daily.capital_view} />}
+          {daily.capital_view && (
+            <CapitalViewBlock view={daily.capital_view} formatCurrency={formatCurrency} />
+          )}
           {isToday ? (
             <SessionSummary daily={daily} formatCurrency={formatCurrency} />
           ) : (

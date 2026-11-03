@@ -114,14 +114,34 @@ export type EdgeVerdict =
   | 'likely negative'
   | 'not distinguishable from zero'
 
-/** The same rupee metrics as percent of a capital the user entered (daily view only). */
+/** Recorded rupee metrics scaled to a capital per strategy (daily view only). */
+export interface CapitalViewScaled {
+  net_profit: number | null
+  net_after_costs: number | null
+  est_costs: number | null
+  max_drawdown: number | null
+  best_day: number | null
+  worst_day: number | null
+}
+
+/** A straight-line what-if at the capital per strategy the user entered. */
 export interface CapitalView {
+  /** Capital per strategy, as entered. */
   capital: number
-  /** Gross realised P&L over the capital. */
+  /** Strategies that contributed trades to the selection. */
+  strategies: number
+  /** capital x strategies. */
+  total_capital: number | null
+  /** Capital per strategy the recorded trades are taken as sized on. */
+  reference_capital: number
+  /** capital / reference_capital. */
+  scale: number | null
+  scaled: CapitalViewScaled
+  /** Gross realised P&L over the total capital. */
   return_pct: number | null
-  /** Realised P&L after estimated charges over the capital. */
+  /** Realised P&L after estimated charges over the total capital. */
   return_net_pct: number | null
-  /** Max drawdown over the fixed capital (zero or negative). */
+  /** Max drawdown over the total capital (zero or negative). */
   max_drawdown_pct_of_capital: number | null
   best_day_pct: number | null
   worst_day_pct: number | null

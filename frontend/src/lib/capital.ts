@@ -101,3 +101,67 @@ export function clearStoredCapital(mode: CapitalMode): void {
     // Nothing to remove when storage is unavailable.
   }
 }
+
+/** Reference capital per strategy the recorded trades are taken as sized on (matches the server). */
+export const REFERENCE_CAPITAL_PER_STRATEGY = 100_000
+
+/** Rupee-valued fields. Ratios, counts, percentages, prices and quantities are never scaled. */
+const RUPEE_FIELDS = new Set([
+  'net_profit',
+  'gross_profit',
+  'gross_loss',
+  'expectancy',
+  'avg_win',
+  'avg_loss',
+  'max_drawdown',
+  'ulcer_index',
+  'best_day',
+  'worst_day',
+  'est_costs',
+  'net_after_costs',
+  'turnover',
+  'avg_charge_per_trade',
+  'net_expectancy',
+  'net_pnl_std',
+  'entry_slippage',
+  'net_pnl',
+  'avg_pnl',
+  'gross',
+  'realized_pnl',
+  'cost',
+  'mfe',
+  'mae',
+  'pnl',
+  'value',
+])
+
+/** Sub-trees that are not rupee data and are passed through untouched. */
+const SKIPPED_KEYS = new Set(['capital_view', 'data_health'])
+
+function scaleNode(node: unknown, factor: number): unknown {
+  if (Array.isArray(node)) return node.map((item) => scaleNode(item, factor))
+  if (node === null || typeof node !== 'object') return node
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (SKIPPED_KEYS.has(key)) out[key] = value
+    else if (RUPEE_FIELDS.has(key) && typeof value === 'number') out[key] = value * factor
+    else if (key === 'expectancy_ci95' && Array.isArray(value))
+      out[key] = value.map((v) => (typeof v === 'number' ? v * factor : v))
+    else out[key] = scaleNode(value, factor)
+  }
+  return out
+}
+
+/**
+ * Display what-if: every rupee figure in a Performance response multiplied by
+ * `factor` (capital per strategy / REFERENCE_CAPITAL_PER_STRATEGY). Returns a new
+ * object; the input, the stored P&L and the CSV export are never changed. A factor
+ * of 1, or a missing one, returns the input as it is.
+ */
+export function scaleRupeeFigures<T>(data: T, factor: number | null | undefined): T {
+  if (data === undefined || data === null) return data
+  if (factor === null || factor === undefined || !Number.isFinite(factor) || factor === 1) {
+    return data
+  }
+  return scaleNode(data, factor) as T
+}

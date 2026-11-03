@@ -128,7 +128,7 @@ def get_daily_performance(
     1D names the same last session whichever strategies are selected.
 
     `capital` (validated by the caller, rupees) adds one `capital_view` key with
-    the same rupee metrics as percent of that capital. Without it the response
+    a scaled what-if of the rupee metrics at that capital per strategy. Without it the response
     is unchanged.
     """
     mode = _current_mode()
@@ -164,7 +164,9 @@ def get_daily_performance(
         metrics["equity_curve"], enriched
     )
     if capital is not None:
-        response["capital_view"] = compute_capital_view(response, capital)
+        response["capital_view"] = compute_capital_view(
+            response, capital, max(1, len(response.get("included") or []))
+        )
     if start_date == end_date:
         # Ratios like Sharpe mean nothing over one day; the trades themselves
         # are what a single-session view shows.
