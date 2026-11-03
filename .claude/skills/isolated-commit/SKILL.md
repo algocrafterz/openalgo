@@ -46,10 +46,10 @@ databases, logs or unrelated reformatting. Untracked new files of the change mus
 | Change touches | Required check |
 | --- | --- |
 | Python | `uv run ruff check <staged .py files>` and `uv run ruff format --check <files>` |
-| Behavior | targeted tests first: `PYTHONPATH=. uv run pytest <files> -q -p no:cacheprovider` |
-| Commit gate | full suite: `signal_engine/scripts/run_full_tests.sh --wait` (never call pytest on the whole tree directly; one full run per machine) |
+| Behavior | targeted tests first, for every code change: `PYTHONPATH=. uv run pytest <files> -q -p no:cacheprovider` |
+| Commit gate | Run the full suite (`signal_engine/scripts/run_full_tests.sh --wait`) and the gthread suite only when the CLAUDE.md risk rules under "Tests" require them. Skip a required suite only with the user's approval, and record the reason. Never call pytest on the whole tree directly. Run one full suite at a time per machine. |
 | Root `test/` | the affected `test/` files |
-| Frontend | `cd frontend && npx biome check <files>`; rebuild `dist` and stage the tracked dist files if the UI changed |
+| Frontend | `cd frontend && npx biome check <files>`, `tsc`, vitest and `npm run build`; never stage `frontend/dist` on a branch |
 | DB, sockets, threads, subprocesses, caches | the `fd-audit` skill |
 | Schema | a migration in `upgrade/` registered in `migrate_all.py` |
 | Strategy entry/exit/SL/TP/filter logic | a dated entry in that strategy's `STRATEGY-LOG.md` (five fields) |
@@ -87,7 +87,7 @@ Never push, open a PR, merge, or deploy unless asked in this message.
 ```
 Commit   <hash> <subject>
 Files    <n>: <paths>
-Checks   ruff: pass | targeted: <n> passed | full suite: <result or "not run: reason">
+Checks   ruff: pass | targeted: <n> passed | full suite: <result | not required: reason | skipped: approved by user> | gthread: <same>
 Left     foreign changes untouched: <paths>
 Not done push; <anything skipped and why>
 ```

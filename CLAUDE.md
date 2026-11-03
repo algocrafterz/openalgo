@@ -65,7 +65,7 @@ default model. Opus is break-glass, not a normal phase.
   count is not a complexity proxy.
 - Uncertainty alone does not justify Opus. Resolve it from code, tests, documentation, and
   existing decisions first. Do not escalate for ordinary errors, obvious test failures, or
-  incomplete code. Opus review is optional.
+  incomplete code. Opus review is optional, except for the high-risk changes listed under Tests.
 - Subagents use the least capable model that can do the task. Give them minimal context.
 - Read narrowly, filter command output, do not repeat research, and stop when the acceptance
   criteria are met. ECC is optional: use the smallest relevant capability, and only for a
@@ -94,12 +94,32 @@ Tests verify the intended behavior. They do not replace it.
   conflicts with the intended behavior, say so explicitly.
 - Add or update tests when observable behavior changes.
 
-**Run tests in two tiers.** The goal is fast development feedback and a trustworthy full suite.
+**Run tests by risk.** Every code change runs its targeted tests. A wider suite runs when the
+change can reach what that suite covers. Decide from the changed paths (`git diff --name-only`),
+and record the decision with the result.
 
-- **Development:** run only the affected test files, narrowest first
-  (`PYTHONPATH=. uv run pytest <files> -q -p no:cacheprovider`).
-- **Commit and CI:** run the full suite through `signal_engine/scripts/run_full_tests.sh`.
-  Do not call `pytest signal_engine/tests` directly.
+- **Targeted tests, for every code change:** the test files for every changed module and
+  behaviour, narrowest first (`PYTHONPATH=. uv run pytest <files> -q -p no:cacheprovider`).
+  A documentation-only change runs no application suite. Validate what it touches instead: the
+  paths and commands it names, its links, and the syntax of any configuration it changes.
+- **Full signal_engine suite,** through `signal_engine/scripts/run_full_tests.sh`, when a change
+  touches `signal_engine/`, an OpenAlgo interface that signal_engine calls (order placement,
+  orderbook and positions, sandbox, quotes and history, the strategy book), shared execution,
+  tracking or risk code (`services/risk/`), trading lifecycle or strategy behaviour, or is a
+  broad refactor that can reach other modules. Do not call `pytest signal_engine/tests` directly.
+- **gthread suite** (see "The gthread suite: when it runs and how" below), when a change affects
+  concurrency: concurrent execution paths, shared mutable state, thread safety, locks, eventlet
+  or gthread behaviour, or a coordination mechanism (`SingleFlight`, `utils/keyed_locks.py`,
+  `utils/real_threading.py`, `utils/stream_registry.py`); or when it changes a module that a
+  `test/test_gthread_*.py` file directly covers (`grep -l "<module>" test/test_gthread_*.py`).
+  A database or cache change alone does not trigger it, unless it changes concurrent behaviour.
+- **Frontend:** vitest for the changed modules, Biome, `tsc` and `npm run build`. Add a browser
+  check for meaningful UI behaviour.
+- **High risk** (trading execution, order lifecycle, risk management, concurrency): both suites,
+  and an independent Opus review.
+- **Before a pull request or a merge to `main`:** both suites, always.
+- **A required suite that is skipped** needs the user's approval. Write the reason and the
+  residual risk in the report. Never skip a required suite silently.
 - **One full-suite run at a time per machine, enforced.** Overlapping full runs slow each other
   and make tests flaky (a full run took 10.5 minutes alone and 15 minutes under load). The
   wrapper holds a machine-wide lock: it refuses with exit 75 if another run holds it. Use
@@ -211,13 +231,14 @@ fine on the dev server and **breaks under eventlet**. That is the single most
 common way a change passes locally and fails on deploy. SQLite locking is also
 stricter on Windows.
 
-### The gthread suite passes before every commit and pull request
+### The gthread suite: when it runs and how
 
 The `gthread-migration` CI job runs every `test/test_gthread_*.py` file under a
 real gunicorn on Linux. Most of those files skip on Windows, so a green
-`uv run pytest` on a Windows checkout says nothing about them. Before committing
-or raising a pull request, run the job's own command on Linux or in WSL (in a
-copy on the Linux filesystem, not under `/mnt/c`):
+`uv run pytest` on a Windows checkout says nothing about them. When the risk
+rules under "Tests" require it, and always before a pull request, run the job's
+own command on Linux or in WSL (in a copy on the Linux filesystem, not under
+`/mnt/c`):
 
 ```bash
 uv sync
@@ -715,7 +736,7 @@ artifacts — but on `main` it **is tracked**. The `commit-dist` job in
 to `main` after every successful push.
 
 - **Production servers and backend-only contributors need no Node.js.** A plain `git pull` from `main` brings the latest UI. This is the canonical upgrade path.
-- **React developers** run `cd frontend && npm install && npm run build` (or `npm run dev`) locally, since the local `.gitignore` will not track their output. Build only — tests run in CI.
+- **React developers** run `cd frontend && npm install && npm run build` (or `npm run dev`) locally, since the local `.gitignore` will not track their output. A local build is for seeing the UI. The frontend checks under Tests still apply before a commit.
 - **Feature branches** CI has not built may carry stale or missing `dist/`. Build locally or rebase onto recent `main`.
 - **A local build on a branch cut from `main` rewrites tracked files under `frontend/dist/`.** Never stage them (`git add -A -- . ':!frontend/dist'`); `git checkout -- frontend/dist` restores them. A user testing a branch with `uv run app.py` needs that local build, and the commit still carries source only.
 

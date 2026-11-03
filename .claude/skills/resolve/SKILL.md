@@ -61,9 +61,9 @@ occurrences. A RED alert that cannot wait until the close is recorded by `/open-
    - **TUNING-IDEA** - never a code change from fewer than 20 sessions, never on a frozen strategy
      (memory). The route is research: `signal-engine-backtest` and the acceptance criteria, with
      the trial recorded in `signal_engine/research/`. The outcome is a note on the entry.
-5. **Prove it.** The targeted tests; the full suite through `signal_engine/scripts/run_full_tests.sh`;
-   the gthread suite when OpenAlgo core changed (CLAUDE.md); then re-run the exact check that found
-   the issue for its recorded day(s) and quote the before and after.
+5. **Prove it.** The targeted tests, and the wider suites the CLAUDE.md risk rules under "Tests"
+   require (full suite through `signal_engine/scripts/run_full_tests.sh`, gthread suite); then
+   re-run the exact check that found the issue for its recorded day(s) and quote the before and after.
 6. **Record it.** `update --status fixed --fix "<what changed, which test, backup path>"`, and add
    `--commit SHA` once committed. `note` the event a future session must show to verify it (for
    example "a burst of 4+ simultaneous orders with no 'Timeout sending order'"). The close-day
