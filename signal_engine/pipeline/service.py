@@ -31,13 +31,15 @@ from signal_engine.pipeline.bars import (
 from signal_engine.pipeline.clock import Clock, WallClock
 from signal_engine.pipeline.context import HistorifyLoader, RollingContext
 from signal_engine.pipeline.cycle import shared_executor, shutdown_executor
-from signal_engine.pipeline.exit_driver import ExitDriver, plan_for
+from signal_engine.pipeline.exit_driver import ExitDriver, TargetExitDriver, plan_for
 from signal_engine.pipeline.runner import Runner
 from signal_engine.pipeline.sink import DispatchSink, ExecutionSink, RecordingSink
 from signal_engine.pipeline.state import RunnerStateStore
 from signal_engine.pipeline.strategies.breakout import BreakoutStrategy
 from signal_engine.pipeline.strategies.ema_vwap_early import TAG as EVWAP_EARLY_TAG
 from signal_engine.pipeline.strategies.ema_vwap_early import EarlyDisplacementStrategy
+from signal_engine.pipeline.strategies.orb import TAG as ORB_PY_TAG
+from signal_engine.pipeline.strategies.orb import OrbStrategy
 from signal_engine.pipeline.strategy import Strategy
 from signal_engine.pipeline.trail_driver import TrailExitDriver
 from signal_engine.strategy_core import strategy_spec
@@ -64,6 +66,7 @@ STRATEGY_FACTORIES: dict[str, Callable[[], Strategy]] = {
     "BREAKOUT": BreakoutStrategy,
     "BREAKOUT-PY": lambda: _spec_strategy("BREAKOUT-PY"),
     EVWAP_EARLY_TAG: EarlyDisplacementStrategy,
+    ORB_PY_TAG: OrbStrategy,
 }
 
 #: Tags whose rules come from the frozen BREAKOUT specification; start-up checks only these
@@ -119,7 +122,7 @@ def build_exits(
     strategy: Strategy | None = None,
     context: RollingContext | None = None,
     manage_until_min: int | None = None,
-) -> ExitDriver | TrailExitDriver | None:
+) -> ExitDriver | TrailExitDriver | None:  # TargetExitDriver is an ExitDriver
     entry = cfg.strategies[tag]
     if entry.signal_source != "python":
         return None
@@ -134,9 +137,10 @@ def build_exits(
             manage_until_min=manage_until_min,
             broker_qty=broker_qty,
         )
-    if entry.exit_owner != "ladder":
+    if entry.exit_owner not in ("ladder", "targets"):
         return None
-    return ExitDriver(
+    driver_class = TargetExitDriver if entry.exit_owner == "targets" else ExitDriver
+    return driver_class(
         strategy=tag,
         plan=plan_for(entry.exit_plan),
         positions=positions,

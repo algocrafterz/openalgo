@@ -95,7 +95,7 @@ def check_consistency(cfg: RunnerSettings, known_strategies: Iterable[str]) -> N
                 f"strategy may not trade live until it passes docs/STRATEGY-ACCEPTANCE-CRITERIA.md "
                 f"and that promotion is written into the code, so paper_only must be true"
             )
-        if entry.exit_owner in ("ladder", "strategy") and entry.signal_source != "python":
+        if entry.exit_owner in ("ladder", "strategy", "targets") and entry.signal_source != "python":
             problems.append(
                 f"{tag} has exit_owner {entry.exit_owner} but signal_source {entry.signal_source} "
                 f"(the runner only manages positions it opened)"

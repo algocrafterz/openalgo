@@ -16,14 +16,16 @@ def _bracket_trade_results():
 
 
 def _valid_message():
-    return "ORB LONG\nSymbol: RELIANCE\nEntry: 2500\nSL: 2485\nTP: 2540"
+    # VBL, not RELIANCE: ORB-PY supersedes the Pine ORB entry alerts on its own symbols, and these
+    # tests exercise the ordinary Pine entry path.
+    return "ORB LONG\nSymbol: VBL\nEntry: 2500\nSL: 2485\nTP: 2540"
 
 
 def _mock_signal():
     sig = MagicMock()
     sig.strategy = "ORB"
     sig.direction = Direction.LONG
-    sig.symbol = "RELIANCE"
+    sig.symbol = "VBL"
     sig.entry = 2500.0
     sig.sl = 2485.0
     sig.tp = 2540.0

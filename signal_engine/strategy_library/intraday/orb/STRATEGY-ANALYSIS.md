@@ -995,3 +995,30 @@ would change the view:
 - **Known gap:** regime features stop at 2026-10-19 (end of the published dataset), so the feature
   replay covered 42 of the 67 paper trades.
 
+
+### 2026-11-03 — ORB-PY: Python port paper-trades beside the Pine ORB
+- **What changed:** A Python copy of the ORB (tag `ORB-PY`, `strategy_core/orb.py`) now runs in the
+  signal runner, paper only. It copies the Pine build that TradingView actually ran for the paper
+  alerts of 2026-09-22 to 2026-10-27 (the file before commit c2a127d4a), not the `orb.pine` now in the
+  repo. For the 24 symbols that produced those alerts, only ORB-PY places orders. The Pine ORB entry
+  alerts for those symbols are stored as declined rows so the two can be compared. Pine ORB alerts for
+  any other symbol trade as before.
+- **Entry:** Same rules as that Pine build: ORB15 (09:15 to 09:30), close beyond the range by 0.5%,
+  volume at least 1.2 times the 50-bar average, two-of-three direction veto, entry on the next bar
+  from 09:45 to before 11:00, one entry per symbol per day. One vote is not modelled: NIFTY against
+  its own VWAP, because the runner passes one symbol's bars. The closing-auction bar is left out of
+  the volume average. Without that, 61 of the 111 paper alerts were rejected as low volume.
+- **Exit (SL):** Same stop formula: ATR times 2.0, pushed past the ORB edge, minimum distance 0.3%.
+- **Exit (TP):** TP1 sells 50%, TP1.5 sells the rest, as market exits after the bar that touched the
+  level closes. The tracker keeps its no-progress, profit-lock, runner-stop and 14:45 time exits.
+- **Consideration:** On the 111 paper alerts the port reproduces 106 (same side, same stop). On
+  2026-10-07 the Pine sent no alerts and the port found 9 signals. After an engine restart ORB-PY
+  does not send TP1 or TP1.5 for a position it already holds, because the restored position lacks the
+  TP1.5 level. The tracker still manages the stop and the time exit. The 10-year verdict above is
+  unchanged: this run compares two implementations, it does not test an edge.
+- **Decision rule:** This is a comparison, like BREAKINGTRADE against BREAKINGTRADE-RI. After at least
+  15 to 20 sessions we compare the Pine ORB and ORB-PY on signal match, replayed outcomes on the same
+  fills and costs, and ORB-PY's real paper P&L. We keep the one with the better performance and
+  disable the other. If ORB-PY keeps the lead and its signals match the Pine, the Pine ORB is retired
+  (set `intraday-orb-analyze` to `enabled: false` together with the ORB-PY block, as the BREAKOUT
+  retirement did). If the Pine ORB is better, ORB-PY is commented out and kept for rollback.

@@ -34,6 +34,12 @@ STRATEGIES = {
             "paper_live": "pipeline/strategies/ema_vwap_early.py",
         },
     },
+    # ORB-PY: paper/live only. Its backtest adapter does not exist yet; the Pine ORB comparison runs
+    # through the declined Pine alert rows (see STRATEGY-ANALYSIS.md, 2026-11-03).
+    "Orb": {
+        "core": "orb",
+        "adapters": {"paper_live": "pipeline/strategies/orb.py"},
+    },
     # IDEA-034 v3: a forward recorder that places no orders, so not a pipeline (paper_live) strategy.
     "BalanceBreakout": {
         "core": "balance_breakout",
@@ -101,4 +107,4 @@ class TestTheAdapters:
     def test_the_strategies_with_no_paper_or_live_adapter_are_exactly_the_ones_listed(self):
         live = {p.stem for p in (ROOT / "pipeline" / "strategies").glob("*.py") if p.stem != "__init__"}
         with_live = {s["core"] for s in STRATEGIES.values() if "paper_live" in s["adapters"]}
-        assert live == with_live == {"breakout", "ema_vwap_early"}
+        assert live == with_live == {"breakout", "ema_vwap_early", "orb"}

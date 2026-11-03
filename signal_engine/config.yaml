@@ -462,6 +462,12 @@ blacklist:
       - BHEL             # 0% WR across Q1+Q2 2026; false breakout 2026-05-12 (-0.8R)
     soft: []
     soft_multiplier: 0.5 # 50% qty for soft-listed symbols. 0 = effectively hard-block.
+  ORB-PY:
+    # The Python ORB runs the same rules as the Pine ORB above, so it carries the same block.
+    hard:
+      - BHEL
+    soft: []
+    soft_multiplier: 0.5
   BREAKINGTRADE:
     # Scanner-selected names change daily, so a per-symbol blacklist is less useful here than
     # for the fixed-universe strategies. YESBANK is already blocked globally.
@@ -659,6 +665,28 @@ runner:
       max_entries_per_direction_per_day: null   # the .lipi has no re-entry limit
       # Optional per-strategy universe. Absent = runner.universe above (shared 40, bars fetched
       # once for both strategies). Add a list here to widen or narrow this strategy alone.
+    # 2026-11-03: ORB15 in Python, PAPER ONLY. A port of the Pine ORB build that TradingView ran for
+    # every paper alert from 2026-09-22 to 2026-10-27 (the build before commit c2a127d4a, not the
+    # orb.pine now in the repo). Rules: strategy_core/orb.py. On the 111 alerts of that period it
+    # reproduces 106 (side, bar and stop); the NIFTY-versus-VWAP vote of the Pine is not modelled.
+    # Exits keep the Pine ORB's shape: the runner sends 50% at TP1 and the rest at TP1.5, and the
+    # tracker keeps its no-progress, profit-lock, runner-stop and 14:45 time exits (exit_owner targets).
+    # supersedes_pine_tag ORB: for the symbols listed below only ORB-PY places orders; the Pine ORB
+    # entry alerts for them are stored as declined rows so the two can be compared. Pine ORB alerts
+    # for any other symbol trade as before. Exit alerts are never suppressed.
+    # Decision: after 15 to 20 sessions compare the Pine ORB with ORB-PY and keep the better one,
+    # disabling the other (as with BREAKINGTRADE and BREAKINGTRADE-RI).
+    ORB-PY:
+      signal_source: python
+      exit_plan: orb_tp1_tp15
+      exit_owner: targets
+      paper_only: true
+      supersedes_pine_tag: ORB
+      paper_limits: mode
+      max_entries_per_direction_per_day: null   # the Pine takes one entry per symbol per session
+      universe: [RELIANCE, NATIONALUM, INFY, INDUSINDBK, VEDL, TCS, TATASTEEL, PFC, JSWENERGY,
+                 BHARTIARTL, SBIN, RECLTD, KOTAKBANK, ITC, HINDALCO, BANKBARODA, APOLLOTYRE,
+                 FEDERALBNK, AXISBANK, ASHOKLEY, TATAPOWER, HDFCBANK, NTPC, BPCL]
 
 # ── No-progress Detection ────────────────────────────────
 # [tune] Move SL to break-even (or exit at market) when a trade hasn't progressed toward TP1.
@@ -994,6 +1022,11 @@ strategy_profiles:
     product: MIS
     # tp_levels absent — ORB PineScript sends ExitQtyPct in each TP HIT alert.
     # Engine reads ExitQtyPct directly; strategy owns exit fractions, not this config.
+  ORB-PY:
+    product: MIS
+    # tp_levels absent: the runner's TargetExitDriver sends the exit fraction in each EXIT signal
+    # (50% at TP1, the rest at TP1.5), as the Pine ORB alerts did. No min_sl_pct override: like the
+    # Pine ORB it inherits the global floor, and its stops sit about 2% away.
   BREAKOUT:
     product: MIS
     # tp_levels absent — breakout.pine sends ExitQtyPct in each TP HIT alert.

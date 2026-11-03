@@ -32,6 +32,10 @@ _EPS = 1e-9
 PLANS: dict[str, ExitPlan] = {
     "tp1_only": TP1_ONLY,  # spec v1.0 item 12
     "ladder_30_35_35": ExitPlan((0.30, 0.35, 0.35), "tp_buffer", buffer_r=0.3),
+    #: ORB-PY: half the position at TP1, the rest at TP1.5, both as market exits after the bar that
+    #: touched them closes (the Pine alert fired at that bar's close). No stop move here: after
+    #: TP1 the runner stop is the tracker's own rule, as for a Pine ORB alert.
+    "orb_tp1_tp15": ExitPlan((0.5, 0.5), "none", tp_fill="bar_close"),
 }
 
 
@@ -73,6 +77,9 @@ def _as_ist(t: dt.datetime) -> pd.Timestamp:
 
 
 class ExitDriver:
+    #: Context keys, in order, that hold the targets after TP1 (the Signal's own `tp`).
+    EXTRA_TARGET_KEYS: tuple[str, ...] = ("tp2", "tp3")
+
     def __init__(
         self,
         *,
@@ -169,7 +176,7 @@ class ExitDriver:
             logger.warning(f"{symbol}: fill price unknown, Ladder anchored to entry {fill}")
         ctx = pos.context if isinstance(pos.context, dict) else {}
         targets = [_to_float(pos.tp)]
-        targets += [_to_float(ctx.get("tp2")), _to_float(ctx.get("tp3"))]
+        targets += [_to_float(ctx.get(key)) for key in self.EXTRA_TARGET_KEYS]
         needed = len(self.plan.fractions)
         usable = []
         for t in targets:
@@ -241,4 +248,34 @@ class ExitDriver:
             tp_level=tp_level,
             exit_qty_pct=pct,
             context=context,
+        )
+
+
+class TargetExitDriver(ExitDriver):
+    """Sends the partial-profit exits a Pine ORB alert would have sent.
+
+    The tracker keeps every other exit it applies to a Pine strategy: no-progress, profit-lock,
+    the runner stop after a partial exit, the 14:45 time exit (the strategy's exit_owner is not
+    in config.RUNNER_EXIT_OWNERS). So the EXIT signals here carry the Pine alert's shape: tp_level
+    TP1 then TP1.5, and no `ladder_sl`, which would override the tracker's runner-stop rule.
+
+    One inherited safety path remains: the Ladder keeps the initial stop, so a bar that touches it
+    while the tracker still holds the position two bars later makes the base class reconcile (an
+    "SL" exit when the broker is flat, a market close when it still holds). That only ever closes.
+
+    After an engine restart the position is restored without its context, so tp1.5 is unknown and
+    the symbol is left to the tracker. That is deliberate: a Ladder rebuilt mid-trade would not know
+    whether TP1 had already been sold and could sell the runner's half twice.
+    """
+
+    EXTRA_TARGET_KEYS = ("tp1_5",)
+    _LABELS = {"TP1": "TP1", "TP2": "TP1.5"}
+
+    def _signal(
+        self, pos, tp_level: str | None, pct: float, sl: float, fill_price: float | None = None
+    ) -> Signal:
+        sig = super()._signal(pos, tp_level, pct, sl, fill_price)
+        context = {k: v for k, v in sig.context.items() if k != "ladder_sl"}
+        return sig.model_copy(
+            update={"tp_level": self._LABELS.get(tp_level or "", tp_level), "context": context}
         )

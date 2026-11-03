@@ -56,6 +56,11 @@ BREAKOUT_PY = "BREAKOUT-PY"
 # runner (strategy_core.ema_vwap_early). Paper only, like BREAKOUT-PY.
 EVWAP_EARLY_PY = "EVWAP-EARLY-PY"
 
+# The Python runner's ORB15 (strategy_core.orb), a port of the Pine ORB build TradingView ran for
+# paper alerts. Paper only. It replaces the Pine ORB's entries on its own universe, so the Pine
+# alerts are kept as declined rows for the comparison (runner supersedes_pine_tag ORB).
+ORB_PY = "ORB-PY"
+
 # WATCHLIST outcome of the BreakingTrade scanner: entered at the scan-hit price with no
 # confirming close (trigger.plan_trade_watchlist), against BREAKINGTRADE's confirmed entry.
 # Its own tag, channel and risk slots so paper P&L can compare the two entry philosophies.
@@ -99,6 +104,12 @@ REGISTRY: dict[str, StrategyMeta] = {
         EVWAP_EARLY_PY, None, False,
         "Python runner EMA/VWAP early displacement, trailing stop, no TP. Paper only (ANALYZE "
         "mode); lifecycle messages go to the admin notify channel, like BREAKOUT-PY.",
+    ),
+    ORB_PY: StrategyMeta(
+        ORB_PY, None, False,
+        "Python runner ORB15, paper only (ANALYZE mode). No channel of its own: lifecycle messages "
+        "go to the admin notify channel, like BREAKOUT-PY. Entries supersede the Pine ORB's on "
+        "its universe; exits are the tracker's, plus the runner's TP1 and TP1.5 partial exits.",
     ),
     BREAKINGTRADE: StrategyMeta(BREAKINGTRADE, "intraday-breakingtrade", True),
     BREAKINGTRADE_WATCHLIST: StrategyMeta(

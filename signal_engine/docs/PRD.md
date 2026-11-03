@@ -6506,3 +6506,24 @@ Found in the 2026-10-26..30 sandbox week (bug tracker BUG-001, 003, 004, 006).
   https://help.cqg.com/cqgic/25/Documents/marketprofilevalueareasmpva.htm ; TradingView volume
   profile basics https://www.tradingview.com/wiki/Volume_Profile ; NSE closing auction from
   2026-08-03 (SOP NSE/CMTR/73362) https://nsearchives.nseindia.com/content/circulars/CMTR73362.pdf
+
+## Python Signal Runner: ORB-PY Paper Trading (2026-11-03)
+
+A third Python runner strategy, `ORB-PY`: the Pine ORB build that TradingView ran for the paper alerts
+(before commit c2a127d4a), ported to `strategy_core/orb.py` and wrapped by `pipeline/strategies/orb.py`.
+Paper only. `runner.strategies.ORB-PY` lists 24 symbols and sets `supersedes_pine_tag: ORB`, so on those
+symbols the Pine ORB entry alerts are stored as declined rows and only ORB-PY trades.
+
+- **Signal parity:** 106 of the 111 Pine entry alerts of 2026-09-22 to 2026-10-27 are reproduced with the same
+  side and stop. The Pine's NIFTY-versus-VWAP vote is not modelled. The closing-auction bar is excluded from
+  the 50-bar volume average.
+- **Exits:** new exit owner `targets` with exit plan `orb_tp1_tp15`. `TargetExitDriver` sends TP1 (50%) and
+  TP1.5 (rest) as market exits, with no `ladder_sl`. The tracker keeps no-progress, profit-lock, runner stop
+  and the 14:45 time exit, because `targets` is not in `RUNNER_EXIT_OWNERS`.
+- **Known limit:** after an engine restart a held ORB-PY position gets no TP1 or TP1.5 exit (its restored
+  record lacks the TP1.5 level). A Ladder rebuilt mid-trade could sell the runner's half twice, so the symbol
+  is left to the tracker, which still manages the stop and the time exit.
+- **Tests:** `tests/test_orb_core.py`, `tests/test_orb_py_wiring.py`.
+- **Decision rule:** after at least 15 to 20 sessions the Pine ORB and ORB-PY are compared (signal match,
+  replayed outcomes on the same fills and costs, ORB-PY's real paper P&L). The better one stays and the
+  other is disabled, as with BREAKINGTRADE and BREAKINGTRADE-RI.

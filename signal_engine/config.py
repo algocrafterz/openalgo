@@ -92,10 +92,12 @@ class TelegramChannel:
 
 
 VALID_SIGNAL_SOURCES = ("pine", "python")
-VALID_EXIT_PLANS = ("tp1_only", "ladder_30_35_35", "trailing_stop")
+VALID_EXIT_PLANS = ("tp1_only", "ladder_30_35_35", "trailing_stop", "orb_tp1_tp15")
 VALID_PAPER_LIMITS = ("mode", "live")
-VALID_EXIT_OWNERS = ("tracker", "ladder", "strategy")
+VALID_EXIT_OWNERS = ("tracker", "ladder", "strategy", "targets")
 #: Exit owners under which the runner, not the tracker, manages the open position's exits.
+#: "targets" is not one of them: the runner sends only the partial-profit exits and the tracker
+#: keeps its no-progress, profit-lock and runner-stop rules, as for a Pine strategy.
 RUNNER_EXIT_OWNERS = ("ladder", "strategy")
 #: Exit plans with NO take-profit. A signal of such a strategy carries tp = 0, meaning "none";
 #: the validator rejects any other tp for it, and no execution path may read a target from it.
@@ -801,6 +803,11 @@ def _runner_strategies(raw) -> dict:
             raise ConfigError(f"{name}.supersedes_pine_tag must be a strategy tag or null, got {superseded!r}")
         if superseded is not None and str(superseded).upper() == str(tag).upper():
             raise ConfigError(f"{name}.supersedes_pine_tag cannot be its own tag")
+        if (plan == "orb_tp1_tp15") != (owner == "targets"):
+            raise ConfigError(
+                f"{name}: exit_plan orb_tp1_tp15 and exit_owner targets go together "
+                f"(got exit_plan {plan}, exit_owner {owner})"
+            )
         if (plan == "trailing_stop") != (owner == "strategy"):
             raise ConfigError(
                 f"{name}: exit_plan trailing_stop and exit_owner strategy go together "
