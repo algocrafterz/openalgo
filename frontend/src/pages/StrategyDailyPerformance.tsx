@@ -26,7 +26,6 @@ import { DataHealthBanner } from '@/components/DataHealthBanner'
 import { StrategyModeBadge } from '@/components/StrategyModeBadge'
 import { CloseBreakdowns } from '@/components/strategy-pnl/CloseBreakdowns'
 import { EdgeCheckCard } from '@/components/strategy-pnl/EdgeCheckCard'
-import { EvaluationPanel } from '@/components/strategy-pnl/EvaluationPanel'
 import { HoldBuckets } from '@/components/strategy-pnl/HoldBuckets'
 import { HoldStatsRow } from '@/components/strategy-pnl/HoldStats'
 import { MetricCard } from '@/components/strategy-pnl/MetricCard'
@@ -1136,17 +1135,6 @@ export default function StrategyDailyPerformance() {
           />
         </>
       )}
-
-      <EvaluationPanel
-        filter={filter}
-        period={period}
-        range={range}
-        capital={capital}
-        clientMode={clientMode}
-        nothingSelected={nothingSelected}
-        tradesCount={daily?.trades_count ?? 0}
-        ready={capitalReady && queriesEnabled}
-      />
 
       <Card>
         <CardHeader>
