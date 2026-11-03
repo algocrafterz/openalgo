@@ -404,8 +404,7 @@ export interface EvaluationPackage {
     capital: number | null
     strategies_included: string[]
     package_hash: string
-    /** Parts left out to keep the file a reasonable size; empty when nothing was cut. */
-    truncated: string[]
+    truncated: boolean
   }
   dataset: unknown
   report: EvaluationReport

@@ -115,7 +115,7 @@ export function EvaluationReportView({ pkg }: { pkg: EvaluationPackage }) {
         </p>
       </div>
       <p className="break-words text-sm">{scopeLine(meta, report)}</p>
-      {meta.truncated.length > 0 && (
+      {meta.truncated && (
         <p className="text-xs text-muted-foreground">
           The data was shortened to keep the file a manageable size.
         </p>
