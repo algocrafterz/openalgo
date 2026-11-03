@@ -14,6 +14,16 @@ import pytest
 os.environ.setdefault("API_KEY_PEPPER", "0" * 64)
 os.environ.setdefault("APP_KEY", "test-only-app-key")
 
+# Keep LiteLLM's model catalogue the same on every machine.
+#
+# LiteLLM fetches its newest model list from GitHub when it is imported, unless
+# this is set. A model added upstream with no capability flags then failed
+# agent tests that read the catalogue (test_agent_chatgpt_wiring and
+# test_agent_chatgpt_oauth), on some days and on some machines only. The
+# bundled list is what the tests were written against. Production is not
+# affected: this is confined to the test harness.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
 # Neutralise dotenv before anything can call it.
 #
 # utils/config.py runs load_dotenv(override=True) at import, which re-reads the
