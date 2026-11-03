@@ -9,15 +9,30 @@ same pattern as `blueprints/strategy_portfolio.py`.
 import csv
 import hashlib
 import io
+import json
 import math
 import os
+from datetime import datetime
 
 from flask import Blueprint, Response, jsonify, request, session, url_for
+from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import redirect
 
 from database.auth_db import get_api_key_for_tradingview, get_auth_token
 from database.settings_db import get_analyze_mode
 from limiter import limiter
+from services.performance_eval.ai_response import INVALID_MESSAGE, validate_response
+from services.performance_eval.dataset import (
+    build_evaluation_dataset,
+    dataset_to_text,
+    package_hash,
+)
+from services.performance_eval.prompt import (
+    PROMPT_PASTE_MAX_CHARS,
+    build_prompt,
+    data_filename,
+)
+from services.performance_eval.rules import build_report
 from services.strategy_book_reconciler import get_data_health, schedule_reconcile
 from services.strategy_daily_performance_service import (
     get_daily_performance,
@@ -99,15 +114,32 @@ _MAX_FILTER_NAMES = 100
 _MAX_NAME_LENGTH = 64
 
 
-def _names(key: str) -> list[str]:
-    """Repeated query values: whitespace stripped, empties dropped, duplicates
-    removed with the first order kept."""
+def _clean_names(raw_values) -> list[str]:
+    """Whitespace stripped, empties dropped, duplicates removed with the first
+    order kept."""
     seen: dict[str, None] = {}
-    for raw in request.args.getlist(key):
+    for raw in raw_values:
         name = raw.strip()
         if name:
             seen.setdefault(name, None)
     return list(seen)
+
+
+def _names(key: str) -> list[str]:
+    """Repeated query values, cleaned by `_clean_names`."""
+    return _clean_names(request.args.getlist(key))
+
+
+def _filter_error_message(included: list[str], excluded: list[str]) -> str | None:
+    """The trader-facing reason a strategy filter is not acceptable, or None."""
+    if len(included) + len(excluded) > _MAX_FILTER_NAMES:
+        return (
+            f"Too many strategies selected. Choose at most {_MAX_FILTER_NAMES} "
+            "strategies to include or exclude."
+        )
+    if any(len(name) > _MAX_NAME_LENGTH for name in included + excluded):
+        return f"A strategy name is too long. Names can have at most {_MAX_NAME_LENGTH} characters."
+    return None
 
 
 def _strategy_filter():
@@ -119,16 +151,8 @@ def _strategy_filter():
     """
     included = _names("strategy")
     excluded = _names("exclude")
-    if len(included) + len(excluded) > _MAX_FILTER_NAMES:
-        message = (
-            f"Too many strategies selected. Choose at most {_MAX_FILTER_NAMES} "
-            "strategies to include or exclude."
-        )
-    elif any(len(name) > _MAX_NAME_LENGTH for name in included + excluded):
-        message = (
-            f"A strategy name is too long. Names can have at most {_MAX_NAME_LENGTH} characters."
-        )
-    else:
+    message = _filter_error_message(included, excluded)
+    if message is None:
         strategy = included[0] if included else None
         return strategy, included[1:], excluded, None
     return None, None, None, (jsonify({"status": "error", "message": message}), 400)
@@ -137,13 +161,12 @@ def _strategy_filter():
 MAX_CAPITAL = 1_000_000_000_000  # 1 lakh crore rupees
 
 
-def _parse_capital():
-    """Read the optional `capital` query value (rupees).
+def _capital_from_text(raw: str | None) -> tuple[float | None, str | None]:
+    """Validate a capital amount (rupees) given as text.
 
     Returns (capital, None) with None for a blank or absent value, or
-    (None, error response) when the value is not a usable amount.
+    (None, trader-facing message) when the value is not a usable amount.
     """
-    raw = request.args.get("capital")
     if raw is None or not raw.strip():
         return None, None
     try:
@@ -151,12 +174,22 @@ def _parse_capital():
     except ValueError:
         value = float("nan")
     if not math.isfinite(value) or value <= 0:
-        message = "Enter a capital amount greater than zero, for example 1000000."
-    elif value > MAX_CAPITAL:
-        message = "That capital is larger than this page supports. Enter a smaller amount."
-    else:
-        return value, None
-    return None, (jsonify({"status": "error", "message": message}), 400)
+        return None, "Enter a capital amount greater than zero, for example 1000000."
+    if value > MAX_CAPITAL:
+        return None, "That capital is larger than this page supports. Enter a smaller amount."
+    return value, None
+
+
+def _parse_capital():
+    """Read the optional `capital` query value (rupees).
+
+    Returns (capital, None) with None for a blank or absent value, or
+    (None, error response) when the value is not a usable amount.
+    """
+    value, message = _capital_from_text(request.args.get("capital"))
+    if message:
+        return None, (jsonify({"status": "error", "message": message}), 400)
+    return value, None
 
 
 @strategy_pnl_bp.route("/api/strategy-pnl/daily", methods=["GET"])
@@ -332,3 +365,197 @@ def strategy_pnl_trades_export():
         mimetype="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ---------------------------------------------------------------------------
+# Evaluation package (read only; no model is ever called)
+# ---------------------------------------------------------------------------
+
+#: The largest request body the evaluation routes read, in bytes. The pasted
+#: analysis is at most 60,000 characters, which can take up to 3 bytes each when
+#: JSON-escaped; this leaves room for the selection fields.
+MAX_EVALUATE_BODY_BYTES = 130_000
+_TOO_LARGE_MESSAGE = "That request is too large. Paste a shorter analysis and try again."
+_UNREADABLE_MESSAGE = "The request could not be read. Reload the page and try again."
+_EVALUATION_FAILED_MESSAGE = "The evaluation could not be prepared. Try again in a moment."
+
+
+def _json_names(body: dict, key: str) -> tuple[list[str] | None, str | None]:
+    """A list of strategy names (or one name) from a JSON body, cleaned like the query string."""
+    raw = body.get(key)
+    if raw is None:
+        return [], None
+    values = [raw] if isinstance(raw, str) else raw
+    if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
+        return None, "Strategy names must be sent as text."
+    return _clean_names(values), None
+
+
+def _json_capital(body: dict) -> tuple[float | None, str | None]:
+    """The optional `capital` from a JSON body, validated like the query value."""
+    raw = body.get("capital")
+    if raw is None:
+        return None, None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return _capital_from_text("nan")
+    return _capital_from_text(raw if isinstance(raw, str) else repr(raw))
+
+
+def _evaluate_error(message: str, status: int = 400, **extra):
+    return jsonify({"status": "error", "message": message, **extra}), status
+
+
+def _read_json_body():
+    """The JSON object of the request, or (None, error response)."""
+    request.max_content_length = MAX_EVALUATE_BODY_BYTES
+    if (request.content_length or 0) > MAX_EVALUATE_BODY_BYTES:
+        return None, _evaluate_error(_TOO_LARGE_MESSAGE, 413)
+    # The Content-Length check above does the real work. The per-request limit
+    # is a backstop for a body that declares no length.
+    try:
+        body = request.get_json(silent=True)
+    except RequestEntityTooLarge:
+        return None, _evaluate_error(_TOO_LARGE_MESSAGE, 413)
+    except (RecursionError, ValueError):
+        # Crafted nesting can exhaust the parser's stack; treat it as unreadable.
+        return None, _evaluate_error(_UNREADABLE_MESSAGE)
+    if not isinstance(body, dict):
+        return None, _evaluate_error(_UNREADABLE_MESSAGE)
+    return body, None
+
+
+def _read_selection(body: dict):
+    """Validate the selection fields of a body. Returns (selection, error response).
+
+    Same limits as the GET routes. The mode is never read from the body.
+    """
+    included, message = _json_names(body, "strategy")
+    excluded, exclude_message = _json_names(body, "exclude")
+    message = (
+        message
+        or exclude_message
+        or (
+            _filter_error_message(included, excluded)
+            if included is not None and excluded is not None
+            else None
+        )
+    )
+    if message:
+        return None, _evaluate_error(message)
+    capital, message = _json_capital(body)
+    if message:
+        return None, _evaluate_error(message)
+    period = body.get("period", "30d")
+    start, end = body.get("start"), body.get("end")
+    if not isinstance(period, str) or any(
+        v is not None and not isinstance(v, str) for v in (start, end)
+    ):
+        return None, _evaluate_error("The period and dates must be sent as text.")
+    return (included, excluded, period, start, end, capital), None
+
+
+def _build_dataset(selection):
+    included, excluded, period, start, end, capital = selection
+    return build_evaluation_dataset(
+        included[1:], excluded, included[0] if included else None, period, start, end, capital
+    )
+
+
+@strategy_pnl_bp.route("/api/strategy-pnl/evaluation/prepare", methods=["POST"])
+@check_session_validity
+@limiter.limit(STRATEGY_PNL_READ_LIMIT)
+def strategy_pnl_evaluation_prepare():
+    """Build the evaluation package: dataset, rule-based report, prompt and export.
+
+    Body (JSON): strategy, exclude, period, start, end, capital. Nothing is
+    stored and no model is called. Mode is never read from the body.
+    """
+    body, error = _read_json_body()
+    if error:
+        return error
+    selection, error = _read_selection(body)
+    if error:
+        return error
+    try:
+        ok, dataset, status = _build_dataset(selection)
+        if not ok:
+            return jsonify(dataset), status
+        meta = dataset["meta"]
+        digest = package_hash(dataset)
+        with_data = build_prompt(dataset, include_data=True)
+        package = {
+            "meta": {
+                "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "mode_display": meta["mode_display"],
+                "period": meta["period"],
+                "start_date": meta["start_date"],
+                "end_date": meta["end_date"],
+                "capital": meta["capital"],
+                "strategies_included": meta["strategies_included"],
+                "package_hash": digest,
+                "truncated": meta["truncated"],
+            },
+            "dataset": json.loads(dataset_to_text(dataset)),
+            "report": build_report(dataset),
+            "prompt": {
+                "text": build_prompt(dataset, include_data=False),
+                "text_with_data": with_data if len(with_data) <= PROMPT_PASTE_MAX_CHARS else None,
+            },
+            "export": {
+                "data_filename": data_filename(dataset),
+                "data_json": dataset_to_text(dataset),
+                "notice": (
+                    "This file holds the figures computed from your closed trades in the "
+                    f"{meta['mode_display']} mode for the selected strategies, including "
+                    "strategy names and symbols. It holds no account details or keys."
+                ),
+            },
+        }
+    except Exception:
+        logger.exception("Could not prepare the evaluation package")
+        return _evaluate_error(_EVALUATION_FAILED_MESSAGE, 500)
+    return jsonify({"status": "success", "schema_version": 1, "package": package}), 200
+
+
+@strategy_pnl_bp.route("/api/strategy-pnl/evaluation/validate", methods=["POST"])
+@check_session_validity
+@limiter.limit(STRATEGY_PNL_READ_LIMIT)
+def strategy_pnl_evaluation_validate():
+    """Check an analysis pasted back from claude.ai against the current selection.
+
+    Body (JSON): the selection fields plus `response` (text or an object).
+    Nothing is stored and no model is called.
+    """
+    body, error = _read_json_body()
+    if error:
+        return error
+    selection, error = _read_selection(body)
+    if error:
+        return error
+    pasted = body.get("response")
+    if not isinstance(pasted, (str, dict)) or (isinstance(pasted, str) and not pasted.strip()):
+        return _evaluate_error("Paste the analysis from Claude before checking it.")
+    try:
+        ok, dataset, status = _build_dataset(selection)
+        if not ok:
+            return jsonify(dataset), status
+        labels = {b["strategy"]: b["evidence_label"] for b in dataset["strategies"]}
+        counts = {b["strategy"]: b["trades_count"] for b in dataset["strategies"]}
+        valid, evaluation, checks, problems = validate_response(
+            pasted,
+            package_hash=package_hash(dataset),
+            deterministic_labels=labels,
+            pooled_label=dataset["pooled"]["evidence_label"],
+            trade_counts=counts,
+        )
+    except Exception:
+        logger.exception("Could not check the pasted evaluation")
+        return _evaluate_error(_EVALUATION_FAILED_MESSAGE, 500)
+    if not valid:
+        message = (
+            problems[0]["message"]
+            if len(problems) == 1 and problems[0]["path"] == "response"
+            else INVALID_MESSAGE
+        )
+        return _evaluate_error(message, 400, problems=problems)
+    return jsonify({"status": "success", "evaluation": evaluation, "checks": checks}), 200
