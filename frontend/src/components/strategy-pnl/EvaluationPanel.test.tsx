@@ -27,7 +27,7 @@ function makePackage(overrides: { withData?: string | null } = {}) {
       capital: 100000,
       strategies_included: ['Alpha'],
       package_hash: 'abc',
-      truncated: false,
+      truncated: [],
     },
     dataset: {},
     report: {
@@ -163,6 +163,17 @@ describe('disabled reasons', () => {
 })
 
 describe('prepare and report', () => {
+  it('shows the shortened-data note only when the server cut something out', async () => {
+    renderPanel()
+    await prepare()
+    expect(screen.queryByText(/The data was shortened/)).not.toBeInTheDocument()
+    const cut = makePackage()
+    cut.meta.truncated = ['bucket tables']
+    prepareEvaluation.mockResolvedValue({ status: 'success', package: cut })
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare again' }))
+    expect(await screen.findByText(/The data was shortened/)).toBeInTheDocument()
+  })
+
   it('calls the API once per press and shows the report', async () => {
     renderPanel()
     await prepare()
