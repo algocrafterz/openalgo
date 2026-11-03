@@ -28,6 +28,8 @@ def _leg(strategy="ORB", **overrides):
         "average_price": 500.0,
         "realized_pnl": 100.0,
         "today_realized_pnl": 100.0,
+        # The page lists only legs filled in the current trading session.
+        "trade_date": perf_service.get_trading_session_date(),
     }
     leg.update(overrides)
     return leg
@@ -251,8 +253,8 @@ def test_old_flat_leg_is_dropped_but_the_strategys_current_legs_remain(monkeypat
     assert [leg["symbol"] for leg in legs] == ["NEW"]
 
 
-def test_open_overnight_position_is_kept(monkeypatch):
-    """CNC and NRML positions legitimately carry across sessions."""
+def test_open_overnight_position_is_not_listed(monkeypatch):
+    """The page shows today's session only: open CNC/NRML legs from earlier days are hidden."""
     response = _scoped(
         monkeypatch,
         [
@@ -261,11 +263,29 @@ def test_open_overnight_position_is_kept(monkeypatch):
         ],
     )
 
-    assert sorted(s["strategy"] for s in response["strategies"]) == ["FUT", "SWING"]
+    assert response["strategies"] == []
 
 
-def test_open_leg_with_unknown_date_is_kept(monkeypatch):
-    """A missing date cannot prove a leg is stale, and an open position must not vanish."""
+def test_open_leg_with_unknown_date_is_not_listed(monkeypatch):
+    """A leg with no trade date is not shown."""
     response = _scoped(monkeypatch, [_leg("ORB", trade_date=None)])
 
-    assert [s["strategy"] for s in response["strategies"]] == ["ORB"]
+    assert response["strategies"] == []
+
+
+def test_only_legs_dated_today_are_listed(monkeypatch):
+    from services.strategy_performance_service import _in_current_session
+
+    today = SESSION
+    response = _scoped(
+        monkeypatch,
+        [
+            _leg("NOW", product="NRML", quantity=25.0, trade_date=today),
+            _leg("OLD", product="NRML", quantity=25.0, trade_date="2026-01-01"),
+        ],
+    )
+    assert [s["strategy"] for s in response["strategies"]] == ["NOW"]
+    assert _in_current_session({"trade_date": today}, today)
+    assert not _in_current_session(
+        {"trade_date": "2026-01-01", "quantity": 5, "product": "CNC"}, today
+    )

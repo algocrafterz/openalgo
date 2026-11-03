@@ -466,9 +466,10 @@ export default function StrategyPnL() {
             ) : null}
           </div>
           <p className="text-muted-foreground">
-            Today's realized and unrealized P&L per strategy, tracked from the strategy tag on each
-            order. Live and Sandbox (Analyze mode) trades are tracked separately. For historical,
-            multi-day performance, see the Performance page.
+            Today's session only: realized and unrealized P&L per strategy for trades filled in the
+            current trading session. Nothing from earlier sessions is shown here; see the
+            Performance page for history. Live and Sandbox (Analyze mode) trades are tracked
+            separately.
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={refresh} disabled={isFetching}>
@@ -505,8 +506,8 @@ export default function StrategyPnL() {
           ) : strategies.length === 0 ? (
             <EmptyState
               icon={Gauge}
-              title="No tagged strategies yet"
-              description="Orders placed with a strategy tag will appear here once they are placed and filled."
+              title="No strategy activity in today's session yet"
+              description="Orders placed with a strategy tag will appear here once they are placed and filled today."
             />
           ) : (
             <StrategyList
