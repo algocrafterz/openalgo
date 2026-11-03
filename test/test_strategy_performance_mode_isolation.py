@@ -85,3 +85,14 @@ def test_export_and_last_session_are_mode_scoped(monkeypatch, strategy, mode, pn
     assert [(t["mode"], t["realized_pnl"]) for t in body["trades"]] == [(mode, pnl)]
     last = svc.get_last_session(mode)
     assert last is not None and last["strategies"][strategy] == pnl
+
+
+@pytest.mark.parametrize("mode,pnl", [("analyze", 111.0), ("live", -222.0)])
+def test_capital_does_not_change_which_trades_each_mode_sees(monkeypatch, strategy, mode, pnl):
+    monkeypatch.setattr(svc, "_current_mode", lambda: mode)
+    monkeypatch.setattr("services.strategy_metrics_service.LEDGER_RELIABLE_SINCE", date(2020, 1, 1))
+    _, plain, _ = svc.get_daily_performance(strategy, "1d")
+    ok, r, _ = svc.get_daily_performance(strategy, "1d", capital=100000.0)
+    assert ok and r["mode"] == mode
+    assert r["capital_view"]["return_pct"] == round(pnl / 100000.0 * 100, 2)
+    assert {k: v for k, v in r.items() if k != "capital_view"} == plain

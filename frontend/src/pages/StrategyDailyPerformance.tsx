@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import {
   type BrokerCharges,
+  type CapitalView,
   type DailyPnlPoint,
   type DateRange,
   type EquityPoint,
@@ -50,7 +51,17 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { useDebouncedCommit } from '@/hooks/useDebouncedCommit'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
+import {
+  type CapitalMode,
+  capitalProblem,
+  clearStoredCapital,
+  loadStoredCapital,
+  parseCapital,
+  planCapitalForMode,
+  saveStoredCapital,
+} from '@/lib/capital'
 import {
   onlyStrategy,
   parseStrategyFilter,
@@ -468,6 +479,59 @@ function EquityLegend({ coverage }: { coverage: { covered: number; total: number
   )
 }
 
+function fmtPct(value: number | null): string {
+  return value === null ? '—' : `${value.toFixed(2)}%`
+}
+
+/** Percent-of-capital figures; each one names the capital it was divided by. */
+function CapitalViewBlock({ view }: { view: CapitalView }) {
+  const basis = `of your capital Rs ${view.capital.toLocaleString('en-IN')}`
+  const tone = (v: number | null) => ({
+    positive: v !== null && v > 0,
+    negative: v !== null && v < 0,
+  })
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <MetricCard
+          label="Return (gross)"
+          value={fmtPct(view.return_pct)}
+          hint={basis}
+          {...tone(view.return_pct)}
+        />
+        <MetricCard
+          label="Return (net of est. charges)"
+          value={fmtPct(view.return_net_pct)}
+          hint={basis}
+          {...tone(view.return_net_pct)}
+        />
+        <MetricCard
+          label="Max drawdown (% of capital)"
+          value={fmtPct(view.max_drawdown_pct_of_capital)}
+          hint={basis}
+          {...tone(view.max_drawdown_pct_of_capital)}
+        />
+        <MetricCard
+          label="Best day"
+          value={fmtPct(view.best_day_pct)}
+          hint={basis}
+          {...tone(view.best_day_pct)}
+        />
+        <MetricCard
+          label="Worst day"
+          value={fmtPct(view.worst_day_pct)}
+          hint={basis}
+          {...tone(view.worst_day_pct)}
+        />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Percentages use the capital you entered, applied to the whole period. They are a view of the
+        same realised rupee P&L, not a record of capital used at the time.
+      </p>
+    </div>
+  )
+}
+
 export default function StrategyDailyPerformance() {
   const { user } = useAuthStore()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
@@ -564,6 +628,121 @@ export default function StrategyDailyPerformance() {
   const nothingSelected = filter.none === true
   const queriesEnabled = rangeReady && !nothingSelected
 
+  // Capital for the percent-of-capital view. The URL is the source of truth and
+  // each mode remembers its own value, so a Live capital never shows in Sandbox.
+  const urlCapital = searchParams.get('capital')
+  const capital = useMemo(() => parseCapital(urlCapital), [urlCapital])
+  const [capitalText, setCapitalText] = useState(urlCapital ?? '')
+  // The mode comes from the app, which is settled before this page renders.
+  const appMode = useThemeStore((state) => state.appMode)
+  const clientMode: CapitalMode = appMode === 'analyzer' ? 'analyze' : 'live'
+  // The mode whose capital is now in the URL. Until the URL shows it, the report
+  // is not requested, so no request carries another mode's capital.
+  const [capitalApplied, setCapitalApplied] = useState<
+    { mode: CapitalMode; url: string | null; settled: boolean } | undefined
+  >(undefined)
+  const appliedMode = useRef<CapitalMode | undefined>(undefined)
+  // True while typed text has not been committed, so unmount can still keep it.
+  const capitalDirty = useRef(false)
+  const capitalTextRef = useRef(capitalText)
+  capitalTextRef.current = capitalText
+  const clientModeRef = useRef(clientMode)
+  clientModeRef.current = clientMode
+  // Shown only when a commit finds the text unusable, never while typing.
+  const [capitalMessage, setCapitalMessage] = useState<string | null>(null)
+
+  // Writes the typed capital to the URL and storage. Runs when typing pauses,
+  // on blur and on Enter; a cleared field runs it at once.
+  const commitCapital = (text: string) => {
+    const value = parseCapital(text)
+    capitalDirty.current = false
+    if (text.trim() === '') {
+      setCapitalMessage(null)
+      clearStoredCapital(clientMode)
+      updateParams({ capital: null })
+    } else if (value === null) {
+      // Not sent, and not kept in the URL: the report shows no percentages.
+      setCapitalMessage(capitalProblem(text))
+      updateParams({ capital: null })
+    } else {
+      setCapitalMessage(null)
+      saveStoredCapital(clientMode, value)
+      updateParams({ capital: String(value) })
+    }
+  }
+  const capitalCommit = useDebouncedCommit(commitCapital, 500)
+  const { cancel: cancelCapitalCommit, isPending: capitalCommitPending } = capitalCommit
+
+  // First load and mode switches: apply the mode's capital to the URL before
+  // any report is requested. A pending edit from the other mode is dropped.
+  useEffect(() => {
+    if (appliedMode.current === clientMode) return
+    const first = appliedMode.current === undefined
+    appliedMode.current = clientMode
+    cancelCapitalCommit()
+    capitalDirty.current = false
+    setCapitalMessage(null)
+    const plan = planCapitalForMode({
+      first,
+      urlCapital,
+      stored: loadStoredCapital(clientMode),
+    })
+    if (plan.remember !== null) saveStoredCapital(clientMode, plan.remember)
+    if (plan.url === 'keep') {
+      setCapitalApplied({ mode: clientMode, url: urlCapital, settled: true })
+      return
+    }
+    setCapitalText(plan.url ?? '')
+    updateParams({ capital: plan.url })
+    setCapitalApplied({ mode: clientMode, url: plan.url, settled: plan.url === urlCapital })
+  }, [clientMode, urlCapital, updateParams, cancelCapitalCommit])
+
+  // The URL has caught up with the capital applied for this mode.
+  useEffect(() => {
+    if (capitalApplied && !capitalApplied.settled && capitalApplied.url === urlCapital) {
+      setCapitalApplied({ ...capitalApplied, settled: true })
+    }
+  }, [capitalApplied, urlCapital])
+  const capitalReady = capitalApplied?.mode === clientMode && capitalApplied.settled
+
+  // Back/forward changes the URL; keep the field in step, but never over text
+  // the user is still typing.
+  useEffect(() => {
+    setCapitalText((prev) => {
+      if (capitalCommitPending()) return prev
+      if (parseCapital(prev) === parseCapital(urlCapital)) return prev
+      setCapitalMessage(null)
+      return urlCapital ?? ''
+    })
+  }, [urlCapital, capitalCommitPending])
+
+  // Leaving the page keeps a valid pending capital in storage. No URL write, so
+  // it cannot fight the navigation, and no network call.
+  useEffect(
+    () => () => {
+      if (!capitalDirty.current) return
+      const value = parseCapital(capitalTextRef.current)
+      if (value !== null) saveStoredCapital(clientModeRef.current, value)
+    },
+    []
+  )
+
+  const onCapitalInput = (text: string) => {
+    setCapitalText(text)
+    setCapitalMessage(null)
+    capitalDirty.current = true
+    if (text.trim() === '') capitalCommit.flush(text)
+    else capitalCommit.schedule(text)
+  }
+
+  // Blur and Enter commit only when there is something to commit.
+  const commitCapitalNow = () => {
+    const text = capitalText
+    const differs = parseCapital(text) !== capital
+    const unreported = text.trim() !== '' && parseCapital(text) === null && capitalMessage === null
+    if (capitalCommit.isPending() || differs || unreported) capitalCommit.flush(text)
+  }
+
   const applyDraftRange = () => {
     if (validRange(draftRange)) updateParams({ start: draftRange.start, end: draftRange.end })
   }
@@ -582,9 +761,9 @@ export default function StrategyDailyPerformance() {
   })
 
   const dailyQuery = useQuery({
-    queryKey: ['strategy-daily', filter, period, range?.start, range?.end],
-    queryFn: () => strategyPnlApi.daily(filter, period, range),
-    enabled: queriesEnabled,
+    queryKey: ['strategy-daily', clientMode, filter, period, range?.start, range?.end, capital],
+    queryFn: () => strategyPnlApi.daily(filter, period, range, capital),
+    enabled: queriesEnabled && capitalReady,
     refetchInterval: POLL_MS,
   })
 
@@ -592,13 +771,19 @@ export default function StrategyDailyPerformance() {
     queryClient.invalidateQueries({ queryKey: ['strategy-daily-compare'] })
     queryClient.invalidateQueries({ queryKey: ['strategy-daily'] })
   }, [queryClient])
+  // A mode switch changes the daily query key, which is what fetches the new
+  // mode's report once its capital is applied. Refreshing it here would send
+  // the old key out with the old mode's capital.
+  const refreshCompare = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['strategy-daily-compare'] })
+  }, [queryClient])
 
   useOrderEventRefresh(refresh, { events: ['order_event', 'analyzer_update'] })
 
   useEffect(() => {
-    const unsubscribe = onModeChange(() => refresh())
+    const unsubscribe = onModeChange(() => refreshCompare())
     return () => unsubscribe()
-  }, [refresh])
+  }, [refreshCompare])
 
   const strategies = compareQuery.data?.strategies ?? []
   const listedNames = compareQuery.data?.all_strategies
@@ -618,6 +803,24 @@ export default function StrategyDailyPerformance() {
     [knownNames, filter]
   )
   const daily = dailyQuery.data
+  const dailyMode = daily?.mode
+  // The response mode is only a hint. If it differs from the app's mode (another
+  // device may have switched), ask the server for its mode, as AuthSync does. A
+  // stale response cannot change the app mode: only the server's answer can, and
+  // when it agrees with the app nothing changes. One ask per mismatched response
+  // mode; the guard is released once the response matches the app's mode again,
+  // so a later switch on another device is reconciled too.
+  const reconciledMode = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (!dailyMode) return
+    if (dailyMode === clientMode) {
+      reconciledMode.current = undefined
+      return
+    }
+    if (reconciledMode.current === dailyMode) return
+    reconciledMode.current = dailyMode
+    void useThemeStore.getState().syncAppMode()
+  }, [dailyMode, clientMode])
   const includedChips = daily?.included ?? []
   const excludedChips = daily?.excluded ?? filter.exclude
   const dailyError = daily?.status === 'error' ? daily.message : null
@@ -672,6 +875,25 @@ export default function StrategyDailyPerformance() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <StrategyFilterPicker filter={filter} names={strategyNames} onChange={setFilter} />
+          <div className="flex flex-col">
+            <Input
+              type="text"
+              inputMode="decimal"
+              aria-label="Capital (Rs)"
+              placeholder="Capital (Rs)"
+              className="w-[150px]"
+              value={capitalText}
+              onChange={(e) => onCapitalInput(e.target.value)}
+              onBlur={commitCapitalNow}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitCapitalNow()
+              }}
+              aria-invalid={capitalMessage !== null}
+            />
+            {capitalMessage && (
+              <span className="text-xs text-red-600 mt-0.5">{capitalMessage}</span>
+            )}
+          </div>
           <Select value={period} onValueChange={(v) => setPeriod(v as PerformancePeriod)}>
             <SelectTrigger className="w-[100px]">
               <SelectValue />
@@ -746,8 +968,9 @@ export default function StrategyDailyPerformance() {
         <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
         <span>
           History starts from the day this page was deployed - trades closed before that are not
-          reconstructed. Metrics are computed in rupees on each strategy's own realized P&L, not a
-          %-of-capital return (no isolated capital is tracked per strategy). Est. charges use the
+          reconstructed. Metrics stay in rupees, on each strategy's own realized P&L. Sharpe,
+          Sortino and Calmar are computed on rupee daily P&L and do not change with capital.
+          Percentage-of-capital figures appear only when you enter a capital. Est. charges use the
           India intraday schedule (the placing broker's own brokerage, plus STT, exchange fees,
           stamp duty, GST), count each entry order once however many exit legs follow, and exclude
           slippage. "% of profit" is estimated charges divided by gross profit: 100% means charges
@@ -775,6 +998,7 @@ export default function StrategyDailyPerformance() {
         />
       ) : (
         <>
+          {daily.capital_view && <CapitalViewBlock view={daily.capital_view} />}
           {isToday ? (
             <SessionSummary daily={daily} formatCurrency={formatCurrency} />
           ) : (

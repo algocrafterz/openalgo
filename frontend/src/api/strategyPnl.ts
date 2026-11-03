@@ -81,9 +81,11 @@ function isNoneSelection(selection?: StrategySelection): boolean {
 function periodParams(
   period: PerformancePeriod,
   range?: DateRange,
-  selection?: StrategySelection
+  selection?: StrategySelection,
+  capital?: number | null
 ): URLSearchParams {
   const params = new URLSearchParams({ period })
+  if (capital !== undefined && capital !== null) params.set('capital', String(capital))
   if (selection) {
     const filter = typeof selection === 'string' ? { include: [selection], exclude: [] } : selection
     for (const [key, value] of strategyFilterParams(filter)) params.append(key, value)
@@ -111,6 +113,20 @@ export type EdgeVerdict =
   | 'likely real'
   | 'likely negative'
   | 'not distinguishable from zero'
+
+/** The same rupee metrics as percent of a capital the user entered (daily view only). */
+export interface CapitalView {
+  capital: number
+  /** Gross realised P&L over the capital. */
+  return_pct: number | null
+  /** Realised P&L after estimated charges over the capital. */
+  return_net_pct: number | null
+  /** Max drawdown over the fixed capital (zero or negative). */
+  max_drawdown_pct_of_capital: number | null
+  best_day_pct: number | null
+  worst_day_pct: number | null
+  basis: Record<string, string>
+}
 
 export interface StrategyDailyPerformance {
   status: 'success' | 'error'
@@ -196,6 +212,8 @@ export interface StrategyDailyPerformance {
   excursion_covered?: number
   excursion_total?: number
   trades?: PerformanceTrade[]
+  /** Present only when a capital was sent with the request. */
+  capital_view?: CapitalView
 }
 
 export interface HourPnl {
@@ -351,10 +369,11 @@ export const strategyPnlApi = {
   daily: (
     strategy: StrategySelection,
     period: PerformancePeriod,
-    range?: DateRange
+    range?: DateRange,
+    capital?: number | null
   ): Promise<StrategyDailyPerformance> => {
     if (isNoneSelection(strategy)) return Promise.reject(new Error(NOTHING_SELECTED))
-    const params = periodParams(period, range, strategy)
+    const params = periodParams(period, range, strategy, capital)
     return unwrap(
       webClient.get<StrategyDailyPerformance>(`/api/strategy-pnl/daily?${params.toString()}`),
       'Failed to fetch daily performance'

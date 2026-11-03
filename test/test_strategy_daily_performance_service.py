@@ -237,3 +237,53 @@ def test_one_day_window_ignores_the_filter(filter_ledger):
 def test_unknown_name_contributes_nothing(filter_ledger):
     ok, r, _ = svc.get_daily_performance(None, "all", include=["NOPE"])
     assert ok and r["trades_count"] == 0 and r["included"] == []
+
+
+# ---- capital view: additive only ----------------------------------------------
+
+
+def _without_capital_view(response):
+    return {k: v for k, v in response.items() if k != "capital_view"}
+
+
+def test_no_capital_means_no_capital_view_key():
+    ok, r, _ = svc.get_daily_performance(None, "7d")
+    assert ok and "capital_view" not in r
+
+
+@pytest.mark.parametrize("period", ["1d", "7d"])
+def test_capital_leaves_every_other_key_unchanged(period):
+    _, plain, _ = svc.get_daily_performance(None, period)
+    ok, with_cap, code = svc.get_daily_performance(None, period, capital=100000.0)
+    assert ok and code == 200
+    assert "capital_view" in with_cap
+    assert _without_capital_view(with_cap) == plain
+    for key in ("equity_curve", "equity_curve_net", "daily_pnl", "by_symbol"):
+        assert with_cap[key] == plain[key]
+    assert ("trades" in with_cap) == ("trades" in plain)
+
+
+def test_capital_view_matches_the_response_metrics():
+    ok, r, _ = svc.get_daily_performance(None, "7d", capital=50000.0)
+    v = r["capital_view"]
+    assert v["capital"] == 50000.0
+    assert v["return_pct"] == round(r["net_profit"] / 50000.0 * 100, 2)
+    assert v["return_net_pct"] == round(r["net_after_costs"] / 50000.0 * 100, 2)
+    assert v["max_drawdown_pct_of_capital"] == round(r["max_drawdown"] / 50000.0 * 100, 2)
+    assert v["best_day_pct"] == round(r["best_day"] / 50000.0 * 100, 2)
+    assert v["worst_day_pct"] == round(r["worst_day"] / 50000.0 * 100, 2)
+
+
+def test_capital_with_a_filter_is_invariant_and_uses_the_filtered_set(filter_ledger):
+    _, plain, _ = svc.get_daily_performance("ORB", "all", include=["VWAP"], exclude=["EMA"])
+    ok, with_cap, _ = svc.get_daily_performance(
+        "ORB", "all", include=["VWAP"], exclude=["EMA"], capital=1000.0
+    )
+    assert ok
+    assert _without_capital_view(with_cap) == plain
+    assert with_cap["capital_view"]["return_pct"] == 4.0  # 40 rupees on 1000
+
+
+def test_capital_on_an_empty_selection_is_safe(filter_ledger):
+    ok, r, _ = svc.get_daily_performance(None, "all", include=["NOPE"], capital=1000.0)
+    assert ok and r["capital_view"]["return_pct"] == 0.0

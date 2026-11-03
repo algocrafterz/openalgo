@@ -18,6 +18,7 @@ from database.settings_db import get_analyze_mode
 from database.strategy_book_db import get_closed_trades
 from services.strategy_metrics_service import (
     LEDGER_RELIABLE_SINCE,
+    compute_capital_view,
     compute_metrics,
     edge_stats,
     last_session_date,
@@ -115,6 +116,7 @@ def get_daily_performance(
     *,
     include: list[str] | None = None,
     exclude: list[str] | None = None,
+    capital: float | None = None,
 ) -> tuple[bool, dict[str, Any], int]:
     """Metrics + daily P&L series + equity curve for one strategy, or the
     pooled portfolio (every strategy's closed trades combined) if `strategy`
@@ -124,6 +126,10 @@ def get_daily_performance(
 
     The window is resolved against every strategy's trades in the mode, so
     1D names the same last session whichever strategies are selected.
+
+    `capital` (validated by the caller, rupees) adds one `capital_view` key with
+    the same rupee metrics as percent of that capital. Without it the response
+    is unchanged.
     """
     mode = _current_mode()
     all_trades = get_closed_trades(mode=mode) if period in VALID_PERIODS else []
@@ -157,6 +163,8 @@ def get_daily_performance(
     response["equity_curve_net"], response["equity_net_cost_coverage"] = net_equity_curve(
         metrics["equity_curve"], enriched
     )
+    if capital is not None:
+        response["capital_view"] = compute_capital_view(response, capital)
     if start_date == end_date:
         # Ratios like Sharpe mean nothing over one day; the trades themselves
         # are what a single-session view shows.

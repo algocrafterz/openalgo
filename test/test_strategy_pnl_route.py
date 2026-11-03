@@ -366,3 +366,126 @@ def test_different_filters_do_not_share_one_service_call(monkeypatch):
         client.get("/api/strategy-pnl/daily?exclude=X")
 
     assert len(calls) == 2
+
+
+# ---- capital query value --------------------------------------------------------
+
+
+def _capital_client(monkeypatch, fake_daily):
+    from utils.single_flight import SingleFlight
+
+    monkeypatch.setattr(limiter, "enabled", False)
+    monkeypatch.setattr(
+        strategy_pnl_module, "_pnl_flights", SingleFlight(join_window=5, wait_timeout=10)
+    )
+    monkeypatch.setattr(strategy_pnl_module, "_with_data_health", lambda r, _c: r)
+    monkeypatch.setattr(strategy_pnl_module, "get_daily_performance", fake_daily)
+    app = _app()
+    client = app.test_client()
+    session_utils = _log_in(client)
+    monkeypatch.setattr(session_utils, "is_session_expiry_disabled", lambda: True)
+    return client
+
+
+def test_daily_route_passes_capital_to_the_service(monkeypatch):
+    seen = []
+
+    def fake_daily(
+        strategy, period, start=None, end=None, *, include=None, exclude=None, capital=None
+    ):
+        seen.append(capital)
+        return True, {"status": "success"}, 200
+
+    client = _capital_client(monkeypatch, fake_daily)
+    assert client.get("/api/strategy-pnl/daily?capital=1000000").status_code == 200
+    assert seen == [1000000.0]
+
+
+@pytest.mark.parametrize("raw", ["", "   "])
+def test_blank_capital_is_treated_as_absent(monkeypatch, raw):
+    calls = []
+
+    def strict_daily(strategy, period, start=None, end=None, *, include=None, exclude=None):
+        calls.append(1)
+        return True, {"status": "success"}, 200
+
+    client = _capital_client(monkeypatch, strict_daily)
+    assert client.get(f"/api/strategy-pnl/daily?capital={raw}").status_code == 200
+    assert calls == [1]
+
+
+@pytest.mark.parametrize(
+    "raw", ["0", "-5", "abc", "nan", "inf", "-inf", "1e400", "1000000000001", "1e13"]
+)
+def test_invalid_capital_is_refused_without_calling_the_service(monkeypatch, raw):
+    calls = []
+
+    def fake_daily(*a, **k):
+        calls.append(1)
+        return True, {"status": "success"}, 200
+
+    client = _capital_client(monkeypatch, fake_daily)
+    response = client.get(f"/api/strategy-pnl/daily?capital={raw}")
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["status"] == "error"
+    message = body["message"].lower()
+    assert message
+    for word in ("400", "exception", "valueerror", "traceback", "http", "nan", "float"):
+        assert word not in message
+    assert calls == []
+
+
+def test_capital_at_the_ceiling_is_accepted(monkeypatch):
+    seen = []
+
+    def fake_daily(
+        strategy, period, start=None, end=None, *, include=None, exclude=None, capital=None
+    ):
+        seen.append(capital)
+        return True, {"status": "success"}, 200
+
+    client = _capital_client(monkeypatch, fake_daily)
+    assert client.get("/api/strategy-pnl/daily?capital=1000000000000").status_code == 200
+    assert seen == [1_000_000_000_000.0]
+
+
+def test_different_capitals_do_not_share_a_flight_but_the_same_capital_does(monkeypatch):
+    seen = []
+
+    def fake_daily(
+        strategy, period, start=None, end=None, *, include=None, exclude=None, capital=None
+    ):
+        seen.append(capital)
+        return True, {"status": "success"}, 200
+
+    client = _capital_client(monkeypatch, fake_daily)
+    client.get("/api/strategy-pnl/daily?capital=100")
+    client.get("/api/strategy-pnl/daily?capital=200")
+    client.get("/api/strategy-pnl/daily?capital=200")
+    client.get("/api/strategy-pnl/daily")
+    assert seen == [100.0, 200.0, None]
+
+
+def test_compare_and_export_ignore_capital(monkeypatch):
+    monkeypatch.setattr(limiter, "enabled", False)
+    seen = {}
+
+    def fake_compare(period, start=None, end=None, *, include=None, exclude=None):
+        seen["compare"] = True
+        return True, {"status": "success"}, 200
+
+    def fake_export(strategy, period, start=None, end=None, *, include=None, exclude=None):
+        seen["export"] = True
+        return True, {"status": "success", "start_date": "a", "end_date": "b", "trades": []}, 200
+
+    monkeypatch.setattr(strategy_pnl_module, "get_strategy_comparison", fake_compare)
+    monkeypatch.setattr(strategy_pnl_module, "get_trades_for_export", fake_export)
+    monkeypatch.setattr(strategy_pnl_module, "_with_data_health", lambda r, _c: r)
+    app = _app()
+    with app.test_client() as client:
+        session_utils = _log_in(client)
+        monkeypatch.setattr(session_utils, "is_session_expiry_disabled", lambda: True)
+        assert client.get("/api/strategy-pnl/compare?capital=abc").status_code == 200
+        assert client.get("/api/strategy-pnl/trades/export?capital=-1").status_code == 200
+    assert seen == {"compare": True, "export": True}

@@ -9,6 +9,7 @@ same pattern as `blueprints/strategy_portfolio.py`.
 import csv
 import hashlib
 import io
+import math
 import os
 
 from flask import Blueprint, Response, jsonify, request, session, url_for
@@ -133,6 +134,31 @@ def _strategy_filter():
     return None, None, None, (jsonify({"status": "error", "message": message}), 400)
 
 
+MAX_CAPITAL = 1_000_000_000_000  # 1 lakh crore rupees
+
+
+def _parse_capital():
+    """Read the optional `capital` query value (rupees).
+
+    Returns (capital, None) with None for a blank or absent value, or
+    (None, error response) when the value is not a usable amount.
+    """
+    raw = request.args.get("capital")
+    if raw is None or not raw.strip():
+        return None, None
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        value = float("nan")
+    if not math.isfinite(value) or value <= 0:
+        message = "Enter a capital amount greater than zero, for example 1000000."
+    elif value > MAX_CAPITAL:
+        message = "That capital is larger than this page supports. Enter a smaller amount."
+    else:
+        return value, None
+    return None, (jsonify({"status": "error", "message": message}), 400)
+
+
 @strategy_pnl_bp.route("/api/strategy-pnl/daily", methods=["GET"])
 @check_session_validity
 @limiter.limit(STRATEGY_PNL_READ_LIMIT)
@@ -144,9 +170,13 @@ def strategy_pnl_daily():
     strategy, include, exclude, error = _strategy_filter()
     if error:
         return error
+    capital, capital_error = _parse_capital()
+    if capital_error:
+        return capital_error
     period = request.args.get("period", "30d")
     start = request.args.get("start")
     end = request.args.get("end")
+    extra = {} if capital is None else {"capital": capital}
     key = (
         "daily",
         session["user"],
@@ -155,11 +185,12 @@ def strategy_pnl_daily():
         period,
         start,
         end,
+        capital,
     )
     _success, response, status_code = _pnl_flights.do(
         key,
         lambda: get_daily_performance(
-            strategy, period, start=start, end=end, include=include, exclude=exclude
+            strategy, period, start=start, end=end, include=include, exclude=exclude, **extra
         ),
         ttl=_PNL_READ_TTL_S,
     )

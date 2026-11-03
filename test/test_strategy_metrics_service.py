@@ -346,3 +346,80 @@ def test_edge_verdict_real_when_trades_and_days_agree():
     e = edge_stats(pnls, costed=40, trade_dates=_dates(10, 4))
     assert e["day_t_stat"] >= 2
     assert e["edge_verdict"] == "likely real"
+
+
+# ---- compute_capital_view ----------------------------------------------------
+
+
+def test_capital_view_known_numbers():
+    from services.strategy_metrics_service import compute_capital_view
+
+    metrics = {
+        "net_profit": 5000.0,
+        "net_after_costs": 4500.0,
+        "max_drawdown": -2000.0,
+        "best_day": 3000.0,
+        "worst_day": -1000.0,
+    }
+    v = compute_capital_view(metrics, 100000.0)
+    assert v["capital"] == 100000.0
+    assert v["return_pct"] == 5.0
+    assert v["return_net_pct"] == 4.5
+    assert v["max_drawdown_pct_of_capital"] == -2.0
+    assert v["best_day_pct"] == 3.0
+    assert v["worst_day_pct"] == -1.0
+    assert set(v["basis"]) == {
+        "return_pct",
+        "return_net_pct",
+        "max_drawdown_pct_of_capital",
+        "best_day_pct",
+        "worst_day_pct",
+    }
+
+
+def test_capital_view_does_not_change_its_input():
+    import copy
+
+    from services.strategy_metrics_service import compute_capital_view
+
+    metrics = {
+        "net_profit": 1.0,
+        "net_after_costs": None,
+        "max_drawdown": 0.0,
+        "best_day": 1.0,
+        "worst_day": 0.0,
+        "extra": [1, 2],
+    }
+    before = copy.deepcopy(metrics)
+    compute_capital_view(metrics, 1000.0)
+    assert metrics == before
+
+
+def test_capital_view_unknown_net_and_missing_keys_give_none():
+    from services.strategy_metrics_service import compute_capital_view
+
+    v = compute_capital_view({"net_profit": 10.0, "net_after_costs": None}, 1000.0)
+    assert v["return_pct"] == 1.0
+    assert v["return_net_pct"] is None
+    assert v["best_day_pct"] is None
+
+
+def test_capital_view_never_divides_by_zero():
+    from services.strategy_metrics_service import compute_capital_view
+
+    for bad in (0, 0.0, -5.0, float("nan")):
+        v = compute_capital_view({"net_profit": 10.0, "max_drawdown": -1.0}, bad)
+        assert v["return_pct"] is None
+        assert v["max_drawdown_pct_of_capital"] is None
+
+
+def test_capital_view_works_on_a_real_compute_metrics_result():
+    from services.strategy_metrics_service import compute_capital_view
+
+    trades = [_trade(100, "2026-01-01"), _trade(-50, "2026-01-02"), _trade(30, "2026-01-03")]
+    m = compute_metrics(trades, "2026-01-01", "2026-01-03")
+    v = compute_capital_view(m, 1000.0)
+    assert v["return_pct"] == 8.0
+    assert v["max_drawdown_pct_of_capital"] == round(m["max_drawdown"] / 10.0, 2)
+    assert v["best_day_pct"] == 10.0
+    assert v["worst_day_pct"] == -5.0

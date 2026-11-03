@@ -71,3 +71,26 @@ describe('daily request parameters', () => {
     expect(sentParams().getAll('strategy')).toEqual(['ORB'])
   })
 })
+
+describe('capital parameter', () => {
+  it('is sent on daily only when set', async () => {
+    await strategyPnlApi.daily(null, '7d', undefined, 1000000)
+    expect(sentParams().get('capital')).toBe('1000000')
+  })
+
+  it('is left out of daily when absent or null', async () => {
+    await strategyPnlApi.daily(null, '7d')
+    expect(sentParams().has('capital')).toBe(false)
+    get.mockClear()
+    await strategyPnlApi.daily(null, '7d', undefined, null)
+    expect(sentParams().has('capital')).toBe(false)
+  })
+
+  it('is never sent by compare or export', async () => {
+    await strategyPnlApi.compare('7d')
+    expect(sentParams().has('capital')).toBe(false)
+    get.mockClear()
+    await strategyPnlApi.exportTrades(null, '7d')
+    expect(sentParams().has('capital')).toBe(false)
+  })
+})

@@ -342,3 +342,40 @@ def compute_metrics(closed_trades: list[dict], start_date: str, end_date: str) -
             {"date": d.strftime("%Y-%m-%d"), "value": round(float(v), 2)} for d, v in equity.items()
         ],
     }
+
+
+def _pct_of(value, capital: float) -> float | None:
+    """`value` as a percent of `capital`, rounded to 2 places; None when it cannot be computed."""
+    if value is None or not capital or capital <= 0 or capital != capital:
+        return None
+    return round(float(value) / capital * 100.0, 2)
+
+
+def compute_capital_view(metrics: dict, capital: float) -> dict:
+    """Percent-of-capital view of the rupee metrics already computed for a selection.
+
+    Pure: no I/O, and `metrics` is read, never changed. `metrics` holds the keys
+    `net_profit`, `net_after_costs` (may be None), `max_drawdown`, `best_day` and
+    `worst_day`. Every percentage divides by the one fixed `capital`, applied to
+    the whole window; none of it is a record of capital used at the time. A
+    percentage that cannot be computed is None.
+    """
+    return {
+        "capital": capital,
+        "return_pct": _pct_of(metrics.get("net_profit"), capital),
+        "return_net_pct": _pct_of(metrics.get("net_after_costs"), capital),
+        "max_drawdown_pct_of_capital": _pct_of(metrics.get("max_drawdown"), capital),
+        "best_day_pct": _pct_of(metrics.get("best_day"), capital),
+        "worst_day_pct": _pct_of(metrics.get("worst_day"), capital),
+        "basis": {
+            "return_pct": "Gross realised P&L over the fixed capital entered by you",
+            "return_net_pct": (
+                "Realised P&L after estimated charges over the fixed capital entered by you"
+            ),
+            "max_drawdown_pct_of_capital": (
+                "Largest fall in cumulative P&L over the fixed capital entered by you"
+            ),
+            "best_day_pct": "Best day's P&L over the fixed capital entered by you",
+            "worst_day_pct": "Worst day's P&L over the fixed capital entered by you",
+        },
+    }
