@@ -72,6 +72,7 @@ export interface DateRange {
 export type StrategySelection = string | null | StrategyFilter
 
 const NOTHING_SELECTED = 'Select at least one strategy.'
+const EVALUATION_FAILED = 'The evaluation could not be prepared. Try again in a moment.'
 
 /** True when the selection is a filter the user cleared on purpose: never a whole-portfolio request. */
 function isNoneSelection(selection?: StrategySelection): boolean {
@@ -350,6 +351,164 @@ async function unwrap<T extends { status: 'success' | 'error'; message?: string 
   }
 }
 
+// ---------------------------------------------------------------------------
+// AI evaluation package (read only; the server never calls a model)
+// ---------------------------------------------------------------------------
+
+export type EvidenceLabel =
+  | 'insufficient data'
+  | 'no distinguishable edge'
+  | 'possible edge (screening only)'
+  | 'likely negative'
+
+export type FindingKind = 'math' | 'heuristic' | 'not_available'
+
+export interface EvaluationFinding {
+  id: string
+  kind: FindingKind
+  scope: string
+  statement: string
+  n: number
+  evidence: string[]
+  rule?: { name: string; parameters: Record<string, unknown> }
+  note?: string
+  flagged?: boolean
+}
+
+export interface EvaluationSection {
+  id: string
+  title: string
+  findings: EvaluationFinding[]
+}
+
+export interface EvaluationReport {
+  schema_version: number
+  scope: {
+    n_trades: number
+    trading_days: number | null
+    strategies: number
+    labels: { pooled: EvidenceLabel; per_strategy: Record<string, EvidenceLabel> }
+  }
+  sections: EvaluationSection[]
+  limitations: string[]
+  legend: Record<FindingKind, string>
+}
+
+export interface EvaluationPackage {
+  meta: {
+    generated_at: string
+    mode_display: string
+    period: string
+    start_date: string
+    end_date: string
+    capital: number | null
+    strategies_included: string[]
+    package_hash: string
+    truncated: boolean
+  }
+  dataset: unknown
+  report: EvaluationReport
+  prompt: { text: string; text_with_data: string | null }
+  export: { data_filename: string; data_json: string; notice: string }
+}
+
+export interface EvaluationPrepareResponse {
+  status: 'success' | 'error'
+  message?: string
+  schema_version?: number
+  package?: EvaluationPackage
+}
+
+export type ObservationKind = 'observed' | 'inference' | 'hypothesis'
+export type ConfidenceLevel = 'low' | 'medium' | 'high'
+
+export interface AnalysisObservation {
+  text: string
+  kind: ObservationKind
+  evidence: string[]
+  n: number | null
+}
+
+export interface AnalysisStrategy {
+  name: string | null
+  assessment: EvidenceLabel | null
+  n: number | null
+  confidence: ConfidenceLevel | null
+  observations: AnalysisObservation[]
+  weaknesses: string[]
+  suggested_tests: string[]
+  deterministic_label: EvidenceLabel | null
+  conflict: boolean
+}
+
+export interface AnalysisPortfolio {
+  assessment: EvidenceLabel | null
+  observations: AnalysisObservation[]
+  overlap_notes: string[]
+  deterministic_label: EvidenceLabel | null
+  conflict: boolean
+}
+
+export interface ImportedEvaluation {
+  schema_version: number
+  package_hash: string | null
+  summary: string | null
+  overall_confidence: ConfidenceLevel | null
+  strategies: AnalysisStrategy[]
+  portfolio: AnalysisPortfolio | null
+  limitations: string[]
+}
+
+export interface EvaluationChecks {
+  package_match: boolean
+  label_conflicts: {
+    strategy: string | null
+    assessment: EvidenceLabel
+    deterministic_label: EvidenceLabel
+    message: string
+  }[]
+  warnings: string[]
+}
+
+export interface EvaluationProblem {
+  path: string
+  message: string
+}
+
+export interface EvaluationValidateResponse {
+  status: 'success' | 'error'
+  message?: string
+  problems?: EvaluationProblem[]
+  evaluation?: ImportedEvaluation
+  checks?: EvaluationChecks
+}
+
+/** The JSON body of both evaluation calls: the selection, never the mode. */
+function evaluationBody(
+  filter: StrategyFilter,
+  period: PerformancePeriod,
+  range?: DateRange,
+  capital?: number | null
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { period }
+  if (filter.include.length > 0) body.strategy = filter.include
+  if (filter.exclude.length > 0) body.exclude = filter.exclude
+  if (period === 'custom' && range) {
+    body.start = range.start
+    body.end = range.end
+  }
+  if (capital !== undefined && capital !== null) body.capital = capital
+  return body
+}
+
+/** Posts an evaluation call; an error response still carries a JSON body worth reading. */
+async function postEvaluation<T extends { status: 'success' | 'error'; message?: string }>(
+  path: string,
+  body: Record<string, unknown>
+): Promise<T> {
+  return unwrap(webClient.post<T>(path, body), EVALUATION_FAILED)
+}
+
 export const strategyPnlApi = {
   get: async (): Promise<StrategyPnlResponse> => {
     try {
@@ -414,6 +573,35 @@ export const strategyPnlApi = {
     } catch (error) {
       throw new Error(await exportErrorMessage(error))
     }
+  },
+
+  /** Builds the evaluation package (report, prompt, data file). Nothing is stored and no model is called. */
+  prepareEvaluation: (
+    filter: StrategyFilter,
+    period: PerformancePeriod,
+    range?: DateRange,
+    capital?: number | null
+  ): Promise<EvaluationPrepareResponse> => {
+    if (isNoneSelection(filter)) return Promise.reject(new Error(NOTHING_SELECTED))
+    return postEvaluation<EvaluationPrepareResponse>(
+      '/api/strategy-pnl/evaluation/prepare',
+      evaluationBody(filter, period, range, capital)
+    )
+  },
+
+  /** Checks an analysis the trader pasted back against the current selection. */
+  validateEvaluation: (
+    filter: StrategyFilter,
+    period: PerformancePeriod,
+    range: DateRange | undefined,
+    capital: number | null | undefined,
+    response: string
+  ): Promise<EvaluationValidateResponse> => {
+    if (isNoneSelection(filter)) return Promise.reject(new Error(NOTHING_SELECTED))
+    return postEvaluation<EvaluationValidateResponse>('/api/strategy-pnl/evaluation/validate', {
+      ...evaluationBody(filter, period, range, capital),
+      response,
+    })
   },
 }
 
