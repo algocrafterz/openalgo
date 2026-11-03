@@ -196,18 +196,65 @@ def _entry_slippage(trade: dict, signal_entry: float) -> float:
     return round(per_share * float(trade["closed_quantity"]), 2)
 
 
+# Why a trade has no R multiple.
+R_NO_SIGNAL_DATA = "no_signal_data"
+R_NO_UNIQUE_MATCH = "no_unique_signal_match"
+R_ZERO_STOP_DISTANCE = "zero_stop_distance"
+
+# Records whose timestamps cannot support holding-time or excursion statistics.
+FLAG_OVERNIGHT_MIS = "overnight_mis"
+FLAG_MISSING_ENTRY_TIME = "missing_entry_time"
+
+
+def trade_data_flag(trade: dict) -> str | None:
+    """Why this trade's timing is unreliable, or None.
+
+    An intraday (MIS) position cannot legitimately span two sessions, and a trade without
+    an entry time has no holding period. Both keep their realized P&L in every profit
+    figure; only holding-time and excursion statistics leave them out.
+    """
+    opened, closed = _parse_naive(trade.get("opened_at")), _parse_naive(trade.get("closed_at"))
+    if opened is None:
+        return FLAG_MISSING_ENTRY_TIME
+    if (
+        str(trade.get("product", "")).upper() == "MIS"
+        and closed is not None
+        and opened.date() != closed.date()
+    ):
+        return FLAG_OVERNIGHT_MIS
+    return None
+
+
+def flag_counts(trades: list[dict]) -> dict[str, int]:
+    """How many trades carry each data flag."""
+    counts: dict[str, int] = {}
+    for t in trades:
+        flag = trade_data_flag(t)
+        if flag:
+            counts[flag] = counts.get(flag, 0) + 1
+    return counts
+
+
 def enrich_trades(
     trades: list[dict], start_date: str, end_date: str, db_path: Path | None = None
 ) -> list[dict]:
     """Copies of `trades` with `cost`, `risk_amount`, `r_multiple`, `entry_slippage` and
     `signal_sl` (the matched signal stop price)
-    added (each None when it cannot be determined)."""
+    added (each None when it cannot be determined).
+
+    `r_multiple` is gross (before charges); `net_r_multiple` is the same risk after the
+    estimated charges (None when either the R or the cost is unknown). A trade with no R
+    carries `r_exclusion` (why) and a trade with unreliable timestamps carries `data_flag`.
+    """
     index = _load_signal_stops(start_date, end_date, db_path)
     costs = estimate_trade_costs(trades)
     enriched = []
     for trade, cost in zip(trades, costs, strict=True):
         stop = _match_stop(trade, index) if index else None
-        risk_amount = r_multiple = entry_slippage = signal_sl = None
+        risk_amount = r_multiple = net_r_multiple = entry_slippage = signal_sl = None
+        r_exclusion = (
+            None if stop is not None else (R_NO_SIGNAL_DATA if not index else R_NO_UNIQUE_MATCH)
+        )
         if stop is not None:
             signal_sl = stop[1]
             entry_slippage = _entry_slippage(trade, stop[0])
@@ -215,14 +262,20 @@ def enrich_trades(
             risk_amount = round(risk_per_share * float(trade["closed_quantity"]), 2)
             if risk_amount > 0:
                 r_multiple = round(float(trade["realized_pnl"]) / risk_amount, 4)
+                if cost is not None:
+                    net_r_multiple = round((float(trade["realized_pnl"]) - cost) / risk_amount, 4)
             else:
                 risk_amount = None
+                r_exclusion = R_ZERO_STOP_DISTANCE
         enriched.append(
             {
                 **trade,
                 "cost": cost,
                 "risk_amount": risk_amount,
                 "r_multiple": r_multiple,
+                "net_r_multiple": net_r_multiple,
+                "r_exclusion": r_exclusion,
+                "data_flag": trade_data_flag(trade),
                 "entry_slippage": entry_slippage,
                 "signal_sl": signal_sl,
             }
@@ -339,6 +392,12 @@ def _slippage_metrics(enriched: list[dict]) -> dict:
 def summarize_enrichment(enriched: list[dict]) -> dict:
     """Estimated charges, net-after-charges and expectancy in R, with coverage."""
     r_values = [t["r_multiple"] for t in enriched if t["r_multiple"] is not None]
+    net_r_values = [t["net_r_multiple"] for t in enriched if t.get("net_r_multiple") is not None]
+    r_excluded: dict[str, int] = {}
+    for t in enriched:
+        if t["r_multiple"] is None:
+            reason = t.get("r_exclusion") or R_NO_UNIQUE_MATCH
+            r_excluded[reason] = r_excluded.get(reason, 0) + 1
     return {
         **_charge_metrics(enriched, [t["cost"] for t in enriched]),
         **_slippage_metrics(enriched),
@@ -346,6 +405,12 @@ def summarize_enrichment(enriched: list[dict]) -> dict:
         "total_r": round(sum(r_values), 2) if r_values else None,
         "r_covered": len(r_values),
         "r_total": len(enriched),
+        "r_excluded": r_excluded,
+        "expectancy_net_r": round(sum(net_r_values) / len(net_r_values), 2)
+        if net_r_values
+        else None,
+        "total_net_r": round(sum(net_r_values), 2) if net_r_values else None,
+        "net_r_covered": len(net_r_values),
     }
 
 
@@ -446,8 +511,11 @@ def _mean_or_none(values: list[float]) -> float | None:
 def hold_stats(trades: list[dict]) -> dict:
     """Holding-time summary in minutes over trades that have an entry time.
 
-    Winners are realized_pnl > 0, losers < 0. Every figure is None when no trade is covered."""
-    holds = [(hold_minutes(t), float(t["realized_pnl"])) for t in trades]
+    Winners are realized_pnl > 0, losers < 0. Every figure is None when no trade is covered.
+    Trades with a data flag (see trade_data_flag) are left out and counted in `excluded`."""
+    holds = [
+        (hold_minutes(t), float(t["realized_pnl"])) for t in trades if trade_data_flag(t) is None
+    ]
     holds = [(m, p) for m, p in holds if m is not None]
     minutes = sorted(m for m, _ in holds)
     stats = {
@@ -458,6 +526,7 @@ def hold_stats(trades: list[dict]) -> dict:
         "losers_avg_min": _mean_or_none([m for m, p in holds if p < 0]),
         "covered": len(minutes),
         "total": len(trades),
+        "excluded": flag_counts(trades),
     }
     if minutes:
         stats["avg_min"] = _mean_or_none(minutes)
@@ -479,7 +548,11 @@ def entry_hour_breakdown(trades: list[dict]) -> list[dict]:
         group = buckets[hour]
         row = _bucket_row("hour", hour, [float(t["realized_pnl"]) for t in group])
         row["avg_hold_min"] = _mean_or_none(
-            [m for m in (hold_minutes(t) for t in group) if m is not None]
+            [
+                m
+                for m in (hold_minutes(t) for t in group if trade_data_flag(t) is None)
+                if m is not None
+            ]
         )
         rows.append(row)
     return rows
@@ -508,7 +581,7 @@ def hold_bucket_breakdown(trades: list[dict]) -> list[dict]:
     only buckets with trades. Overnight means the entry and exit dates differ."""
     buckets: dict[str, list[float]] = {}
     for t in trades:
-        name = _hold_bucket(t)
+        name = _hold_bucket(t) if trade_data_flag(t) is None else None
         if name is not None:
             buckets.setdefault(name, []).append(float(t["realized_pnl"]))
     rows = []

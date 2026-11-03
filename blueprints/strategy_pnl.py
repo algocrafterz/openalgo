@@ -21,6 +21,7 @@ from limiter import limiter
 from services.strategy_book_reconciler import get_data_health, schedule_reconcile
 from services.strategy_daily_performance_service import (
     get_daily_performance,
+    get_excursion_quality,
     get_strategy_comparison,
     get_trades_for_export,
 )
@@ -191,6 +192,37 @@ def strategy_pnl_daily():
         key,
         lambda: get_daily_performance(
             strategy, period, start=start, end=end, include=include, exclude=exclude, **extra
+        ),
+        ttl=_PNL_READ_TTL_S,
+    )
+    return jsonify(_with_data_health(response, status_code)), status_code
+
+
+@strategy_pnl_bp.route("/api/strategy-pnl/daily/excursions", methods=["GET"])
+@check_session_validity
+@limiter.limit(STRATEGY_PNL_READ_LIMIT)
+def strategy_pnl_daily_excursions():
+    """MAE/MFE quality (in R and rupees) for the chosen strategies and period. Read lazily
+    by the page, since it reads one-minute bars for every trade."""
+    strategy, include, exclude, error = _strategy_filter()
+    if error:
+        return error
+    period = request.args.get("period", "30d")
+    start = request.args.get("start")
+    end = request.args.get("end")
+    key = (
+        "excursions",
+        session["user"],
+        tuple(sorted(([strategy] if strategy else []) + include)),
+        tuple(sorted(exclude)),
+        period,
+        start,
+        end,
+    )
+    _success, response, status_code = _pnl_flights.do(
+        key,
+        lambda: get_excursion_quality(
+            strategy, period, start=start, end=end, include=include, exclude=exclude
         ),
         ttl=_PNL_READ_TTL_S,
     )

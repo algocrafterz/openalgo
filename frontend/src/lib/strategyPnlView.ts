@@ -38,6 +38,20 @@ export function pnlClass(value: number): string {
   return value > 0 ? 'text-green-600' : value < 0 ? 'text-red-600' : ''
 }
 
+/** Plain-words reasons a trade has no R multiple, with counts. */
+const R_REASON_TEXT: Record<string, string> = {
+  no_signal_data: 'no signal records found',
+  no_unique_signal_match: 'no single matching signal stop',
+  zero_stop_distance: 'stop equal to entry',
+}
+
+export function rExcludedText(excluded: Record<string, number> | undefined): string | undefined {
+  const parts = Object.entries(excluded ?? {})
+    .filter(([, n]) => n > 0)
+    .map(([reason, n]) => `${n} ${R_REASON_TEXT[reason] ?? reason}`)
+  return parts.length ? `No R: ${parts.join(', ')}` : undefined
+}
+
 /** "N trades" or "M of N trades" for the R-multiple coverage. */
 export function rCoverage(d: { r_covered?: number; r_total?: number }): string | undefined {
   if (!d.r_total) return undefined
@@ -69,17 +83,33 @@ export function slippageHint(d: {
   return `already in P&L, measured on ${d.slippage_covered ?? 0} of ${d.slippage_total} trades`
 }
 
+/** Display word for a benchmark grade. */
+export function gradeLabel(grade: string | null | undefined): string {
+  switch (grade) {
+    case 'poor':
+      return 'Poor'
+    case 'acceptable':
+      return 'Acceptable'
+    case 'good':
+      return 'Good'
+    case 'excellent':
+      return 'Excellent'
+    default:
+      return 'Not graded'
+  }
+}
+
 /** Short table label for an edge verdict. */
 export function edgeShortLabel(verdict: string | undefined): string {
   switch (verdict) {
-    case 'likely real':
-      return 'Likely real'
-    case 'likely negative':
-      return 'Likely negative'
-    case 'not distinguishable from zero':
+    case 'positive_supported':
+      return 'Supported'
+    case 'positive_inconclusive':
+      return 'Positive, unproven'
+    case 'negative':
+      return 'Negative'
+    case 'inconclusive':
       return 'Unclear'
-    case 'too few days':
-      return 'Too few days'
     default:
       return 'Too few trades'
   }
@@ -88,15 +118,15 @@ export function edgeShortLabel(verdict: string | undefined): string {
 /** Plain-words verdict sentence for the Edge check card. */
 export function edgeVerdictText(verdict: string | undefined): string {
   switch (verdict) {
-    case 'likely real':
-      return 'Likely a real edge'
-    case 'likely negative':
-      return 'Likely a losing edge'
-    case 'not distinguishable from zero':
-      return 'Not distinguishable from zero'
-    case 'too few days':
-      return 'Too few trading days to tell'
+    case 'positive_supported':
+      return 'Positive and statistically supported'
+    case 'positive_inconclusive':
+      return 'Positive but statistically inconclusive'
+    case 'negative':
+      return 'Negative expectancy'
+    case 'inconclusive':
+      return 'Inconclusive, not shown to be positive'
     default:
-      return 'Too few trades to tell'
+      return 'Insufficient sample'
   }
 }

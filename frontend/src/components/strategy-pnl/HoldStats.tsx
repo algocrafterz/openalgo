@@ -13,6 +13,18 @@ function Tile({ label, value }: { label: string; value: string }) {
   )
 }
 
+const EXCLUDED_TEXT: Record<string, string> = {
+  overnight_mis: 'intraday position recorded as held overnight',
+  missing_entry_time: 'no entry time recorded',
+}
+
+function excludedText(excluded: Record<string, number> | undefined): string {
+  const parts = Object.entries(excluded ?? {})
+    .filter(([, n]) => n > 0)
+    .map(([reason, n]) => `${n} ${EXCLUDED_TEXT[reason] ?? reason}`)
+  return parts.length ? ` (left out: ${parts.join(', ')})` : ''
+}
+
 export function HoldStatsRow({ stats }: { stats: HoldStats }) {
   if (stats.covered === 0) return null
   return (
@@ -27,7 +39,8 @@ export function HoldStatsRow({ stats }: { stats: HoldStats }) {
       </div>
       {stats.covered < stats.total && (
         <p className="text-xs text-muted-foreground mt-2">
-          Entry time known for {stats.covered} of {stats.total} trades
+          Holding time shown for {stats.covered} of {stats.total} trades
+          {excludedText(stats.excluded)}. Their profit and loss is still counted everywhere else.
         </p>
       )}
     </div>

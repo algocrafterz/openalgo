@@ -217,3 +217,35 @@ describe('scaleRupeeFigures', () => {
     expect(scaleRupeeFigures(undefined, 0.1)).toBeUndefined()
   })
 })
+
+describe('scaleRupeeFigures: insights fields', () => {
+  it('scales rupee ranges and amounts but not ratios, percentages or graded values', () => {
+    const data = {
+      expectancy_ci90: [10, 20],
+      bootstrap_ci95: [1, 3],
+      insights: {
+        concentration: { net: 100, top1_days_share_pct: 45.6, by_strategy: { A: { net: 50 } } },
+        drawdown: {
+          capital_base: 200000,
+          max_drawdown: -10,
+          max_drawdown_pct: -1.5,
+          recovery_factor: 3,
+        },
+        grading: { metrics: { net_profit_factor: { metric_value: 1.8, grade: 'good' } } },
+        rolling: { combined: [{ n: 20, exp20: 5, pf50: 1.4 }] },
+      },
+    }
+    const out = scaleRupeeFigures(data, 10) as typeof data
+    expect(out.expectancy_ci90).toEqual([100, 200])
+    expect(out.bootstrap_ci95).toEqual([10, 30])
+    expect(out.insights.concentration.net).toBe(1000)
+    expect(out.insights.concentration.by_strategy.A.net).toBe(500)
+    expect(out.insights.concentration.top1_days_share_pct).toBe(45.6)
+    expect(out.insights.drawdown.max_drawdown).toBe(-100)
+    expect(out.insights.drawdown.capital_base).toBe(2000000)
+    expect(out.insights.drawdown.max_drawdown_pct).toBe(-1.5)
+    expect(out.insights.drawdown.recovery_factor).toBe(3)
+    expect(out.insights.grading.metrics.net_profit_factor.metric_value).toBe(1.8)
+    expect(out.insights.rolling.combined[0]).toEqual({ n: 20, exp20: 50, pf50: 1.4 })
+  })
+})

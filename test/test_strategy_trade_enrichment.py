@@ -465,3 +465,37 @@ class TestEntrySlippage:
             [{**_trade(), "cost": 1.0, "risk_amount": None, "r_multiple": None}]
         )
         assert s["entry_slippage"] is None and s["entry_slippage_bps"] is None
+
+
+class TestNetRMultiple:
+    def test_net_r_deducts_the_estimated_charges_from_the_same_risk(self, signals_db):
+        _signal(signals_db, "ORB", "INFY", "SHORT", 986.6, 1006.72, "2026-09-29T09:55:06")
+        [t] = enrich_trades([_trade()], "2026-09-29", "2026-09-29", db_path=signals_db)
+        assert t["cost"] > 0
+        assert t["net_r_multiple"] == pytest.approx((450 - t["cost"]) / t["risk_amount"], abs=1e-3)
+        assert t["net_r_multiple"] < t["r_multiple"]  # gross R is kept alongside
+
+    def test_unknown_cost_gives_no_net_r_but_keeps_gross_r(self, signals_db):
+        _signal(signals_db, "ORB", "INFY", "SHORT", 986.6, 1006.72, "2026-09-29T09:55:06")
+        [t] = enrich_trades([_trade(exchange="MCX")], "2026-09-29", "2026-09-29", db_path=signals_db)
+        assert t["cost"] is None and t["r_multiple"] is not None
+        assert t["net_r_multiple"] is None
+
+    def test_summary_reports_gross_and_net_expectancy_and_exclusion_reasons(self, signals_db):
+        _signal(signals_db, "ORB", "INFY", "SHORT", 986.6, 1006.72, "2026-09-29T09:55:06")
+        _signal(signals_db, "ORB", "TCS", "LONG", 3000.0, 2980.0, "2026-09-29T09:55:06")
+        trades = [
+            _trade(),
+            _trade(symbol="WIPRO"),  # a signal DB exists, but none for this symbol
+        ]
+        enriched = enrich_trades(trades, "2026-09-29", "2026-09-29", db_path=signals_db)
+        s = summarize_enrichment(enriched)
+        assert s["r_covered"] == 1 and s["r_total"] == 2
+        assert s["r_excluded"] == {"no_unique_signal_match": 1}
+        assert s["net_r_covered"] == 1
+        assert s["expectancy_net_r"] < s["expectancy_r"]
+
+    def test_missing_signal_db_is_reported_as_no_signal_data(self, tmp_path):
+        enriched = enrich_trades([_trade()], "2026-09-29", "2026-09-29", db_path=tmp_path / "x.db")
+        assert summarize_enrichment(enriched)["r_excluded"] == {"no_signal_data": 1}
+        assert enriched[0]["r_exclusion"] == "no_signal_data"

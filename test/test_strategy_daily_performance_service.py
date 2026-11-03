@@ -243,7 +243,10 @@ def test_unknown_name_contributes_nothing(filter_ledger):
 
 
 def _without_capital_view(response):
-    return {k: v for k, v in response.items() if k != "capital_view"}
+    """The response minus what the capital control legitimately changes: the scaled view and
+    the assumed capital behind the daily returns. Sharpe and Sortino stay in the comparison
+    on purpose: with a constant denominator they must not move when capital changes."""
+    return {k: v for k, v in response.items() if k not in ("capital_view", "ratio_capital")}
 
 
 def test_no_capital_means_no_capital_view_key():
@@ -257,7 +260,7 @@ def test_capital_leaves_every_other_key_unchanged(period):
     ok, with_cap, code = svc.get_daily_performance(None, period, capital=100000.0)
     assert ok and code == 200
     assert "capital_view" in with_cap
-    assert _without_capital_view(with_cap) == plain
+    assert _without_capital_view(with_cap) == _without_capital_view(plain)
     for key in ("equity_curve", "equity_curve_net", "daily_pnl", "by_symbol"):
         assert with_cap[key] == plain[key]
     assert ("trades" in with_cap) == ("trades" in plain)
@@ -286,7 +289,7 @@ def test_capital_with_a_filter_is_invariant_and_uses_the_filtered_set(filter_led
         "ORB", "all", include=["VWAP"], exclude=["EMA"], capital=1000.0
     )
     assert ok
-    assert _without_capital_view(with_cap) == plain
+    assert _without_capital_view(with_cap) == _without_capital_view(plain)
     view = with_cap["capital_view"]
     assert view["strategies"] == len(with_cap["included"])
     assert view["total_capital"] == 1000.0 * view["strategies"]

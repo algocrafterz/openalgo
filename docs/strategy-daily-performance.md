@@ -77,10 +77,10 @@ a side-by-side comparison across all strategies.
    Strategies here have no isolated allocated capital to divide by (unlike a
    mutual fund's NAV), so Sharpe/Sortino/Calmar are computed on the ₹
    daily-realized-P&L series directly — this is what retail trading journals
-   (Tradervue, Edgewonk, TraderSync) do, not a deviation from practice. They
-   are valid for comparing one strategy's risk-adjusted consistency against
-   another's, but are **not** directly comparable to a %-based benchmark
-   (e.g. a fund's Sharpe), and they do not change with capital. The page
+   (Tradervue, Edgewonk, TraderSync) do, not a deviation from practice. Rupee
+   figures are valid for comparing one strategy's consistency against
+   another's. **Sharpe and Sortino no longer use this rupee series**: see
+   "Statistics methodology" below. Calmar still does and is unchanged. The page
    accepts one optional capital per strategy (`capital` query value on
    `/api/strategy-pnl/daily`, rupees, above zero, at most 1,000,000,000,000).
    The recorded trades are taken as sized on Rs 1,00,000 per strategy. When a
@@ -95,7 +95,8 @@ a side-by-side comparison across all strategies.
 4. **Zero-trade days are included as 0-P&L days** in every metrics
    computation. Excluding them (only counting days with a trade) inflates
    Sharpe artificially — a pitfall specific to intraday/low-frequency
-   strategies, confirmed during research for this feature.
+   strategies, confirmed during research for this feature. Sharpe and Sortino
+   count trading sessions, not calendar days (see "Statistics methodology").
 
 5. **Server resolves live vs analyze mode** the same way
    `services/strategy_performance_service.py` does (`get_analyze_mode()`) —
@@ -162,6 +163,11 @@ same rate-limit pattern as `/api/strategy-pnl`):
 - `GET /api/strategy-pnl/compare?period=...` — the same metrics, condensed,
   for every strategy in the current mode side by side, plus the resolved
   `start_date`/`end_date`. One ledger read per request, grouped by strategy.
+  Also returns the combined `portfolio` block, the daily `correlation` matrix
+  and per-strategy `contribution` (see "Statistics methodology").
+- `GET /api/strategy-pnl/daily/excursions?strategy=&exclude=&period=` — MAE/MFE
+  quality for the selection. Separate from `/daily` because it reads one-minute
+  bars per trade; above 2000 trades it returns `excursions: null` with a message.
 - `GET /api/strategy-pnl/trades/export?period=&start=&end=&strategy=` — the enriched closed trades in range as a CSV file (`strategy-trades-<start>_<end>.csv`).
 
 ## Frontend
@@ -287,8 +293,7 @@ daily and comparison endpoints.
 - **Wire `upgrade/backfill_strategy_daily_performance.py --verify --date <today>` into the daily `eod` workflow** so a strategy_positions vs. strategy_closed_trades mismatch is caught automatically every trading day, rather than only when someone happens to compare two pages by eye — which is how the TCS mismatch above was actually found. Not wired up yet.
 - Backfill for Flow / Python Strategy Host trades — no per-trade exit log exists anywhere to source this from today; would need one added at the point those paths close a position, mirroring what `save_tracker_exit()` already does for signal_engine.
 - Backfill for dates further back than `signal_engine/data/trades.db` retains (check retention before assuming full history is recoverable).
-- Per-strategy allocated-capital config for %-normalized Sharpe/Sortino/Calmar/CAGR. (An optional capital per strategy for a scaled what-if view and %-of-capital figures is built; ratio normalisation is not.)
-- Rolling-window metrics (trailing 20/50 trades) for trend detection.
+- Per-strategy allocated-capital config for %-normalized Calmar/CAGR. (An optional capital per strategy for a scaled what-if view is built. Sharpe and Sortino are normalised on assumed capital, see "Statistics methodology".)
 - Trade-level drill-down UI (currently day-level only).
 
 ## Charges: verification and charge-drag percentages (2026-10-01)
@@ -399,11 +404,9 @@ missing.
 **Edge check.** Per-trade net P&L (realized minus estimated charges, unknown
 charges counted as 0) gives `net_expectancy`, `expectancy_ci95`, `t_stat`.
 Because trades on one day share that day's market, the same net P&L summed
-per trading day gives `day_t_stat` over `edge_days`. `edge_verdict` needs at
-least 30 trades and 10 trading days ("too few trades" / "too few days"
-otherwise) and both t-stats past 2 in the same direction for "likely real" or
-"likely negative"; anything else is "not distinguishable from zero". It is a
-screening statistic, not an acceptance gate.
+per trading day gives `day_t_stat` over `edge_days`. `edge_verdict` follows the rules in "Statistics methodology" below, which
+replace the original t-stat-only rules. It is a screening statistic, not an
+acceptance gate.
 
 **P&L page session view.** `/strategy-pnl` always shows the current session,
 or the last traded session when nothing has traded today: the same summary
@@ -415,3 +418,210 @@ strategy, broker, symbol, exchange, product, direction, closed_quantity,
 entry_price, exit_price, sl_price, realized_pnl, est_cost, net_pnl,
 return_pct, r_multiple, entry_slippage, mfe, mae. MFE/MAE are left empty for a
 range over 2000 trades.
+
+## Statistics methodology (2026-11-03)
+
+Every formula lives in `services/performance_stats.py` (pure, no I/O). Sections
+are assembled in `services/performance_insights_service.py`. Tests:
+`test/test_performance_stats.py` and `test/test_performance_insights.py`, each
+with an independent reference implementation and a golden test on a real trades
+export (read from `OPENALGO_GOLDEN_TRADES_CSV`, skipped when absent, never
+committed).
+
+### Gross and net
+
+- **Gross** is `realized_pnl`. **Net** is gross minus estimated charges
+  (`net = realized_pnl - est_cost`, charges deducted once; an unknown charge
+  counts as 0). Charges are estimates from the fee schedule, never broker-reported.
+- Net: Sharpe, Sortino, edge check, net R, net profit factor, net drawdown,
+  concentration, rolling and monthly figures, entry-quality tables, grading.
+- Gross: the Net P&L (gross) card, the Max Drawdown card, Calmar, the comparison
+  table's Profit Factor and Max Drawdown columns, gross R and gross profit
+  factor (shown next to their net versions). Labels on the page say which is which.
+- Slippage is already inside the fills, so it is reported and never deducted again.
+
+### Daily series, Sharpe and Sortino
+
+- **One observation per NSE trading session** in the range: weekdays that are
+  not exchange holidays (`market_calendar_db.is_market_holiday(day, "NSE")`),
+  plus any date a trade closed on. Zero-trade sessions are 0, not missing.
+  Weekends and holidays are not observations. A failed calendar lookup falls
+  back to weekdays.
+- **Daily return** = daily net P&L (all selected strategies pooled) / assumed
+  allocated capital. **Assumed capital** = the capital per strategy from the
+  capital box (default Rs 1,00,000) x the number of selected strategies. It is
+  an assumption, not measured deployed capital. The comparison table uses Rs
+  1,00,000 per strategy.
+- **Sharpe** = (mean(r) - rf/252) / std(r, ddof=1) x sqrt(252). rf defaults to 0.
+- **Sortino** = (mean(r) - target) / DD x sqrt(252), with
+  DD = sqrt(mean(min(r - target, 0)^2)) taken over ALL sessions, zero days
+  included. target defaults to 0 (minimum acceptable daily return).
+- **Annualisation** uses 252 sessions a year.
+- **Capital invariance:** with a constant capital, rf = 0 and target = 0, both
+  ratios do not change with capital (mean and spread scale together). A
+  non-zero rf or target breaks that on purpose.
+- **Withheld, not estimated:** both are `null` below **60 sessions**, and also
+  below **10 sessions under the target** (10 losing sessions at the default
+  target of 0). A series with no
+  variation (checked with a relative tolerance, so float noise counts as flat)
+  also gives `null`, never infinity. `ratio_warning` carries the plain-language
+  reason; `ratio_sessions`, `ratio_losing_sessions` and `ratio_capital` carry
+  the counts. A non-finite daily result withholds both.
+- The earlier Sharpe/Sortino (gross rupee P&L on calendar days, population
+  std, downside deviation measured as the spread of losing days around their own
+  mean) is gone. Its values were inflated and are not comparable.
+
+### Expectancy and the edge check
+
+- Expectancy is the mean net P&L per trade. `t_stat` = mean / (sample std /
+  sqrt(n)). `day_t_stat` is the same on per-day totals (`edge_days`).
+- `expectancy_ci90` and `expectancy_ci95` use the Student-t critical value for
+  n - 1 degrees of freedom (computed locally, since production has no scipy;
+  checked against scipy in tests). They treat every trade as independent.
+- `bootstrap_ci90` / `bootstrap_ci95`: whole trading days are resampled with
+  replacement, 5,000 draws, fixed seed, drawn in chunks of 250 to bound memory.
+  `bootstrap_p_nonpositive` is the share of draws with a mean at or below zero.
+- Verdict (`edge_verdict`): `insufficient_sample` (under 30 trades, under 10
+  days, or non-finite input), `positive_supported`, `positive_inconclusive`,
+  `negative`, `inconclusive`. Positive is supported only when the trade t-stat
+  and the day t-stat each pass the two-sided 95% Student-t critical value for
+  their own degrees of freedom AND the lower 95% bootstrap bound is above
+  zero. Negative needs the mirror conditions. A series with no variation is
+  `inconclusive`. An "unstable across windows" verdict is not implemented.
+- It is a screening statistic, not proof of an edge.
+
+### R multiples
+
+- `r_multiple` (gross) = realized_pnl / (|signal entry - signal stop| x quantity).
+  `net_r_multiple` = (realized_pnl - est_cost) / the same risk. `expectancy_r`
+  and `expectancy_net_r` are their means over trades with an R.
+- A trade has no R when no signal stop is found. `r_excluded` counts these by
+  reason (`no_signal_data`, `no_unique_signal_match`, `zero_stop_distance`) and
+  the page shows the counts. R is dimensionless: capital scaling never changes it.
+
+### Data flags
+
+`data_flag` marks rows whose timestamps cannot support timing statistics:
+`overnight_mis` (an intraday MIS position opened on one date and closed on
+another) and `missing_entry_time`. Flagged rows keep their P&L in every profit,
+drawdown, concentration and R figure. They are left out of holding-time,
+hold-bucket, entry-hour, first-hour, deployed-capital and excursion statistics,
+and the page shows how many.
+
+### Concentration and consistency
+
+Over days with at least one closed trade, on net P&L: profitable-day share,
+average winning and losing day, median and mean day, best and worst day, the
+share of net profit from the best 1, 3 and 5 days, profit without the best day
+and without the best five days, the share from the best 10% of trades, and the
+same per strategy (including each strategy's profit without the portfolio's
+best day). Shares are `null` unless total net profit is above zero; a share can
+exceed 100%. Rolling expectancy (last 20 trades) and rolling profit factor (last
+50), by closing order, are shown combined and per strategy. The monthly table
+groups by calendar month.
+
+### Drawdown, return on capital and deployment
+
+- Drawdown is on **realized net equity**: the cumulative net P&L at each session
+  close, starting from zero, so a loss in the first session is already a
+  drawdown. It is not mark-to-market: the unrealised P&L of open positions is
+  not in it.
+- `max_drawdown_pct` = fall / (reference capital + equity at the peak).
+  `recovery_factor` = net profit / |max drawdown|. Duration is in sessions from
+  the peak to recovery (or to the end if not recovered).
+- A second, per-trade figure (`max_drawdown_trade_sequence`, in closing order)
+  shows swings that a session close hides.
+- **Calmar** (net, in this block) = net x 252 / (sessions x |max drawdown|),
+  `null` below 60 sessions. The Calmar in the older metrics block is unchanged
+  (gross rupee series).
+- `return_on_capital_pct` = net / (reference capital x strategies selected).
+  Percent figures use the reference capital the recorded trades were sized on,
+  so they do not change with the capital box; rupee figures do (the page scales
+  `capital_base` with them).
+- **Deployed capital** is the peak of the entry value of positions open at the
+  same time, per day (mean and maximum). Leverage and margin are not netted.
+
+### MAE and MFE
+
+- `mfe` and `mae` are rupees (price move x quantity), from one-minute Historify
+  bars between entry and exit. They use full-bar highs and lows, so they are
+  **upper bounds**: the market may have touched them where the quantity could
+  not have been filled.
+- In R: divided by the signal-stop risk in rupees. Trades without a stop do not
+  appear in R figures (the page shows how many do).
+- `mfe_capture_pct` = winners' realized profit / their MFE. `gave_back_pct` =
+  among trades whose MFE reached 0.5R, the share that closed at a net loss.
+  `mae_reached_stop_pct` = share whose adverse move reached 1R. Winners and
+  losers are compared on average MAE in R.
+- Flagged rows are excluded and counted. Above 2000 trades the card says so
+  and shows nothing.
+
+### Execution quality
+
+Entry slippage is the entry fill against the signal's alert price, split into
+worse and better than the alert, in rupees and basis points, by strategy and by
+symbol (largest adverse first). Exit slippage, slippage by order type, broker
+reported charges and a Sandbox-versus-live comparison are **not available**:
+the data is not recorded. In Sandbox mode fills are simulated, so slippage
+there is not a measure of live execution.
+
+### Comparison
+
+Per strategy: gross and net profit factor, net R, return on capital, net
+drawdown percent, recovery factor, share of profit from the best day and best 5
+days, and a grade. Plus a combined portfolio row, the Pearson correlation of
+daily net P&L (`null` under 20 sessions or for a flat series) and, for each
+strategy, the portfolio's drawdown with and without it.
+
+### Benchmark grading
+
+Bands live in one place: `BENCHMARK_BANDS` in `services/performance_stats.py`.
+They are screening guides, not guarantees.
+
+| Metric | Poor | Acceptable | Good | Excellent |
+|---|---|---|---|---|
+| Net profit factor | below 1.0 | 1.0 to 1.3 | 1.3 to 2.0 | above 2.0 |
+| Win rate | below 40% | 40 to 50% | 50 to 60% | above 60% |
+| Expectancy (R, net) | below 0 | 0 to 0.10 | 0.10 to 0.30 | above 0.30 |
+| Sharpe | below 0.5 | 0.5 to 1.0 | 1.0 to 2.0 | above 2.0 |
+| Sortino | below 1.0 | 1.0 to 1.5 | 1.5 to 3.0 | above 3.0 |
+| Recovery factor | below 1 | 1 to 2 | 2 to 3 | above 3 |
+| Charges / gross profit | above 30% | 20 to 30% | 10 to 20% | below 10% |
+
+- Return metrics (profit factor, win rate, expectancy R, charges share) need 30
+  trades **and** 10 trading sessions. Risk metrics (Sharpe, Sortino, recovery
+  factor) need 60 sessions. Below that the row shows the reason, not a grade.
+- The overall grade is the **weakest** graded metric, so a few strong numbers
+  cannot lift it. Win rate is shown but never sets it.
+- The **validated** overall grade is withheld unless profit factor, expectancy
+  in R, the charges share and the recovery factor are all graded. A missing
+  Sharpe or Sortino does not block it and cannot raise it. The charges share is
+  not defined when gross profit is not above zero.
+- Until then, if profit factor, expectancy in R and the charges share are graded
+  (30 trades and 10 sessions), the page shows a **preliminary** grade: the
+  weakest of those three, labelled "Preliminary", and described as not a
+  validated assessment and not evidence of a proven edge. `assessment` is
+  `validated`, `preliminary` or `none`. A preliminary grade never becomes
+  validated by itself: it needs the risk measures (60 sessions).
+
+### Withheld because of insufficient data
+
+| Figure | Needs | Shown instead |
+|---|---|---|
+| Sharpe, Sortino | 60 sessions and 10 sessions under the target | dash and a warning |
+| Calmar | 60 sessions | dash |
+| Edge verdict | 30 trades and 10 days | "Insufficient sample" |
+| Return grades | 30 trades and 10 sessions | reason text |
+| Risk grades | 60 sessions | reason text |
+| Correlation | 20 sessions | dash |
+| Net R | a signal stop and a known charge | counted in `r_excluded` |
+| Concentration shares | total net profit above zero | dash |
+| Rolling series | 20 / 50 trades | "not enough trades yet" |
+| Single-day views | | the trade list instead of the sections above |
+
+### Not built
+
+Market-regime classification (needs a historical-data definition; regimes must
+not be inferred from strategy results), exit slippage, slippage by order type,
+broker-reported versus estimated charges, a Sandbox versus live comparison,
+mark-to-market drawdown, and an "unstable across windows" verdict.

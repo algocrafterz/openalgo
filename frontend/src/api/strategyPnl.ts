@@ -108,11 +108,11 @@ export interface EquityPoint {
 }
 
 export type EdgeVerdict =
-  | 'too few trades'
-  | 'too few days'
-  | 'likely real'
-  | 'likely negative'
-  | 'not distinguishable from zero'
+  | 'insufficient_sample'
+  | 'positive_supported'
+  | 'positive_inconclusive'
+  | 'negative'
+  | 'inconclusive'
 
 /** Recorded rupee metrics scaled to a capital per strategy (daily view only). */
 export interface CapitalViewScaled {
@@ -148,6 +148,182 @@ export interface CapitalView {
   basis: Record<string, string>
 }
 
+export type Grade = 'poor' | 'acceptable' | 'good' | 'excellent'
+
+export interface StrategyConcentration {
+  trades: number
+  net: number
+  share_of_net_pct: number | null
+  best_day_net: number
+  best_day_share_of_own_pct: number | null
+  net_ex_best_day: number
+  net_ex_portfolio_best_day: number
+}
+
+export interface ConcentrationStats {
+  traded_days: number
+  trades: number
+  net?: number
+  best_day?: number
+  worst_day?: number
+  mean_daily?: number
+  median_daily?: number
+  profitable_days?: number
+  profitable_days_pct?: number | null
+  avg_winning_day?: number | null
+  avg_losing_day?: number | null
+  net_ex_best_day?: number
+  net_ex_best_five_days?: number | null
+  top1_days_share_pct?: number | null
+  top3_days_share_pct?: number | null
+  top5_days_share_pct?: number | null
+  top10pct_trades?: number
+  top10pct_trades_share_of_net_pct?: number | null
+  best_day_date?: string
+  by_strategy?: Record<string, StrategyConcentration>
+}
+
+export interface NetDrawdown {
+  basis: string
+  net: number
+  capital_base: number
+  return_on_capital_pct: number
+  max_drawdown: number
+  max_drawdown_pct: number
+  recovery_factor: number | null
+  drawdown_peak_date?: string | null
+  drawdown_trough_date?: string
+  drawdown_duration_sessions?: number
+  drawdown_recovered?: boolean
+  calmar_ratio: number | null
+  max_drawdown_trade_sequence: number
+  recovery_factor_trade_sequence: number | null
+}
+
+export interface BucketRow {
+  label: string | number
+  trades: number
+  win_rate: number | null
+  net: number
+  profit_factor: number | null
+  expectancy: number
+  expectancy_r: number | null
+  r_trades: number
+}
+
+export interface RollingPoint {
+  n: number
+  date: string
+  exp20: number | null
+  pf50: number | null
+}
+
+export interface SlippageBlock {
+  trades: number
+  net: number
+  adverse_total: number
+  favourable_total: number
+  adverse_trades: number
+  favourable_trades: number
+  net_bps: number | null
+  adverse_bps: number | null
+}
+
+export interface GradeMetric {
+  metric_value: number | null
+  grade: Grade | null
+  reason: string | null
+}
+
+export interface GradingReport {
+  metrics: Record<string, GradeMetric>
+  overall: Grade | null
+  /** Weakest return metric when the risk metrics cannot yet be graded; not a proven edge. */
+  preliminary: Grade | null
+  assessment: 'validated' | 'preliminary' | 'none'
+  overall_note: string | null
+  sample: { trades: number; sessions: number }
+}
+
+export interface PerformanceInsights {
+  concentration: ConcentrationStats
+  drawdown: NetDrawdown
+  streaks: {
+    max_consecutive_losses: number
+    avg_losing_streak: number | null
+    losing_streaks: number
+  }
+  gross_profit_factor: number | null
+  net_profit_factor: number | null
+  grading: GradingReport
+  deployment: {
+    avg_daily_peak_deployed: number | null
+    max_deployed: number | null
+    deployment_days: number
+    deployment_excluded: number
+    deployment_basis: string
+  }
+  rolling: {
+    combined: RollingPoint[]
+    by_strategy: Record<string, RollingPoint[]>
+    expectancy_window: number
+    pf_window: number
+  }
+  monthly: {
+    month: string
+    trades: number
+    traded_days: number
+    net: number
+    win_rate: number | null
+    profit_factor: number | null
+    profitable_days_pct: number | null
+  }[]
+  entry_quality: {
+    by_hour: BucketRow[]
+    by_weekday: BucketRow[]
+    by_direction: BucketRow[]
+    by_session_part: BucketRow[]
+    entry_excluded: number
+    first_hour_ends: string
+  }
+  slippage: Partial<SlippageBlock> & {
+    covered: number
+    total: number
+    basis: string
+    by_strategy: Record<string, SlippageBlock>
+    by_symbol: (SlippageBlock & { symbol: string })[]
+  }
+}
+
+export interface ExcursionBlock {
+  trades: number
+  r_trades: number
+  avg_mfe_r: number | null
+  avg_mae_r: number | null
+  mfe_r_quartiles: number[] | null
+  mfe_capture_pct: number | null
+  winners_avg_mae_r: number | null
+  losers_avg_mae_r: number | null
+  mae_reached_stop_pct: number | null
+  reached_meaningful_mfe: number
+  gave_back_pct: number | null
+}
+
+export interface ExcursionReport extends ExcursionBlock {
+  total: number
+  covered: number
+  excluded_flagged: number
+  meaningful_mfe_r: number
+  basis: string
+  by_strategy: Record<string, ExcursionBlock>
+}
+
+export interface ExcursionResponse {
+  status: 'success' | 'error'
+  excursions: ExcursionReport | null
+  message?: string
+}
+
 export interface StrategyDailyPerformance {
   status: 'success' | 'error'
   mode?: 'live' | 'analyze'
@@ -173,8 +349,8 @@ export interface StrategyDailyPerformance {
   avg_win?: number
   avg_loss?: number
   payoff_ratio?: number | null
-  sharpe_ratio?: number
-  sortino_ratio?: number
+  sharpe_ratio?: number | null
+  sortino_ratio?: number | null
   calmar_ratio?: number | null
   max_drawdown?: number
   ulcer_index?: number
@@ -202,14 +378,34 @@ export interface StrategyDailyPerformance {
   total_r?: number | null
   r_covered?: number
   r_total?: number
+  /** Expectancy in R after estimated charges (expectancy_r is before charges). */
+  expectancy_net_r?: number | null
+  total_net_r?: number | null
+  net_r_covered?: number
+  /** Trades without an R multiple, counted by reason. */
+  r_excluded?: Record<string, number>
+  /** Withheld (null) until the range has enough sessions; see ratio_warning. */
+  ratio_sessions?: number
+  ratio_losing_sessions?: number
+  /** Assumed allocated capital behind the daily returns, not measured deployed capital. */
+  ratio_capital?: number
+  ratio_basis?: string
+  ratio_warning?: string | null
   /** Per-trade net (after estimated charges) edge statistics. */
   net_expectancy?: number | null
   net_pnl_std?: number | null
   t_stat?: number | null
+  expectancy_ci90?: [number, number] | null
   expectancy_ci95?: [number, number] | null
+  /** Day-clustered bootstrap intervals for the per-trade average. */
+  bootstrap_ci90?: [number, number] | null
+  bootstrap_ci95?: [number, number] | null
+  bootstrap_p_nonpositive?: number | null
+  bootstrap_resamples?: number | null
   edge_verdict?: EdgeVerdict
   edge_days?: number | null
   day_t_stat?: number | null
+  insights?: PerformanceInsights
   edge_trades?: number
   /** Trades whose charges could be estimated; the rest count as zero charges. */
   edge_cost_coverage?: number
@@ -252,6 +448,8 @@ export interface HoldStats {
   /** Trades with a recorded entry time, out of total. */
   covered: number
   total: number
+  /** Trades left out of the holding-time figures because their timestamps are unreliable. */
+  excluded?: Record<string, number>
 }
 
 export interface EntryHourPnl extends HourPnl {
@@ -323,7 +521,9 @@ export interface StrategyComparisonRow {
   profit_factor: number | null
   net_profit: number
   expectancy: number
-  sharpe_ratio: number
+  sharpe_ratio: number | null
+  sortino_ratio?: number | null
+  ratio_warning?: string | null
   max_drawdown: number
   best_win_streak: number
   best_loss_streak: number
@@ -335,6 +535,38 @@ export interface StrategyComparisonRow {
   net_expectancy?: number | null
   t_stat?: number | null
   edge_verdict?: EdgeVerdict
+  gross_profit_factor?: number | null
+  net_profit_factor?: number | null
+  expectancy_net_r?: number | null
+  return_on_capital_pct?: number | null
+  max_drawdown_pct?: number | null
+  recovery_factor?: number | null
+  top1_day_share_pct?: number | null
+  top5_days_share_pct?: number | null
+  overall_grade?: Grade | null
+  preliminary_grade?: Grade | null
+  overall_note?: string | null
+}
+
+export interface ComparisonPortfolio {
+  net: number
+  net_profit_factor: number | null
+  return_on_capital_pct: number
+  max_drawdown: number
+  max_drawdown_pct: number
+  recovery_factor: number | null
+  overall_grade: Grade | null
+  preliminary_grade: Grade | null
+  overall_note: string | null
+}
+
+export interface ContributionRow {
+  strategy: string
+  net: number
+  share_of_net_pct: number | null
+  portfolio_dd_with: number
+  portfolio_dd_without: number
+  drawdown_change: number
 }
 
 export interface StrategyComparisonResponse {
@@ -344,6 +576,9 @@ export interface StrategyComparisonResponse {
   start_date?: string
   end_date?: string
   strategies?: StrategyComparisonRow[]
+  portfolio?: ComparisonPortfolio | null
+  correlation?: { strategies: string[]; matrix: (number | null)[][]; sessions: number } | null
+  contribution?: ContributionRow[]
   /** Every strategy with trades, whatever the filter, so an excluded one can be added back. */
   all_strategies?: string[]
   included?: string[]
@@ -410,6 +645,19 @@ export const strategyPnlApi = {
     return unwrap(
       webClient.get<StrategyComparisonResponse>(`/api/strategy-pnl/compare?${params.toString()}`),
       'Failed to fetch strategy comparison'
+    )
+  },
+
+  excursions: (
+    strategy: StrategySelection,
+    period: PerformancePeriod,
+    range?: DateRange
+  ): Promise<ExcursionResponse> => {
+    if (isNoneSelection(strategy)) return Promise.reject(new Error(NOTHING_SELECTED))
+    const params = periodParams(period, range, strategy)
+    return unwrap(
+      webClient.get<ExcursionResponse>(`/api/strategy-pnl/daily/excursions?${params.toString()}`),
+      'Failed to fetch excursion quality'
     )
   },
 

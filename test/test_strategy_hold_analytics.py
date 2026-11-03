@@ -12,12 +12,12 @@ import services.strategy_daily_performance_service as svc
 from services import strategy_trade_enrichment as enr
 
 
-def _t(pnl, opened, closed, symbol="AAA", trade_date="2026-10-30"):
+def _t(pnl, opened, closed, symbol="AAA", trade_date="2026-10-30", product="MIS"):
     return {
         "strategy": "ORB",
         "symbol": symbol,
         "exchange": "NSE",
-        "product": "MIS",
+        "product": product,
         "mode": "analyze",
         "direction": "LONG",
         "closed_quantity": 10.0,
@@ -36,7 +36,8 @@ TRADES = [
     _t(-40.0, f"{D}T09:45:00", f"{D}T10:45:00"),  # 60 min loss
     _t(60.0, f"{D}T10:05:00", f"{D}T12:05:00"),  # 120 min win
     _t(-20.0, f"{D}T10:15:00", f"{D}T14:15:00"),  # 240 min loss
-    _t(30.0, "2026-10-29T14:00:00", f"{D}T09:30:00"),  # overnight 1170 min win
+    # overnight 1170 min win; a delivery (CNC) position may legitimately span sessions
+    _t(30.0, "2026-10-29T14:00:00", f"{D}T09:30:00", product="CNC"),
     _t(5.0, None, f"{D}T09:30:00"),  # no entry time
 ]
 
@@ -70,6 +71,7 @@ def test_hold_stats_without_coverage():
         "losers_avg_min": None,
         "covered": 0,
         "total": 1,
+        "excluded": {"missing_entry_time": 1},
     }
     assert enr.hold_stats([])["total"] == 0
 
@@ -280,3 +282,29 @@ def test_daily_and_compare_carry_edge_stats(_patch):
     ok, c, _ = svc.get_strategy_comparison("7d")
     for row in c["strategies"]:
         assert {"net_expectancy", "t_stat", "edge_verdict"} <= set(row)
+
+
+def test_overnight_mis_is_flagged_and_left_out_of_hold_statistics():
+    """An intraday position cannot span two sessions: its timestamps are unreliable, so it
+    drops out of every holding-time figure and is counted, while its P&L stays elsewhere."""
+    bad = _t(-455.0, "2026-10-29T11:44:57", f"{D}T10:20:29")  # MIS opened the day before
+    assert enr.trade_data_flag(bad) == "overnight_mis"
+    assert enr.trade_data_flag(TRADES[5]) == "missing_entry_time"
+    assert enr.trade_data_flag(TRADES[4]) is None  # CNC overnight is legitimate
+    assert enr.trade_data_flag(TRADES[0]) is None
+
+    stats = enr.hold_stats([*TRADES[:4], bad, TRADES[5]])
+    assert stats["covered"] == 4 and stats["total"] == 6
+    assert stats["excluded"] == {"overnight_mis": 1, "missing_entry_time": 1}
+    assert stats["avg_min"] == 107.5  # (10+60+120+240)/4, the bad row does not move it
+    assert [r["bucket"] for r in enr.hold_bucket_breakdown([bad])] == []
+    assert enr.flag_counts([bad, bad, TRADES[0]]) == {"overnight_mis": 2}
+
+
+def test_flagged_trades_keep_their_pnl_in_profit_metrics(monkeypatch, tmp_path):
+    monkeypatch.setattr(enr, "SIGNAL_TRADES_DB", tmp_path / "absent.db")
+    bad = _t(-455.0, "2026-10-29T11:44:57", f"{D}T10:20:29")
+    out = enr.enrich_trades([bad], D, D)
+    assert out[0]["data_flag"] == "overnight_mis"
+    assert out[0]["realized_pnl"] == -455.0
+    assert enr.summarize_enrichment(out)["r_excluded"] == {"no_signal_data": 1}

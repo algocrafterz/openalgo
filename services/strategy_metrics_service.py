@@ -24,7 +24,13 @@ from datetime import date, datetime, timedelta
 import numpy as np
 import pandas as pd
 
-TRADING_DAYS_PER_YEAR = 252
+from services import performance_stats as stats
+from services.performance_stats import (  # noqa: F401  (re-exported for existing callers)
+    EDGE_MIN_DAYS,
+    EDGE_MIN_TRADES,
+    TRADING_DAYS_PER_YEAR,
+    edge_stats,
+)
 
 # StrategyClosedTrade (the ledger this page reads) was added 2026-09-25 and
 # only writes a row on every close from that date forward. A handful of
@@ -172,96 +178,24 @@ def resolve_period(
     return start_d.isoformat(), end_d.isoformat()
 
 
-EDGE_MIN_TRADES = 30
-EDGE_T_THRESHOLD = 2.0
-EDGE_Z_95 = 1.96
-# Trades on one day share that day's market, so they are not independent; the
-# day-level check treats each trading day as one observation.
-EDGE_MIN_DAYS = 10
-
-
-def _t(values: np.ndarray) -> float | None:
-    if len(values) < 2:
-        return None
-    std = float(values.std(ddof=1))
-    return None if std == 0 else float(values.mean()) / (std / float(np.sqrt(len(values))))
-
-
-def edge_stats(
-    net_pnls: list[float],
-    costed: int | None = None,
-    trade_dates: list[str] | None = None,
+def compute_metrics(
+    closed_trades: list[dict],
+    start_date: str,
+    end_date: str,
+    *,
+    costs: list[float | None] | None = None,
+    sessions: list[str] | None = None,
+    capital: float | None = None,
 ) -> dict:
-    """Is the per-trade average distinguishable from luck? Inputs are per-trade
-    NET P&L values (realized minus estimated charges; an unknown cost counts as
-    0 and `costed` reports how many trades had a known cost).
-
-    t_stat = mean / (sample std / sqrt(n)); None for n < 2 or zero spread.
-    expectancy_ci95 = mean +/- 1.96 standard errors; None for n < 2.
-    Verdict: fewer than 30 trades is "too few trades"; else t >= 2 is
-    "likely real", t <= -2 "likely negative", otherwise "not distinguishable
-    from zero". A normal-approximation screen, not a proof.
-
-    With `trade_dates` (one per trade) the per-trade t is also checked at the
-    day level: net P&L summed per trading day, t over those days
-    (`day_t_stat`, `edge_days`). A verdict then needs at least EDGE_MIN_DAYS
-    trading days and both t-stats past the threshold in the same direction;
-    same-day trades are correlated, so the per-trade t alone overstates it.
-    """
-    n = len(net_pnls)
-    base = {
-        "edge_trades": n,
-        "edge_cost_coverage": costed if costed is not None else n,
-        "net_expectancy": None,
-        "net_pnl_std": None,
-        "t_stat": None,
-        "expectancy_ci95": None,
-        "edge_verdict": "too few trades",
-        "edge_days": None,
-        "day_t_stat": None,
-    }
-    if n == 0:
-        return base
-    arr = np.asarray(net_pnls, dtype=float)
-    mean = float(arr.mean())
-    base["net_expectancy"] = round(mean, 2)
-    if n < 2:
-        return base
-    std = float(arr.std(ddof=1))
-    base["net_pnl_std"] = round(std, 2)
-    stderr = std / float(np.sqrt(n))
-    base["expectancy_ci95"] = [
-        round(mean - EDGE_Z_95 * stderr, 2),
-        round(mean + EDGE_Z_95 * stderr, 2),
-    ]
-    if std == 0:
-        return base
-    t_stat = mean / stderr
-    base["t_stat"] = round(t_stat, 2)
-    t_values = [t_stat]
-    enough = n >= EDGE_MIN_TRADES
-    if trade_dates is not None:
-        by_day = pd.Series(arr).groupby(pd.Series(list(trade_dates))).sum().to_numpy()
-        day_t = _t(by_day)
-        base["edge_days"] = len(by_day)
-        base["day_t_stat"] = None if day_t is None else round(day_t, 2)
-        t_values.append(day_t if day_t is not None else 0.0)
-        if enough and len(by_day) < EDGE_MIN_DAYS:
-            base["edge_verdict"] = "too few days"
-            return base
-    if enough:
-        if min(t_values) >= EDGE_T_THRESHOLD:
-            base["edge_verdict"] = "likely real"
-        elif max(t_values) <= -EDGE_T_THRESHOLD:
-            base["edge_verdict"] = "likely negative"
-        else:
-            base["edge_verdict"] = "not distinguishable from zero"
-    return base
-
-
-def compute_metrics(closed_trades: list[dict], start_date: str, end_date: str) -> dict:
     """Full metrics table for one strategy/mode (or the pooled portfolio)
-    over [start_date, end_date]."""
+    over [start_date, end_date].
+
+    Rupee figures (profit, drawdown, streaks, Calmar) are GROSS realized P&L on a
+    calendar-day series, unchanged. Sharpe and Sortino come from
+    `performance_stats`: NET of `costs` (one per trade, None counts as 0), one
+    observation per trading session in `sessions` (weekdays when omitted), on
+    `capital` (the assumed allocated capital; the per-strategy default when omitted).
+    """
     daily_pnl = _daily_pnl_series(closed_trades, start_date, end_date)
     equity = daily_pnl.cumsum()
 
@@ -282,14 +216,22 @@ def compute_metrics(closed_trades: list[dict], start_date: str, end_date: str) -
     expectancy = win_rate * avg_win - (1 - win_rate) * avg_loss
     payoff_ratio = (avg_win / avg_loss) if avg_loss > 0 else (float("inf") if avg_win > 0 else 0.0)
 
-    daily_std = float(daily_pnl.std(ddof=0))
     daily_mean = float(daily_pnl.mean()) if len(daily_pnl) else 0.0
-    sharpe = (daily_mean / daily_std * np.sqrt(TRADING_DAYS_PER_YEAR)) if daily_std > 0 else 0.0
 
-    downside = daily_pnl[daily_pnl < 0]
-    downside_std = float(downside.std(ddof=0)) if len(downside) > 1 else 0.0
-    sortino = (
-        (daily_mean / downside_std * np.sqrt(TRADING_DAYS_PER_YEAR)) if downside_std > 0 else 0.0
+    net_by_day: dict[str, float] = {}
+    for i, trade in enumerate(closed_trades):
+        cost = costs[i] if costs is not None and costs[i] is not None else 0.0
+        day = trade["trade_date"]
+        net_by_day[day] = net_by_day.get(day, 0.0) + float(trade["realized_pnl"]) - float(cost)
+    traded_days = net_by_day.keys()
+    if sessions is None:
+        session_list = stats.trading_sessions(start_date, end_date, traded_dates=traded_days)
+    else:
+        in_range = {d for d in traded_days if start_date <= d <= end_date}
+        session_list = sorted(set(sessions) | in_range)
+    risk = stats.risk_adjusted_summary(
+        stats.daily_pnl_values(net_by_day, session_list),
+        capital if capital else REFERENCE_CAPITAL_PER_STRATEGY,
     )
 
     max_dd, ulcer = _max_drawdown_and_ulcer(equity)
@@ -322,8 +264,7 @@ def compute_metrics(closed_trades: list[dict], start_date: str, end_date: str) -
         "avg_win": round(avg_win, 2),
         "avg_loss": round(avg_loss, 2),
         "payoff_ratio": _finite(payoff_ratio),
-        "sharpe_ratio": round(sharpe, 2),
-        "sortino_ratio": round(sortino, 2),
+        **risk,
         "calmar_ratio": _finite(calmar),
         "max_drawdown": round(max_dd, 2),
         "ulcer_index": round(ulcer, 2),

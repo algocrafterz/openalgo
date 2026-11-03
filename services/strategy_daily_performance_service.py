@@ -14,10 +14,18 @@ from collections import defaultdict
 from datetime import date, datetime
 from typing import Any
 
+from database.market_calendar_db import is_market_holiday
 from database.settings_db import get_analyze_mode
 from database.strategy_book_db import get_closed_trades
+from services.performance_insights_service import (
+    build_insights,
+    comparison_extras,
+    excursion_report,
+)
+from services.performance_stats import trading_sessions
 from services.strategy_metrics_service import (
     LEDGER_RELIABLE_SINCE,
+    REFERENCE_CAPITAL_PER_STRATEGY,
     compute_capital_view,
     compute_metrics,
     edge_stats,
@@ -98,6 +106,23 @@ def _include_set(strategy: str | None, include: list[str] | None) -> set[str]:
     return names
 
 
+def _sessions(start_date: str, end_date: str, trades: list[dict]) -> list[str]:
+    """NSE trading sessions in the window: weekdays that are not exchange holidays, plus any
+    date a trade closed on. A calendar lookup that fails falls back to weekdays."""
+    return trading_sessions(
+        start_date,
+        end_date,
+        traded_dates=[t["trade_date"] for t in trades],
+        is_holiday=lambda day: is_market_holiday(day, "NSE"),
+    )
+
+
+def _assumed_capital(capital: float | None, strategies: int) -> float:
+    """Assumed allocated capital behind the daily returns: the amount per strategy (the
+    configured control, else the reference amount) times the strategies selected."""
+    return float(capital or REFERENCE_CAPITAL_PER_STRATEGY) * max(1, strategies)
+
+
 def _edge_from_costs(trades: list[dict], costs: list[float | None]) -> dict:
     """Net-of-charges edge statistics; an unknown cost counts as 0."""
     net = [float(t["realized_pnl"]) - (c or 0.0) for t, c in zip(trades, costs, strict=True)]
@@ -141,14 +166,23 @@ def get_daily_performance(
     trades = _select(all_trades, _include_set(strategy, include), exclude)
     trades_in_range = _in_range(trades, start_date, end_date)
 
-    metrics = compute_metrics(trades_in_range, start_date, end_date)
     enriched = enrich_trades(trades_in_range, start_date, end_date)
+    included = sorted({t["strategy"] for t in trades_in_range})
+    sessions = _sessions(start_date, end_date, trades_in_range)
+    metrics = compute_metrics(
+        trades_in_range,
+        start_date,
+        end_date,
+        costs=[t["cost"] for t in enriched],
+        sessions=sessions,
+        capital=_assumed_capital(capital, len(included)),
+    )
     response = {
         "status": "success",
         "mode": mode,
         "strategy": strategy,
         "period": period,
-        "included": sorted({t["strategy"] for t in trades_in_range}),
+        "included": included,
         "excluded": sorted(set(exclude or ())),
         **metrics,
         **summarize_enrichment(enriched),
@@ -159,6 +193,9 @@ def get_daily_performance(
         "hold_stats": hold_stats(trades_in_range),
         "by_entry_hour": entry_hour_breakdown(trades_in_range),
         "by_hold_bucket": hold_bucket_breakdown(trades_in_range),
+        "insights": build_insights(
+            enriched, sessions, metrics["sharpe_ratio"], metrics["sortino_ratio"]
+        ),
     }
     response["equity_curve_net"], response["equity_net_cost_coverage"] = net_equity_curve(
         metrics["equity_curve"], enriched
@@ -210,18 +247,35 @@ def get_strategy_comparison(
     }
 
     by_strategy: dict[str, list[dict]] = defaultdict(list)
-    for t in _in_range(_select(all_trades, include, exclude), start_date, end_date):
+    all_in_range = _in_range(_select(all_trades, include, exclude), start_date, end_date)
+    for t in all_in_range:
         by_strategy[t["strategy"]].append(t)
 
     # Strategies come from the trades themselves: one whose position row was
     # reset or pruned still has history worth comparing.
+    # One calendar lookup and one signal lookup for the window, shared by every row.
+    sessions = _sessions(start_date, end_date, all_in_range)
+    enriched_all = enrich_trades(all_in_range, start_date, end_date)
+    enriched_by_strategy: dict[str, list[dict]] = defaultdict(list)
+    for t in enriched_all:
+        enriched_by_strategy[t["strategy"]].append(t)
+    ratios: dict[str, tuple[float | None, float | None]] = {}
     rows = []
     for name in sorted(by_strategy):
         trades_in_range = by_strategy[name]
-        m = compute_metrics(trades_in_range, start_date, end_date)
+        trade_costs = [t["cost"] for t in enriched_by_strategy[name]]
+        m = compute_metrics(
+            trades_in_range,
+            start_date,
+            end_date,
+            costs=trade_costs,
+            sessions=sessions,
+            capital=_assumed_capital(None, 1),
+        )
+        ratios[name] = (m["sharpe_ratio"], m["sortino_ratio"])
         costs = summarize_costs(trades_in_range)
         holds = hold_stats(trades_in_range)
-        edge = _edge_from_costs(trades_in_range, estimate_trade_costs(trades_in_range))
+        edge = _edge_from_costs(trades_in_range, trade_costs)
         rows.append(
             {
                 "strategy": name,
@@ -234,6 +288,8 @@ def get_strategy_comparison(
                 "net_profit": m["net_profit"],
                 "expectancy": m["expectancy"],
                 "sharpe_ratio": m["sharpe_ratio"],
+                "sortino_ratio": m["sortino_ratio"],
+                "ratio_warning": m["ratio_warning"],
                 "max_drawdown": m["max_drawdown"],
                 "best_win_streak": m["best_win_streak"],
                 "best_loss_streak": m["best_loss_streak"],
@@ -247,6 +303,21 @@ def get_strategy_comparison(
 
     # Best net_profit first - the comparison table's default sort answers
     # "which strategy is doing best" at a glance.
+    portfolio_metrics = compute_metrics(
+        all_in_range,
+        start_date,
+        end_date,
+        costs=[t["cost"] for t in enriched_all],
+        sessions=sessions,
+        capital=_assumed_capital(None, len(by_strategy)),
+    )
+    ratios["__portfolio__"] = (
+        portfolio_metrics["sharpe_ratio"],
+        portfolio_metrics["sortino_ratio"],
+    )
+    extras = comparison_extras(dict(enriched_by_strategy), sessions, ratios)
+    for row in rows:
+        row.update(extras["per_strategy"].get(row["strategy"], {}))
     rows.sort(key=lambda r: r["net_profit"], reverse=True)
 
     floor = LEDGER_RELIABLE_SINCE.isoformat()
@@ -258,10 +329,49 @@ def get_strategy_comparison(
             "included": sorted(by_strategy),
             "excluded": sorted(set(exclude or ())),
             "strategies": rows,
+            "portfolio": extras["portfolio"],
+            "correlation": extras["correlation"],
+            "contribution": extras["contribution"],
             "all_strategies": all_strategies,
         },
         200,
     )
+
+
+def get_excursion_quality(
+    strategy: str | None,
+    period: str,
+    start: str | None = None,
+    end: str | None = None,
+    *,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+) -> tuple[bool, dict[str, Any], int]:
+    """MAE/MFE quality for the chosen trades. Separate from the daily report because it
+    reads one-minute bars per trade; a past session's excursions are cached for hours.
+    Above EXPORT_EXCURSION_MAX_TRADES trades it is skipped and says so."""
+    mode = _current_mode()
+    all_trades = get_closed_trades(mode=mode) if period in VALID_PERIODS else []
+    window = _resolve(period, all_trades, start, end)
+    if isinstance(window, dict):
+        return False, window, 400
+    start_date, end_date = window
+    pool = _select(all_trades, _include_set(strategy, include), exclude)
+    in_range = _in_range(pool, start_date, end_date)
+    body: dict[str, Any] = {
+        "status": "success",
+        "mode": mode,
+        "start_date": start_date,
+        "end_date": end_date,
+        "excursions": None,
+    }
+    if len(in_range) > EXPORT_EXCURSION_MAX_TRADES:
+        body["message"] = "Too many trades in this range to read price bars for each one."
+        return True, body, 200
+    enriched = enrich_trades(in_range, start_date, end_date)
+    with_excursions, _covered, _total = add_excursions(enriched, start_date, end_date)
+    body["excursions"] = excursion_report(with_excursions)
+    return True, body, 200
 
 
 def get_last_session(mode: str | None = None) -> dict[str, Any] | None:

@@ -28,6 +28,8 @@ import { CloseBreakdowns } from '@/components/strategy-pnl/CloseBreakdowns'
 import { EdgeCheckCard } from '@/components/strategy-pnl/EdgeCheckCard'
 import { HoldBuckets } from '@/components/strategy-pnl/HoldBuckets'
 import { HoldStatsRow } from '@/components/strategy-pnl/HoldStats'
+import { ExcursionCard, GradeBadge, InsightsPanel } from '@/components/strategy-pnl/InsightsPanel'
+import { PortfolioComparison } from '@/components/strategy-pnl/PortfolioComparison'
 import { MetricCard } from '@/components/strategy-pnl/MetricCard'
 import { SessionSummary } from '@/components/strategy-pnl/SessionSummary'
 import { SessionTrades } from '@/components/strategy-pnl/SessionTrades'
@@ -78,6 +80,7 @@ import {
   fmtR,
   pnlClass,
   rCoverage,
+  rExcludedText,
   slippageHint,
   todayIst,
 } from '@/lib/strategyPnlView'
@@ -1021,8 +1024,9 @@ export default function StrategyDailyPerformance() {
         <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
         <span>
           History starts from the day this page was deployed - trades closed before that are not
-          reconstructed. Metrics stay in rupees, on each strategy's own realized P&L. Sharpe,
-          Sortino and Calmar are computed on rupee daily P&L and do not change with capital.
+          reconstructed. Rupee metrics stay on each strategy's own realized P&L. Sharpe and
+          Sortino are calculated on daily returns after charges and do not change with capital;
+          Calmar is still calculated on rupee daily P&L.
           Percentage-of-capital figures appear only when you enter a capital per strategy. Est.
           charges use the India intraday schedule (the placing broker's own brokerage, plus STT,
           exchange fees, stamp duty, GST), count each entry order once however many exit legs
@@ -1086,25 +1090,60 @@ export default function StrategyDailyPerformance() {
               <MetricCard label="Trades" value={String(daily.trades_count ?? 0)} />
               <MetricCard label="Expectancy" value={formatCurrency(daily.expectancy ?? 0)} />
               <MetricCard
-                label="Expectancy (R)"
-                value={fmtR(daily.expectancy_r)}
-                positive={(daily.expectancy_r ?? 0) > 0}
-                negative={(daily.expectancy_r ?? 0) < 0}
-                hint={rCoverage(daily)}
+                label="Expectancy (R, after charges)"
+                value={fmtR(daily.expectancy_net_r)}
+                positive={(daily.expectancy_net_r ?? 0) > 0}
+                negative={(daily.expectancy_net_r ?? 0) < 0}
+                hint={`${rCoverage(daily) ?? ''}, before charges ${fmtR(daily.expectancy_r)}`}
               />
-              <MetricCard label="Sharpe" value={fmtRatio(daily.sharpe_ratio)} />
-              <MetricCard label="Sortino" value={fmtRatio(daily.sortino_ratio)} />
               <MetricCard
-                label="Max Drawdown"
+                label="Sharpe"
+                value={fmtRatio(daily.sharpe_ratio)}
+                hint={daily.sharpe_ratio == null ? 'not enough sessions' : 'after charges, daily'}
+              />
+              <MetricCard
+                label="Sortino"
+                value={fmtRatio(daily.sortino_ratio)}
+                hint={daily.sortino_ratio == null ? 'not enough sessions' : 'after charges, daily'}
+              />
+              <MetricCard
+                label="Max Drawdown (before charges)"
                 value={formatCurrency(Math.abs(daily.max_drawdown ?? 0))}
                 negative
               />
             </div>
           )}
 
+          {!isToday && daily.ratio_warning && (
+            <p className="text-xs text-muted-foreground">{daily.ratio_warning}</p>
+          )}
+          {!isToday && daily.ratio_capital != null && (
+            <p className="text-xs text-muted-foreground">
+              Sharpe and Sortino use each trading session's profit after estimated charges, divided
+              by an assumed allocated capital of {formatCurrency(daily.ratio_capital)} (your amount
+              per strategy times the strategies selected, not capital actually deployed). Weekends
+              and exchange holidays are not counted.
+            </p>
+          )}
+          {!isToday && rExcludedText(daily.r_excluded) && (
+            <p className="text-xs text-muted-foreground">{rExcludedText(daily.r_excluded)}.</p>
+          )}
+
           {!isToday && <EdgeCheckCard daily={daily} formatCurrency={formatCurrency} />}
 
           {daily.hold_stats && <HoldStatsRow stats={daily.hold_stats} />}
+
+          {!isToday && daily.insights && (
+            <InsightsPanel insights={daily.insights} formatCurrency={formatCurrency} />
+          )}
+          {!isToday && (
+            <ExcursionCard
+              strategy={filter}
+              period={period}
+              range={range}
+              enabled={queriesEnabled && capitalReady}
+            />
+          )}
 
           <BrokerChargesCard
             rows={daily.by_broker ?? []}
@@ -1238,7 +1277,15 @@ export default function StrategyDailyPerformance() {
                   </TableHead>
                   <TableHead className="text-right">Avg Hold</TableHead>
                   {!isToday && <TableHead className="text-right">Sharpe</TableHead>}
-                  {!isToday && <TableHead className="text-right">Max Drawdown</TableHead>}
+                  {!isToday && <TableHead className="text-right">Max Drawdown (before charges)</TableHead>}
+                  {!isToday && <TableHead className="text-right">Gross PF</TableHead>}
+                  {!isToday && <TableHead className="text-right">Net PF</TableHead>}
+                  {!isToday && <TableHead className="text-right">Avg R (net)</TableHead>}
+                  {!isToday && <TableHead className="text-right">Return on capital</TableHead>}
+                  {!isToday && <TableHead className="text-right">Drawdown % (net)</TableHead>}
+                  {!isToday && <TableHead className="text-right">Recovery</TableHead>}
+                  {!isToday && <TableHead className="text-right">Best day share</TableHead>}
+                  {!isToday && <TableHead className="text-right">Grade</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1320,10 +1367,43 @@ export default function StrategyDailyPerformance() {
                         {formatCurrency(Math.abs(row.max_drawdown))}
                       </TableCell>
                     )}
+                    {!isToday && (
+                      <>
+                        <TableCell className="text-right font-mono">
+                          {fmtRatio(row.gross_profit_factor)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {fmtRatio(row.net_profit_factor)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {row.expectancy_net_r == null ? '—' : fmtR(row.expectancy_net_r)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {row.return_on_capital_pct == null
+                            ? '—'
+                            : `${row.return_on_capital_pct.toFixed(2)}%`}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {row.max_drawdown_pct == null ? '—' : `${row.max_drawdown_pct.toFixed(2)}%`}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {fmtRatio(row.recovery_factor)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {row.top1_day_share_pct == null ? '—' : `${row.top1_day_share_pct.toFixed(1)}%`}
+                        </TableCell>
+                        <TableCell className="text-right" title={row.overall_note ?? undefined}>
+                          <GradeBadge grade={row.overall_grade} preliminary={row.preliminary_grade} />
+                        </TableCell>
+                      </>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
+          )}
+          {!isToday && !nothingSelected && compareQuery.data && strategies.length > 0 && (
+            <PortfolioComparison data={compareQuery.data} formatCurrency={formatCurrency} />
           )}
         </CardContent>
       </Card>

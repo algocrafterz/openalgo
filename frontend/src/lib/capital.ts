@@ -133,6 +133,34 @@ const RUPEE_FIELDS = new Set([
   'mae',
   'pnl',
   'value',
+  // Insights panel
+  'capital_base',
+  'net',
+  'mean_daily',
+  'median_daily',
+  'avg_winning_day',
+  'avg_losing_day',
+  'net_ex_best_day',
+  'net_ex_best_five_days',
+  'best_day_net',
+  'net_ex_portfolio_best_day',
+  'max_drawdown_trade_sequence',
+  'avg_daily_peak_deployed',
+  'max_deployed',
+  'exp20',
+  'adverse_total',
+  'favourable_total',
+  'portfolio_dd_with',
+  'portfolio_dd_without',
+  'drawdown_change',
+])
+
+/** Arrays of two rupee bounds. */
+const RUPEE_RANGES = new Set([
+  'expectancy_ci90',
+  'expectancy_ci95',
+  'bootstrap_ci90',
+  'bootstrap_ci95',
 ])
 
 /** Sub-trees that are not rupee data and are passed through untouched. */
@@ -145,7 +173,7 @@ function scaleNode(node: unknown, factor: number): unknown {
   for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
     if (SKIPPED_KEYS.has(key)) out[key] = value
     else if (RUPEE_FIELDS.has(key) && typeof value === 'number') out[key] = value * factor
-    else if (key === 'expectancy_ci95' && Array.isArray(value))
+    else if (RUPEE_RANGES.has(key) && Array.isArray(value))
       out[key] = value.map((v) => (typeof v === 'number' ? v * factor : v))
     else out[key] = scaleNode(value, factor)
   }

@@ -20,7 +20,7 @@ export function MetricCard({
         <div className="text-xs text-muted-foreground">{label}</div>
         <div
           className={cn(
-            'text-xl font-bold font-mono mt-1',
+            'text-xl font-bold font-mono mt-1 break-words',
             positive && 'text-green-600',
             negative && 'text-red-600'
           )}

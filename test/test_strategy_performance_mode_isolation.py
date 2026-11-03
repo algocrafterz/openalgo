@@ -7,7 +7,7 @@ Run with: uv run pytest test/test_strategy_performance_mode_isolation.py -v
 """
 
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 import pytest
 
@@ -20,7 +20,9 @@ def strategy():
     init_strategy_book_db()
     name = f"MODETEST-{uuid.uuid4().hex[:8]}"
     today = date.today().isoformat()
-    now = datetime.now().replace(microsecond=0)
+    # Fixed at noon: 'now' minus a hold would cross midnight when the suite runs just after
+    # 00:00, and an intraday position that spans two dates is flagged as unreliable.
+    now = datetime.combine(date.today(), time(12, 0))
     holds = {"analyze": 30, "live": 90, "unknown": 5}
     for mode, pnl in (("analyze", 111.0), ("live", -222.0), ("unknown", 999.0)):
         db_session.add(

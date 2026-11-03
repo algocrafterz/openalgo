@@ -18,9 +18,10 @@ describe('fmtDuration', () => {
 
 describe('edge labels and fmtR', () => {
   it('maps verdicts to short labels', () => {
-    expect(edgeShortLabel('likely real')).toBe('Likely real')
-    expect(edgeShortLabel('likely negative')).toBe('Likely negative')
-    expect(edgeShortLabel('not distinguishable from zero')).toBe('Unclear')
+    expect(edgeShortLabel('positive_supported')).toBe('Supported')
+    expect(edgeShortLabel('positive_inconclusive')).toBe('Positive, unproven')
+    expect(edgeShortLabel('negative')).toBe('Negative')
+    expect(edgeShortLabel('inconclusive')).toBe('Unclear')
     expect(edgeShortLabel(undefined)).toBe('Too few trades')
   })
   it('formats R with a sign', () => {

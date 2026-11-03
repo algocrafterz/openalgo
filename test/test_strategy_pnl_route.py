@@ -489,3 +489,30 @@ def test_compare_and_export_ignore_capital(monkeypatch):
         assert client.get("/api/strategy-pnl/compare?capital=abc").status_code == 200
         assert client.get("/api/strategy-pnl/trades/export?capital=-1").status_code == 200
     assert seen == {"compare": True, "export": True}
+
+
+def test_excursions_route_passes_filter_and_period(monkeypatch):
+    monkeypatch.setattr(limiter, "enabled", False)
+    captured = {}
+
+    def fake_excursions(strategy, period, start=None, end=None, **kw):
+        captured.update(strategy=strategy, period=period, include=kw["include"], exclude=kw["exclude"])
+        return True, {"status": "success", "excursions": None}, 200
+
+    monkeypatch.setattr(strategy_pnl_module, "get_excursion_quality", fake_excursions)
+    app = _app()
+    with app.test_client() as client:
+        session_utils = _log_in(client)
+        monkeypatch.setattr(session_utils, "is_session_expiry_disabled", lambda: True)
+        response = client.get(
+            "/api/strategy-pnl/daily/excursions?strategy=ORB&strategy=VWAP&exclude=EMA&period=90d"
+        )
+
+    assert response.status_code == 200
+    assert captured == {"strategy": "ORB", "period": "90d", "include": ["VWAP"], "exclude": ["EMA"]}
+
+
+def test_excursions_route_unauthenticated_is_rejected():
+    app = _app()
+    with app.test_client() as client:
+        assert client.get("/api/strategy-pnl/daily/excursions").status_code in (302, 401)

@@ -62,25 +62,38 @@ def test_max_drawdown_ulcer_and_net_profit():
     assert m["worst_day"] == pytest.approx(-70.0)
 
 
-def test_constant_daily_pnl_gives_zero_sharpe_and_sortino_by_definition():
-    """Zero standard deviation is guarded explicitly (division by zero), not
-    treated as an undefined/infinite Sharpe - this is the module's documented
-    edge-case behavior, verified here so a future refactor cannot silently
-    change it to raise or return inf."""
+def test_sharpe_and_sortino_are_withheld_on_a_short_range():
+    """Fewer than 60 sessions: both ratios are None and a warning says why,
+    never a number (see services/performance_stats.py; the formulas themselves
+    are covered in test/test_performance_stats.py)."""
     trades = [_trade(50, "2026-01-01"), _trade(50, "2026-01-02")]
     m = compute_metrics(trades, "2026-01-01", "2026-01-02")
 
-    assert m["sharpe_ratio"] == 0.0
-    assert m["sortino_ratio"] == 0.0
+    assert m["sharpe_ratio"] is None
+    assert m["sortino_ratio"] is None
+    assert m["ratio_sessions"] == 2
+    assert "60 trading sessions" in m["ratio_warning"]
 
 
-def test_sharpe_matches_hand_computed_two_day_series():
-    # Daily totals: 10, 30. Mean=20, population std=10 (both points 10 away
-    # from the mean). Sharpe = mean/std * sqrt(252) = 2 * sqrt(252).
-    trades = [_trade(10, "2026-01-01"), _trade(30, "2026-01-02")]
-    m = compute_metrics(trades, "2026-01-01", "2026-01-02")
+def test_sharpe_matches_hand_computed_sixty_session_series():
+    # 60 sessions on capital 1,000: 12 losses of -10 and 48 gains of +30. Returns -0.01 / 0.03,
+    # mean 0.022, sample variance (12 * 0.032^2 + 48 * 0.008^2) / 59.
+    sessions = [f"2026-{3 + i // 28:02d}-{i % 28 + 1:02d}" for i in range(60)]
+    trades = [_trade(-10 if i % 5 == 0 else 30, d) for i, d in enumerate(sessions)]
+    m = compute_metrics(trades, sessions[0], sessions[-1], sessions=sessions, capital=1000.0)
 
-    assert m["sharpe_ratio"] == pytest.approx(2 * np.sqrt(252), abs=0.01)
+    std = np.sqrt((12 * 0.032**2 + 48 * 0.008**2) / 59)
+    assert m["sharpe_ratio"] == pytest.approx(0.022 / std * np.sqrt(252), abs=0.01)
+    dd = np.sqrt(12 * 0.01**2 / 60)
+    assert m["sortino_ratio"] == pytest.approx(0.022 / dd * np.sqrt(252), abs=0.01)
+
+
+def test_ratios_are_withheld_without_ten_losing_sessions():
+    sessions = [f"2026-{3 + i // 28:02d}-{i % 28 + 1:02d}" for i in range(60)]
+    trades = [_trade(10 if i % 2 == 0 else 30, d) for i, d in enumerate(sessions)]
+    m = compute_metrics(trades, sessions[0], sessions[-1], sessions=sessions, capital=1000.0)
+    assert m["sharpe_ratio"] is None and m["sortino_ratio"] is None
+    assert "10 losing sessions" in m["ratio_warning"]
 
 
 def test_zero_trade_days_are_included_as_zero_pnl_days():
@@ -272,11 +285,15 @@ def test_edge_stats_known_answer():
     assert e["net_expectancy"] == pytest.approx(25.0)
     assert e["net_pnl_std"] == pytest.approx(12.9099, abs=0.01)
     assert e["t_stat"] == pytest.approx(25 / 6.4550, abs=1e-2)
+    # Student-t, 3 degrees of freedom: 95% critical 3.182446, 90% critical 2.353363
     lo, hi = e["expectancy_ci95"]
-    assert lo == pytest.approx(25 - 1.96 * 6.4550, abs=1e-2)
-    assert hi == pytest.approx(25 + 1.96 * 6.4550, abs=1e-2)
+    assert lo == pytest.approx(25 - 3.182446 * 6.4550, abs=1e-2)
+    assert hi == pytest.approx(25 + 3.182446 * 6.4550, abs=1e-2)
+    lo90, hi90 = e["expectancy_ci90"]
+    assert lo90 == pytest.approx(25 - 2.353363 * 6.4550, abs=1e-2)
+    assert hi90 == pytest.approx(25 + 2.353363 * 6.4550, abs=1e-2)
     assert e["edge_trades"] == 4 and e["edge_cost_coverage"] == 4
-    assert e["edge_verdict"] == "too few trades"
+    assert e["edge_verdict"] == "insufficient_sample"
 
 
 def test_edge_stats_single_trade_and_zero_std():
@@ -290,7 +307,7 @@ def test_edge_stats_single_trade_and_zero_std():
 def test_edge_stats_empty():
     e = edge_stats([], costed=0)
     assert e["net_expectancy"] is None and e["t_stat"] is None
-    assert e["edge_verdict"] == "too few trades" and e["edge_trades"] == 0
+    assert e["edge_verdict"] == "insufficient_sample" and e["edge_trades"] == 0
 
 
 def _series(n, mean, spread):
@@ -300,13 +317,13 @@ def _series(n, mean, spread):
 
 def test_edge_verdicts_at_thirty_trades():
     real = edge_stats(_series(30, 10.0, 5.0), costed=30)
-    assert real["t_stat"] >= 2 and real["edge_verdict"] == "likely real"
+    assert real["t_stat"] >= 2 and real["edge_verdict"] == "positive_supported"
     neg = edge_stats(_series(30, -10.0, 5.0), costed=30)
-    assert neg["t_stat"] <= -2 and neg["edge_verdict"] == "likely negative"
+    assert neg["t_stat"] <= -2 and neg["edge_verdict"] == "negative"
     flat = edge_stats(_series(30, 0.5, 50.0), costed=30)
     assert abs(flat["t_stat"]) < 2
-    assert flat["edge_verdict"] == "not distinguishable from zero"
-    assert edge_stats(_series(29, 10.0, 5.0), costed=29)["edge_verdict"] == "too few trades"
+    assert flat["edge_verdict"] == "positive_inconclusive"
+    assert edge_stats(_series(29, 10.0, 5.0), costed=29)["edge_verdict"] == "insufficient_sample"
 
 
 def _dates(n_days, per_day):
@@ -323,7 +340,7 @@ def test_edge_day_clustering_known_answer():
 def test_edge_verdict_needs_ten_trading_days_when_dates_given():
     pnls = _series(30, 10.0, 5.0)
     assert edge_stats(pnls, costed=30, trade_dates=_dates(3, 10))["edge_verdict"] == (
-        "too few days"
+        "insufficient_sample"
     )
 
 
@@ -338,14 +355,14 @@ def test_edge_verdict_requires_day_level_agreement():
     e = edge_stats(pnls, costed=100, trade_dates=dates)
     assert e["t_stat"] >= 2
     assert e["day_t_stat"] < 2
-    assert e["edge_verdict"] == "not distinguishable from zero"
+    assert e["edge_verdict"] == "positive_inconclusive"
 
 
 def test_edge_verdict_real_when_trades_and_days_agree():
     pnls = [10.0 + (d % 3) + (5.0 if i % 2 == 0 else -5.0) for d in range(10) for i in range(4)]
     e = edge_stats(pnls, costed=40, trade_dates=_dates(10, 4))
     assert e["day_t_stat"] >= 2
-    assert e["edge_verdict"] == "likely real"
+    assert e["edge_verdict"] == "positive_supported"
 
 
 # ---- compute_capital_view ----------------------------------------------------
