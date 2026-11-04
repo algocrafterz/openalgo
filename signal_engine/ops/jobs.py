@@ -7,11 +7,13 @@ three ops phases) and each phase's step status file.
 from __future__ import annotations
 
 import csv
+import datetime
 import io
 import os
+import shutil
 import subprocess
 
-from signal_engine.ops.model import FAIL, OK, REPORTS, WARN, Check, write_phase
+from signal_engine.ops.model import FAIL, OK, REPORTS, WARN, Check, read_phase, write_phase
 
 #: Windows task -> scheduled HH:MM. Their own scripts live in signal_engine/scripts/*.ps1.
 WINDOWS_TASKS = {
@@ -31,6 +33,48 @@ CRON_PHASES = (
 )
 PHASE_FILES = ("open-day", "liveness", "close-day")
 
+#: cron and agent shells have no Windows directories on PATH, so a bare name is not found.
+WINDOWS_SCHTASKS = "/mnt/c/Windows/System32/schtasks.exe"
+#: (phase, step) -> report that step writes. These steps exit 1 when their verdict is RED: the
+#: step ran and reported a finding, which is not the same as a job that failed or never ran.
+REPORTING_STEPS = {
+    ("open-day", "check"): "open-day",
+    ("liveness", "check"): "liveness",
+    ("close-day", "jobs"): "jobs",
+    ("close-day", "logs"): "logs",
+    ("close-day", "value_areas"): "value-areas",
+}
+
+
+def schtasks_exe() -> str:
+    """Path of schtasks.exe: PATH first, then the standard WSL mount, else the bare name."""
+    found = shutil.which("schtasks.exe")
+    if found:
+        return found
+    return WINDOWS_SCHTASKS if os.path.exists(WINDOWS_SCHTASKS) else "schtasks.exe"
+
+
+def reported_red(
+    phase: str, step: str, started: str, exit_code: str, day: str, folder: str = REPORTS
+) -> bool:
+    """True when this failing step exited 1 because its own report says RED.
+
+    Anything else stays a failure: another exit code, no report, or a report written before this
+    run started (a leftover from an earlier run that this run did not replace).
+    """
+    report = REPORTING_STEPS.get((phase, step))
+    if report is None or exit_code != "1":
+        return False
+    data = read_phase(report, day, folder=folder)
+    if not data or data.get("verdict") != "RED":
+        return False
+    try:
+        began = datetime.datetime.fromisoformat(f"{day}T{started}").timestamp()
+        written = os.path.getmtime(os.path.join(folder, f"{report}-{day}.json"))
+    except (ValueError, OSError):
+        return False
+    return written >= began - 1
+
 
 def parse_schtasks(text: str) -> dict[str, dict]:
     """`schtasks /query /fo csv /v` -> {task name: row}. Columns are by header, not position."""
@@ -45,7 +89,7 @@ def parse_schtasks(text: str) -> dict[str, dict]:
 def _windows_tasks() -> dict[str, dict] | None:
     try:
         out = subprocess.run(
-            ["schtasks.exe", "/query", "/fo", "csv", "/v"],
+            [schtasks_exe(), "/query", "/fo", "csv", "/v"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -70,19 +114,29 @@ def task_check(name: str, at: str | None, row: dict | None, day: str) -> Check:
     return Check(f"task {name}", status, f"last {last}, result {result}")
 
 
-def _phase_checks(day: str) -> list[Check]:
+def _phase_checks(day: str, folder: str = REPORTS) -> list[Check]:
     checks = []
     for phase in PHASE_FILES:
-        path = os.path.join(REPORTS, f"{phase}-{day}-status.tsv")
+        path = os.path.join(folder, f"{phase}-{day}-status.tsv")
         if not os.path.exists(path):
             status = WARN if phase == "close-day" else FAIL
             checks.append(Check(f"phase {phase}", status, "no status file today"))
             continue
         with open(path, encoding="utf-8") as handle:
             steps = [line.rstrip("\n").split("\t") for line in handle][1:]
-        bad = [s for s in steps if len(s) == 4 and s[3] != "0"]
-        evidence = ", ".join(f"{s[0]} {s[1]}-{s[2]} exit {s[3]}" for s in steps if len(s) == 4)
-        checks.append(Check(f"phase {phase}", FAIL if bad else OK, evidence or "no steps recorded"))
+        steps = [s for s in steps if len(s) == 4]
+        failed = [s for s in steps if s[3] != "0"]
+        reported = [s for s in failed if reported_red(phase, s[0], s[1], s[3], day, folder)]
+        bad = [s for s in failed if s not in reported]
+        evidence = ", ".join(f"{s[0]} {s[1]}-{s[2]} exit {s[3]}" for s in steps)
+        if bad:
+            status = FAIL
+        elif reported:
+            status = WARN
+            evidence += "; it ran and reported RED (see that day's report)"
+        else:
+            status = OK
+        checks.append(Check(f"phase {phase}", status, evidence or "no steps recorded"))
     return checks
 
 

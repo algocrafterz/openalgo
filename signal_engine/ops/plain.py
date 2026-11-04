@@ -14,6 +14,10 @@ _PLAIN: dict[str, tuple[str, str]] = {
         "OpenAlgo or the trading engine is not running.",
     ),
     "OpenAlgo health": ("OpenAlgo is answering normally.", "OpenAlgo is not answering."),
+    "OpenAlgo health warning": (
+        "OpenAlgo is answering normally.",
+        "OpenAlgo is answering, but its own health monitor shows a warning (often many threads in use).",
+    ),
     "broker session": (
         "Logged in to the broker and the account balance is visible.",
         "Not logged in to the broker, or the account balance could not be read.",

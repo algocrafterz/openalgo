@@ -62,9 +62,15 @@ def _health() -> Check:
         with urllib.request.urlopen(HEALTH_URL, timeout=5) as response:  # noqa: S310 - fixed local URL
             body = json.loads(response.read().decode())
         status = body.get("status")
-        return Check(
-            "OpenAlgo health", OK if status == "pass" else FAIL, f"{HEALTH_URL} status={status}"
-        )
+        detail = f"{HEALTH_URL} status={status}"
+        if status == "pass":
+            return Check("OpenAlgo health", OK, detail)
+        if status == "warn":
+            # HTTP 200 with a warning: answering, with a monitored metric above its warning level
+            # (2026-11-04: thread count 70 against 50). Only "fail" (HTTP 503), an unknown status
+            # or no answer at all is a failure.
+            return Check("OpenAlgo health warning", WARN, detail)
+        return Check("OpenAlgo health", FAIL, detail)
     except Exception as exc:  # noqa: BLE001 - any failure is the finding
         return Check("OpenAlgo health", FAIL, f"{HEALTH_URL}: {type(exc).__name__}")
 
@@ -190,7 +196,7 @@ def _overnight_errors(day: str) -> Check:
 
 
 def _morning_tasks(day: str) -> list[Check]:
-    out = _run(["schtasks.exe", "/query", "/fo", "csv", "/v"], timeout=60)
+    out = _run([jobs.schtasks_exe(), "/query", "/fo", "csv", "/v"], timeout=60)
     if not out:
         return [Check("Windows tasks", NOT_VERIFIED, "schtasks.exe unavailable")]
     rows = jobs.parse_schtasks(out)
@@ -206,12 +212,20 @@ def _yesterday_close(day: str) -> Check:
     if not os.path.exists(path):
         return Check(f"close-day {prev}", WARN, "no status file (holiday, or it did not run)")
     with open(path, encoding="utf-8") as handle:
-        bad = [ln.split("\t")[0] for ln in handle.read().splitlines()[1:] if not ln.endswith("\t0")]
-    return Check(
-        f"close-day {prev}",
-        FAIL if bad else OK,
-        f"failed steps: {bad}" if bad else "all steps exit 0",
-    )
+        steps = [ln.split("\t") for ln in handle.read().splitlines()[1:]]
+    steps = [s for s in steps if len(s) == 4 and s[3] != "0"]
+    # A step that exited 1 because its own report says RED ran; its finding was alerted that day.
+    reported = [
+        s[0] for s in steps if jobs.reported_red("close-day", s[0], s[1], s[3], prev, REPORTS)
+    ]
+    bad = [s[0] for s in steps if s[0] not in reported]
+    if bad:
+        return Check(f"close-day {prev}", FAIL, f"failed steps: {bad}")
+    if reported:
+        return Check(
+            f"close-day {prev}", WARN, f"steps {reported} ran and reported RED (see their report)"
+        )
+    return Check(f"close-day {prev}", OK, "all steps exit 0")
 
 
 def open_day(day: str) -> str:
