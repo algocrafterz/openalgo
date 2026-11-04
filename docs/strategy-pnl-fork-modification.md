@@ -631,3 +631,4 @@ Read this before merging a newer `upstream/main`.
   Sandbox order pricing does not use it.
 - `services/strategy_performance_service.py`, `database/strategy_book_db.py`: the P&L page shows
   the current trading session only.
+- `database/master_contract_cache_hook.py`: the `cache_loaded` notification is skipped when no Socket.IO server is bound to the process (the scheduler startup CLI) and never lets a failed emit stop the cache load or the Python strategy restore; the restore is not started from a process with no server (BUG-015).

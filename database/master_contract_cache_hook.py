@@ -11,6 +11,33 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _socketio_ready() -> bool:
+    """True when a Socket.IO server is bound to this process.
+
+    The app binds one in app.py (socketio.init_app). The scheduler's startup command is a
+    short-lived CLI that imports the same object but never binds it, so socketio.server is None
+    and every emit raises AttributeError (2026-11-04: two false errors on every automatic login,
+    and the Python strategy restore after them never ran).
+    """
+    return getattr(socketio, "server", None) is not None
+
+
+def _notify_browser(payload: dict) -> None:
+    """Send the cache_loaded event, never letting a failed notification stop the caller.
+
+    Skipped when no server is bound (nobody is connected to a CLI process). Any other emit
+    failure is logged and swallowed: the cache is already loaded, and the Python strategy
+    restore that follows must not depend on a browser notification.
+    """
+    if not _socketio_ready():
+        logger.debug("No Socket.IO server in this process; cache_loaded notification skipped")
+        return
+    try:
+        socketio.emit("cache_loaded", payload)
+    except Exception:
+        logger.exception("Could not send the cache_loaded notification")
+
+
 def load_symbols_to_cache(broker: str) -> bool:
     """
     Load all symbols into memory cache after master contract download
@@ -52,15 +79,14 @@ def load_symbols_to_cache(broker: str) -> bool:
             )
 
             # Emit success event to frontend
-            socketio.emit(
-                "cache_loaded",
+            _notify_browser(
                 {
                     "status": "success",
                     "broker": broker,
                     "total_symbols": stats["total_symbols"],
                     "memory_usage_mb": stats["stats"]["memory_usage_mb"],
                     "load_time": f"{load_time:.2f}",
-                },
+                }
             )
 
             return True
@@ -68,13 +94,12 @@ def load_symbols_to_cache(broker: str) -> bool:
             logger.error(f"Failed to load symbols into cache for broker: {broker}")
 
             # Emit error event to frontend
-            socketio.emit(
-                "cache_loaded",
+            _notify_browser(
                 {
                     "status": "error",
                     "broker": broker,
                     "message": "Failed to load symbols into cache",
-                },
+                }
             )
 
             return False
@@ -83,7 +108,7 @@ def load_symbols_to_cache(broker: str) -> bool:
         logger.exception(f"Error loading symbols to cache: {e}")
 
         # Emit error event to frontend
-        socketio.emit("cache_loaded", {"status": "error", "broker": broker, "message": str(e)})
+        _notify_browser({"status": "error", "broker": broker, "message": str(e)})
 
         return False
 
@@ -103,7 +128,15 @@ def hook_into_master_contract_download(broker: str):
         # Load symbols into cache
         load_symbols_to_cache(broker)
 
-        # After successful master contract download, restore Python strategies
+        # After successful master contract download, restore Python strategies. Not from a process
+        # with no Socket.IO server (the scheduler's short-lived startup CLI): importing the
+        # strategy module there starts a second APScheduler and could launch strategy processes
+        # from a process that exits seconds later. The cache hook never reached this point there
+        # before (its emit failed first), so this keeps that behaviour; whether the CLI should
+        # restore strategies is a separate lifecycle decision. The app restores them on login.
+        if not _socketio_ready():
+            logger.info("Python strategy restore skipped: no Socket.IO server in this process")
+            return
         try:
             from blueprints.python_strategy import restore_strategies_after_login
 
