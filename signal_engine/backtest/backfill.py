@@ -40,6 +40,34 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+#: How long a read of the store waits for the OpenAlgo app to let go of the file. DuckDB lets one
+#: process hold db/historify.duckdb at a time, so while the app has it open every read from here
+#: fails at once. 2026-11-04: the app held it from 15:36, the 1m refresh lost 5 symbols and the
+#: daily refresh and the verify both crashed on their first read, so the whole daily store stayed
+#: a session behind. The longest wait ends well inside the 15:58 close_day deadline.
+LOCK_WAIT_SECONDS = 240.0
+LOCK_POLL_SECONDS = 5.0
+
+
+def _connect_read_only(db_path: str, *, wait: float | None = None, poll: float | None = None):
+    """Open the store read-only, waiting out a lock held by another process.
+
+    Only a lock conflict is waited on; any other error is raised at once.
+    """
+    import duckdb
+
+    wait = LOCK_WAIT_SECONDS if wait is None else wait
+    poll = LOCK_POLL_SECONDS if poll is None else poll
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            return duckdb.connect(db_path, read_only=True)
+        except duckdb.IOException as exc:
+            if "lock" not in str(exc).lower() or time.monotonic() >= deadline:
+                raise
+            logger.warning("historify.duckdb is locked by another process; waiting %.0fs", poll)
+            time.sleep(poll)
+
 #: About one calendar month per request. ~7,500 one-minute bars against a cap near 58,000 -
 #: deliberately conservative, because the failure mode is silent.
 #:
@@ -139,7 +167,7 @@ def coverage(interval: str = "1m", db_path: str = "db/historify.duckdb") -> pd.D
     request it under NSE, where the broker does not know it."""
     import duckdb
 
-    con = duckdb.connect(db_path, read_only=True)
+    con = _connect_read_only(db_path)
     try:
         df = con.execute(
             "SELECT symbol, exchange, count(*) AS bars, min(timestamp) AS t0, "
@@ -176,7 +204,7 @@ def _compare_to_existing(df: pd.DataFrame, symbol: str, exchange: str, interval:
 
     lo, hi = int(df["timestamp"].min()), int(df["timestamp"].max())
     try:
-        con = duckdb.connect(db_path, read_only=True)
+        con = _connect_read_only(db_path)
         try:
             existing = con.execute(
                 "SELECT timestamp, close FROM market_data WHERE symbol = ? AND "
@@ -420,7 +448,7 @@ def find_gaps(interval: str, *, expected: Callable[[dt.date, dt.date], Iterable[
     today = today or pd.Timestamp.now(tz="Asia/Kolkata").date()
     horizon = today - dt.timedelta(days=depth_days) if depth_days else None
     max_days = CHUNK_DAYS if interval == "1m" else DAILY_CHUNK_DAYS
-    con = duckdb.connect(historify_db, read_only=True)
+    con = _connect_read_only(historify_db)
     try:
         # Integer day arithmetic on the IST-shifted epoch: no dependence on the session time zone.
         df = con.execute(
@@ -542,7 +570,7 @@ def _stored_pairs(db_path: str) -> set[tuple[str, str]]:
     """Every (symbol, exchange) the store holds under any interval."""
     import duckdb
 
-    con = duckdb.connect(db_path, read_only=True)
+    con = _connect_read_only(db_path)
     try:
         rows = con.execute("SELECT DISTINCT symbol, exchange FROM market_data").fetchall()
     finally:
