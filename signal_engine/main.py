@@ -322,6 +322,12 @@ async def _handle_exit_locked(signal) -> None:
     pos = tracker.find_position(signal.symbol, signal.strategy)
     if _exit_already_in_progress(signal, pos):
         return
+    if pos is not None and getattr(pos, "time_exit_left_open", False):
+        logger.warning(
+            f"EXIT skipped for {signal.symbol} [{signal.strategy}]: the time exit could not "
+            "close it and the broker still holds it; close it by hand"
+        )
+        return
     if pos is not None:
         pos.exit_pending = True
 

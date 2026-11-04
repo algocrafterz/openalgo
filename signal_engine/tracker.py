@@ -221,6 +221,7 @@ class TrackedPosition:
     entry_order_id: str = ""
     sl_order_id: str = ""
     exit_pending: bool = False  # True while an exit handler is actively processing this position
+    time_exit_left_open: bool = False  # the time exit could not close it; the broker still holds it
     stop_filled_in_cancel: bool = False  # a stop filled while the exit sweep cancelled it
     claimed_exit: str = ""  # label of a full exit sent but unconfirmed (timed out); "" = none
     fill_price: float = 0.0  # Actual broker fill price for the entry order (0 = unknown)
@@ -1592,6 +1593,8 @@ class PositionTracker:
             # already have booked and removed it, since an earlier iteration awaited.
             if pos.exit_pending or self._positions.get(self._key(pos.symbol, pos.strategy)) is not pos:
                 continue
+            if pos.time_exit_left_open:
+                continue
 
             fired = self._evaluate_no_progress(pos, now, gates, book_data, _settings)
             if fired is None:
@@ -2107,16 +2110,50 @@ class PositionTracker:
         if net is None:
             logger.warning(f"Time exit: {key} position unreadable - closing the tracked quantity")
             return pos.quantity
-        others = sum(
-            (p.quantity if p.direction == Direction.LONG else -p.quantity)
-            for k, p in self._positions.items()
-            if k != key
-            and k not in self._square_off_orders
-            and (p.symbol, p.exchange, p.product) == (pos.symbol, pos.exchange, pos.product)
-        )
+        book = None
+        others = 0
+        for k, p in self._positions.items():
+            if (
+                k == key
+                or k in self._square_off_orders
+                or (p.symbol, p.exchange, p.product) != (pos.symbol, pos.exchange, pos.product)
+            ):
+                continue
+            if self._exit_uncertain(p):
+                if book is None:
+                    book = await fetch_orderbook() or []
+                if self._uncertain_exit_filled(p, book):
+                    continue  # its shares already left the broker's net: not another holder's
+            others += p.quantity if p.direction == Direction.LONG else -p.quantity
         own = net - others
         own_in_direction = own if pos.direction == Direction.LONG else -own
         return min(pos.quantity, own_in_direction)
+
+    @staticmethod
+    def _exit_uncertain(pos) -> bool:
+        """True when this leg's exit order timed out and is not yet settled."""
+        uncertain = order_reconcile.get_uncertain(pos.strategy, pos.symbol)
+        return uncertain is not None and uncertain.kind == "EXIT"
+
+    @staticmethod
+    def _uncertain_exit_filled(pos, book: list) -> bool:
+        """True only when the order book shows this leg's uncertain exit COMPLETE.
+
+        An uncertain exit may still be working, and its shares are then still in the broker's
+        net. Counting them as gone would let another leg whose stop just filled sell them and
+        reverse the position, so anything short of a complete order on the book keeps the old
+        count. 2026-11-04 CGPOWER: the first leg's exit had filled (net 58 to 29) but stayed
+        uncertain, so the second leg computed net 29 - 29 = 0 and sent nothing.
+        """
+        uncertain = order_reconcile.get_uncertain(pos.strategy, pos.symbol)
+        if uncertain is None or uncertain.kind != "EXIT":
+            return False
+        since = uncertain.since.replace(microsecond=0)
+        return bool(
+            find_recent_complete_order_id(
+                book, pos.symbol, uncertain.action, uncertain.quantity, since
+            )
+        )
 
     @staticmethod
     def _working_orders(book, strategies: set[str], symbols: set[str]) -> list[dict]:
@@ -2392,12 +2429,25 @@ class PositionTracker:
         TIME exit type and the order lineage the orderbook gives. No row is written for a
         position the broker still holds: a row would claim a close that did not happen.
         """
+        if not confirmed_closed:
+            # The broker still holds it. Deleting the entry leaves a live position with no stop
+            # and nothing watching it (2026-11-04 CGPOWER, open about 30 minutes until the
+            # sandbox square-off). Keep it tracked so the poll and the uncertain-exit watch
+            # still manage it, and write no close, count no trade and send no "closed" message.
+            logger.error(
+                f"Time exit: {pos.symbol} [{pos.strategy}] is still open at the broker - "
+                "kept tracked, no close recorded"
+            )
+            # No further exit may be sent for it on its own initiative: the close may be on its
+            # way, and the poll books it when the broker position reads flat.
+            pos.time_exit_left_open = True
+            return
         base_price = _break_even_base(pos)
         order_id, exit_fill = (
             await self._time_exit_order(
                 list(book), pos, started, used_order_ids if used_order_ids is not None else set()
             )
-            if confirmed_closed and started is not None else ("", None)
+            if started is not None else ("", None)
         )
         if exit_fill and base_price > 0:
             per_pos_pnl = leg_pnl(pos.direction, base_price, exit_fill, pos.quantity)
@@ -2418,24 +2468,19 @@ class PositionTracker:
                 exit_types=exit_types,
             )
         )
-        if confirmed_closed:
-            self._save_close_row(
-                pos,
-                exit_price=exit_fill,
-                total_pnl=total_pnl,
-                exit_types=exit_types,
-                order_id=order_id,
-                extra_context={
-                    "exit_class": "TIME_EXIT",
-                    "entry_order_id": pos.entry_order_id,
-                    "exit_order_id": order_id,
-                    "exit_fill": exit_fill,
-                },
-            )
-        else:
-            logger.error(
-                f"Time exit: {pos.symbol} is still open at the broker - no closing row written"
-            )
+        self._save_close_row(
+            pos,
+            exit_price=exit_fill,
+            total_pnl=total_pnl,
+            exit_types=exit_types,
+            order_id=order_id,
+            extra_context={
+                "exit_class": "TIME_EXIT",
+                "entry_order_id": pos.entry_order_id,
+                "exit_order_id": order_id,
+                "exit_fill": exit_fill,
+            },
+        )
         self._risk_engine.record_close(pnl=total_pnl, strategy=pos.strategy, symbol=pos.symbol)
         self._day_trades += 1
         self._day_time_exits += 1
