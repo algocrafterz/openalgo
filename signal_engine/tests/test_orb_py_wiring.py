@@ -159,7 +159,7 @@ class TestExitPlanAndOwner:
     def test_shipped_config_runs_orb_py_paper_only_with_tracker_exits(self):
         e = settings.runner.strategies["ORB-PY"]
         assert (e.signal_source, e.exit_plan, e.exit_owner) == ("python", "orb_tp1_tp15", "targets")
-        assert e.paper_only is True and e.supersedes_pine_tag == "ORB"
+        assert e.paper_only is True and e.supersedes_pine_tag is None
         assert len(e.universe) == 24 and "BHEL" not in e.universe
 
     def test_the_tracker_keeps_its_exits_for_orb_py(self):
@@ -172,10 +172,9 @@ class TestExitPlanAndOwner:
         d = build_exits(settings.runner, "ORB-PY", FakePositions(_pos()), FakeBroker())
         assert isinstance(d, TargetExitDriver)
 
-    def test_pine_orb_entries_are_superseded_only_on_the_listed_symbols(self):
-        assert single_source.pine_superseded(settings.runner, "ORB", "SBIN") is True
+    def test_pine_orb_entries_are_not_superseded_so_both_orbs_trade(self):
+        assert single_source.pine_superseded(settings.runner, "ORB", "SBIN") is False
         assert single_source.pine_superseded(settings.runner, "ORB", "ZOMATO") is False
-        assert single_source.pine_superseded(settings.runner, "BREAKOUT", "SBIN") is False
 
 
 def _load(tmp_path, monkeypatch, mutate):

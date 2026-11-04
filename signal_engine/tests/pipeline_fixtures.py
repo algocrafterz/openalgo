@@ -16,8 +16,7 @@ def _bracket_trade_results():
 
 
 def _valid_message():
-    # VBL, not RELIANCE: ORB-PY supersedes the Pine ORB entry alerts on its own symbols, and these
-    # tests exercise the ordinary Pine entry path.
+    # VBL, not RELIANCE: a symbol outside ORB-PY's universe, so these tests exercise the plain Pine path.
     return "ORB LONG\nSymbol: VBL\nEntry: 2500\nSL: 2485\nTP: 2540"
 
 

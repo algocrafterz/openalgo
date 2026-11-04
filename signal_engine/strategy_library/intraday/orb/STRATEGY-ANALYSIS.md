@@ -1000,9 +1000,10 @@ would change the view:
 - **What changed:** A Python copy of the ORB (tag `ORB-PY`, `strategy_core/orb.py`) now runs in the
   signal runner, paper only. It copies the Pine build that TradingView actually ran for the paper
   alerts of 2026-09-22 to 2026-10-27 (the file before commit c2a127d4a), not the `orb.pine` now in the
-  repo. For the 24 symbols that produced those alerts, only ORB-PY places orders. The Pine ORB entry
-  alerts for those symbols are stored as declined rows so the two can be compared. Pine ORB alerts for
-  any other symbol trade as before.
+  repo. ORB-PY covers the 24 symbols that produced those alerts. From 2026-11-04 (owner's request) the
+  Pine ORB and ORB-PY both place paper orders, each under its own tag, so both show on the Strategy
+  P&L pages. On a symbol both trade, the sandbox position is the combined quantity; the engine keeps
+  shares and exits per tag.
 - **Entry:** Same rules as that Pine build: ORB15 (09:15 to 09:30), close beyond the range by 0.5%,
   volume at least 1.2 times the 50-bar average, two-of-three direction veto, entry on the next bar
   from 09:45 to before 11:00, one entry per symbol per day. One vote is not modelled: NIFTY against

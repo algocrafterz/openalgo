@@ -6511,8 +6511,9 @@ Found in the 2026-10-26..30 sandbox week (bug tracker BUG-001, 003, 004, 006).
 
 A third Python runner strategy, `ORB-PY`: the Pine ORB build that TradingView ran for the paper alerts
 (before commit c2a127d4a), ported to `strategy_core/orb.py` and wrapped by `pipeline/strategies/orb.py`.
-Paper only. `runner.strategies.ORB-PY` lists 24 symbols and sets `supersedes_pine_tag: ORB`, so on those
-symbols the Pine ORB entry alerts are stored as declined rows and only ORB-PY trades.
+Paper only. `runner.strategies.ORB-PY` lists 24 symbols. `supersedes_pine_tag` is null (from 2026-11-04), so the Pine
+ORB and ORB-PY both place paper orders and each shows under its own tag on the Strategy P&L pages. The sandbox
+nets positions per symbol, so the broker-side position is the sum; the engine attributes per tag.
 
 - **Signal parity:** 106 of the 111 Pine entry alerts of 2026-09-22 to 2026-10-27 are reproduced with the same
   side and stop. The Pine's NIFTY-versus-VWAP vote is not modelled. The closing-auction bar is excluded from

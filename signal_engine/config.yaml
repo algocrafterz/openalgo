@@ -671,9 +671,11 @@ runner:
     # reproduces 106 (side, bar and stop); the NIFTY-versus-VWAP vote of the Pine is not modelled.
     # Exits keep the Pine ORB's shape: the runner sends 50% at TP1 and the rest at TP1.5, and the
     # tracker keeps its no-progress, profit-lock, runner-stop and 14:45 time exits (exit_owner targets).
-    # supersedes_pine_tag ORB: for the symbols listed below only ORB-PY places orders; the Pine ORB
-    # entry alerts for them are stored as declined rows so the two can be compared. Pine ORB alerts
-    # for any other symbol trade as before. Exit alerts are never suppressed.
+    # supersedes_pine_tag null (changed 2026-11-04 at the owner's request): the Pine ORB and ORB-PY
+    # BOTH place paper orders, so each shows under its own tag on the OpenAlgo Strategy P&L pages.
+    # The sandbox nets positions per symbol and product, so on a symbol both trade the broker-side
+    # position shows the combined quantity; the engine attributes shares and exits per strategy tag.
+    # Each strategy keeps its own Rs 1,00,000 sizing pool and risk book in ANALYZE mode.
     # Decision: after 15 to 20 sessions compare the Pine ORB with ORB-PY and keep the better one,
     # disabling the other (as with BREAKINGTRADE and BREAKINGTRADE-RI).
     ORB-PY:
@@ -681,7 +683,7 @@ runner:
       exit_plan: orb_tp1_tp15
       exit_owner: targets
       paper_only: true
-      supersedes_pine_tag: ORB
+      supersedes_pine_tag: null
       paper_limits: mode
       max_entries_per_direction_per_day: null   # the Pine takes one entry per symbol per session
       universe: [RELIANCE, NATIONALUM, INFY, INDUSINDBK, VEDL, TCS, TATASTEEL, PFC, JSWENERGY,
