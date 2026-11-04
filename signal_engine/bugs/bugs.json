@@ -92,10 +92,25 @@
           "at": "2026-11-01T07:50:57+05:30",
           "status": "fixed",
           "note": "plain summary added"
+        },
+        {
+          "at": "2026-11-04T13:30:21+05:30",
+          "status": "fixed",
+          "note": "2026-11-02 and 2026-11-03 reviewed (Phase B): NOT EXERCISED. The path needs an exit order that times out and then fills. Both days show 0 'Timeout sending order', 0 EXIT UNCERTAIN and no ambiguous-exit lines in signal_engine_analyze_<day>.log; every exit got an order id and a fill. Status stays fixed. Proves it: an exit that times out and then fills, booked in trades.db under that exit's own order id with its real label (not the stop id, not 'SL'). The BUG-007 fix makes this trigger rarer."
+        },
+        {
+          "at": "2026-11-04T15:42:17+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-04] 2026-11-04: path exercised. Exits timed out on AXISBANK, TATAPOWER, HDFCBANK, COALINDIA, NESTLEIND and CGPOWER (signal_engine_analyze_2026-11-04.log: 'timed out and the book is clean: watching 92s for a late fill before any resend'; AXISBANK 'closed the duplicate with BUY'). I did not check how the late fills were labelled in trades.db, so whether the fix held is unconfirmed."
+        },
+        {
+          "at": "2026-11-04T15:43:35+05:30",
+          "status": "fixed",
+          "note": "2026-11-04 (Phase D side check, before the review's own note): path EXERCISED. Exits timed out and later filled (AXISBANK, TATAPOWER, HDFCBANK, COALINDIA, NESTLEIND). trades.db: of 45 'Closed by tracker' rows on 11-04, 38 are booked under an order id that the core log shows as a MARKET order for that symbol, with their real label (TRAILING_STOP or NO-PROGRESS); the 7 labelled (SL) are stop orders that triggered ('@ SL' in the core log) and are booked under their own SL id, which is correct. No timed-out MARKET exit was booked under a stop id or labelled SL. This supports the fix for the booking; it is NOT promoted to verified because the same day shows AXISBANK exit SELL 154 filling 3 times after repeated timeouts (closed by a BUY duplicate-correction), and BUG-017 (CGPOWER). Decide with /resolve verify."
         }
       ],
       "created_at": "2026-10-31T14:15:18+05:30",
-      "updated_at": "2026-11-01T07:50:57+05:30",
+      "updated_at": "2026-11-04T15:43:35+05:30",
       "plain": "When the broker was slow to confirm a sale, the system wrote the wrong order number on the trade and called it a stop-loss exit. The money was right; the record was wrong."
     },
     {
@@ -230,10 +245,20 @@
           "at": "2026-11-01T07:50:57+05:30",
           "status": "fixed",
           "note": "plain summary added"
+        },
+        {
+          "at": "2026-11-04T13:30:21+05:30",
+          "status": "fixed",
+          "note": "2026-11-02 and 2026-11-03 reviewed (Phase B): NOT EXERCISED. The path needs an engine restart while a strategy holds a position. 11-02 ran one session 08:52-16:00; 11-03 one session 08:51-16:00. The only restarts (11-02 23:57, 11-03 00:49, 19:29, 20:19) were outside market hours with the book flat (eod-2026-11-02 and eod-2026-11-03: 'still open at end of session : 0'), and there were 0 'Reconciled at startup' lines. Status stays fixed. Proves it: an in-session restart with a held position, then a new entry on that symbol for that strategy declined ('symbol already held by this strategy')."
+        },
+        {
+          "at": "2026-11-04T15:42:17+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-04] 2026-11-04: not exercised. I looked for an engine restart or startup reconcile in signal_engine_analyze_2026-11-04.log (restart, startup reconcile) and found none during the session."
         }
       ],
       "created_at": "2026-10-31T14:15:20+05:30",
-      "updated_at": "2026-11-01T07:50:57+05:30",
+      "updated_at": "2026-11-04T15:42:17+05:30",
       "plain": "After a restart, a strategy could buy a stock it already held. The new trade replaced the old one in the system, and the old trade lost its safety stop."
     },
     {
@@ -287,10 +312,20 @@
           "at": "2026-11-01T07:50:57+05:30",
           "status": "fixed",
           "note": "plain summary added"
+        },
+        {
+          "at": "2026-11-04T13:30:21+05:30",
+          "status": "fixed",
+          "note": "2026-11-02 and 2026-11-03 reviewed (Phase B): NOT EXERCISED. The path needs a restart after one strategy's stop filled while another strategy still held the same symbol. No in-session restart on either day (single sessions 08:52-16:00 and 08:51-16:00), book flat at every restart, 0 'Reconciled at startup' lines. Status stays fixed. Proves it: that restart scenario shows a 'Reconciled at startup: ... closed by this strategy's own order' line and an EXIT row carrying that order id."
+        },
+        {
+          "at": "2026-11-04T15:42:17+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-04] 2026-11-04: not exercised. No engine restart or startup reconcile in the log, so the startup path did not run. The CGPOWER multi-strategy time exit is a different path."
         }
       ],
       "created_at": "2026-10-31T14:15:21+05:30",
-      "updated_at": "2026-11-01T07:50:57+05:30",
+      "updated_at": "2026-11-04T15:42:17+05:30",
       "plain": "After a restart, a trade closed by its stop-loss was never recorded if another strategy held the same stock. The loss (HDFCBANK, Rs 1,049) was missing from the books."
     },
     {
@@ -357,7 +392,7 @@
       "title": "Sizing decline says entry price too high when the entry is below the strategy's minimum price",
       "kind": "BUG",
       "severity": "LOW",
-      "status": "fixed",
+      "status": "verified",
       "area": "signal_engine",
       "strategies": [
         "BREAKOUT",
@@ -374,8 +409,8 @@
       ],
       "root_cause": "main._resolve_entry_quantity used one fixed message for every zero-quantity cause.",
       "fix": "RiskEngine.zero_quantity_reason names the price band or the risk budget. Tests: test_risk_sizing.py TestZeroQuantityReason.",
-      "fix_commit": "",
-      "verification": "",
+      "fix_commit": "adae1b78a",
+      "verification": "2026-11-03 (Phase B review): the one zero-size sizing decline after the fix, RECLTD 10:25:01 (ORB, entry 285.55, min price 300), is worded 'below the strategy's minimum price 300' in both the engine log and trades.db (status DECLINED, message '[sizing] Sizing returned 0 ... minimum price 300'). The old 'entry price too high' wording appears in trades.db 20 days between 09-21 and 10-29 and on none of 11-02/11-03. Engine started 11-03 08:51 on the fixed code. Unit tests test_risk_sizing.py TestZeroQuantityReason: 3 pass. Scope: only the minimum-price branch was exercised live; the maximum-price and risk-budget branches are covered by unit tests only.",
       "sources": [],
       "history": [
         {
@@ -402,10 +437,15 @@
           "at": "2026-11-01T07:50:57+05:30",
           "status": "fixed",
           "note": "plain summary added"
+        },
+        {
+          "at": "2026-11-04T13:30:11+05:30",
+          "status": "verified",
+          "note": "updated"
         }
       ],
       "created_at": "2026-10-31T14:15:22+05:30",
-      "updated_at": "2026-11-01T07:50:57+05:30",
+      "updated_at": "2026-11-04T13:30:11+05:30",
       "plain": "A skipped trade said the price was too high when the real reason was that it was below the strategy's minimum price. Only the message was wrong."
     },
     {
@@ -413,30 +453,33 @@
       "title": "Order and history calls time out 25-30 s after 5-minute candle closes",
       "kind": "EXECUTION",
       "severity": "MEDIUM",
-      "status": "fixed",
+      "status": "open",
       "area": "openalgo-core",
       "strategies": [],
       "first_seen": "2026-10-26",
-      "last_seen": "2026-10-30",
+      "last_seen": "2026-11-04",
       "occurrences": [
         "2026-10-26",
         "2026-10-27",
         "2026-10-28",
         "2026-10-29",
-        "2026-10-30"
+        "2026-10-30",
+        "2026-11-04"
       ],
       "impact": "Order timeouts drive every bookkeeping bug above; a 20-minute positionbook outage on 10-28 left the engine blind.",
       "evidence": [
         "10-30: 12 Timeout sending order at 10:15, 10:25, 10:40, 11:15",
-        "execution-health: Timeout sending order x12, slow sandbox place_order above 5 s x10, limiter critical-lane max wait 13.4 s, refused calls 1447"
+        "execution-health: Timeout sending order x12, slow sandbox place_order above 5 s x10, limiter critical-lane max wait 13.4 s, refused calls 1447",
+        "Reopen criteria from the Phase B verification met on 2026-11-04: 34 'Timeout sending order' (first 10:00:58, last 14:45:26; AXISBANK x6, COALINDIA x3, others) and 38 core 'Slow sandbox place_order' calls above 20 s of 61 logged (48 above 5 s, 43 above 15 s), longest 354,210 ms (CGPOWER 15:15:43), then 336,951 ms (RELIANCE 15:00:54), 268,422 ms (LAURUSLABS 15:09:03), 264,432 ms (SHRIRAMFIN 14:10:03). In every one the price stage dominates (e.g. 353,913 of 354,210 ms) and execute is under 600 ms: the quote lookup inside place_order stalls, it is not the sandbox fill lock. The 20 s order_timeout covers neither. The 2 and 3 Nov verification (max 12.5 s, 0 timeouts) still describes those two days."
       ],
-      "root_cause": "Not the rate limiter (critical-lane wait 0 at 10:15 on 10-30). The sandbox executes fills one at a time under ExecutionEngine._position_lock (class-wide, also guards the shared funds row): six orders at 10:15:23 took 3.7/3.8/5.3/8.7/10.4/12.7 s (execute stage), so every order past the 5 s client timeout became uncertain.",
+      "root_cause": "Two separate causes. (A) 2026-10-30: sandbox fills serialised under ExecutionEngine._position_lock (fixed by the 20 s order_timeout; verified 11-02, 11-03). (B) 2026-11-04: the Flattrade GetQuotes call inside sandbox place_order hangs. Of 61 slow place_order calls the price stage was 99% of the time in every one (max 353,913 of 354,210 ms), execute under 600 ms. The shared HTTP client waits up to 120 s per call (utils/httpx_client.py REQUEST_TIMEOUT_SECONDS) and broker/flattrade/api/data.py:167 retries once, which fits 354 s. The Flattrade limiter's own latency_max reached 744 s from about 12:00 and 120 of 372 summaries show max over 20 s; the critical lane waited at most 32.5 s, so it is not our limiter queue. 20 s order_timeout cannot cover this. Mitigation options that change execution semantics and need owner approval: a short timeout with no retry for quote reads made inside place_order, or pricing a sandbox MARKET exit from the engine's own last tick.",
       "fix": "signal_engine: placeorder uses api.order_timeout 20 s (other calls stay 5 s), covering the measured burst; genuine timeouts still reconcile and watch for late fills. Test: test_order_timeout.py. The sandbox lock itself is not changed: b6887f319 logs the time inside the lock per fill, needed before narrowing it.",
-      "fix_commit": "",
-      "verification": "",
+      "fix_commit": "825caca1c",
+      "verification": "2026-11-02 and 2026-11-03 (Phase B review): the same metric before and after. 10-30: 10 sandbox place_order calls over 5 s and 12 'Timeout sending order'. 11-02: 10 calls over 5 s (max 12.5 s) and 0 timeouts; 11-03: 2 calls over 5 s (max 11.7 s) and 0 timeouts. All 12 were traced in the engine log: each got an order id and a fill, none EXIT UNCERTAIN, none >20 s. Bursts: 11-02 10:20:50-52 three exits at 5.7/6.4/7.6 s all booked; cycles with 4+ submitted: 11-02 09:50 (5), 11-03 09:45 (5), 09:50 (5), 09:55 (4). Fix commit 825caca1c (10-31 22:53) predates both engine starts (11-02 08:52, 11-03 08:51).",
       "sources": [
         "signal_engine/reports/execution-health-2026-10-29.md",
-        "signal_engine/reports/execution-health-2026-10-30.md"
+        "signal_engine/reports/execution-health-2026-10-30.md",
+        "signal_engine/logs/signal_engine_analyze_2026-11-04.log"
       ],
       "history": [
         {
@@ -483,10 +526,30 @@
           "at": "2026-11-01T07:50:57+05:30",
           "status": "fixed",
           "note": "plain summary added"
+        },
+        {
+          "at": "2026-11-04T13:30:11+05:30",
+          "status": "verified",
+          "note": "updated"
+        },
+        {
+          "at": "2026-11-04T13:30:21+05:30",
+          "status": "verified",
+          "note": "Phase B finding, not a new bug: the stage that dominated 9 of the 12 slow orders (>5 s) on 11-02/11-03 was the price lookup inside place_order (5.5-12.4 s, e.g. HDFCBANK 11,620 ms, ABB 12,445 ms); only 3 were the execute-stage lock the original root cause named. The 20 s order timeout covers both. Headroom: worst case seen 12.5 s against 20 s. Reopen if a 'Timeout sending order' appears or a place_order total exceeds 15 s."
+        },
+        {
+          "at": "2026-11-04T15:43:35+05:30",
+          "status": "open",
+          "note": "seen on 2026-11-04: recurred after being verified, reopened"
+        },
+        {
+          "at": "2026-11-04T21:12:04+05:30",
+          "status": "open",
+          "note": "updated"
         }
       ],
       "created_at": "2026-10-31T14:15:22+05:30",
-      "updated_at": "2026-11-01T07:50:57+05:30",
+      "updated_at": "2026-11-04T21:12:04+05:30",
       "plain": "When several orders went out together after a 5-minute candle, the sandbox filled them one at a time. Orders that took over 5 seconds looked failed to the engine, which caused the record-keeping problems above."
     },
     {
@@ -744,6 +807,357 @@
       "created_at": "2026-10-31T18:54:09+05:30",
       "updated_at": "2026-11-01T07:50:58+05:30",
       "plain": "Two parts of the system calculated value areas (VAH / POC / VAL) differently, so backtest results from one did not match the other."
+    },
+    {
+      "id": "BUG-013",
+      "title": "Scheduled-jobs check turns every RED morning into a failed job, so open-day stays RED each day",
+      "plain": "The morning readiness check shows RED every day even when the stack is fine, because it counts yesterday's own RED result as a failed job. A real alert would be buried in the noise.",
+      "kind": "DATA",
+      "severity": "MEDIUM",
+      "status": "fixed",
+      "area": "ops",
+      "strategies": [],
+      "first_seen": "2026-11-03",
+      "last_seen": "2026-11-03",
+      "occurrences": [
+        "2026-11-03"
+      ],
+      "impact": "open-day reports RED (and sends a Telegram alert) every trading day since 2 Nov with no real fault; a genuine RED is indistinguishable. Also the Windows task check cannot run from cron.",
+      "evidence": [
+        "close-day status tsv: jobs exit 1 on 2026-10-30 (manual 17:34 re-run), 2026-11-02, 2026-11-03. jobs-2026-11-02/03.json: only FAIL is 'phase open-day: check exit 1'. open-day-2026-11-02/03/04.json: only FAIL is 'close-day <prev>: failed steps [jobs]'. All other 12 open-day checks OK on 11-04."
+      ],
+      "root_cause": "Two parts. (1) Loop: ops step exit 1 means 'verdict RED', but jobs._phase_checks and readiness._yesterday_close read any nonzero step exit as 'job failed/did not run'. A RED open-day makes that day's jobs RED (exit 1), which makes the next open-day RED, indefinitely. (2) schtasks.exe is called by bare name (jobs.py:48, readiness.py:193); it is not on PATH under cron or the agent shell, but /mnt/c/Windows/System32/schtasks.exe works, so the Windows task audit is always NOT VERIFIED.",
+      "fix": "signal_engine/ops/jobs.py: schtasks_exe() resolves PATH then /mnt/c/Windows/System32/schtasks.exe; reported_red() treats a step that exited 1 with its own fresh RED report as ran-and-reported (WARN), while other exit codes, a missing report or a report older than the run stay FAIL. readiness.py uses both (schtasks path, _yesterday_close). 4 regression tests in signal_engine/tests/test_ops_phases.py (11 pass). Uncommitted. Pre-change 11-04 open-day report backed up at ~/.hermes/cache/scratch/bug013/.",
+      "fix_commit": "299606651",
+      "verification": "",
+      "sources": [
+        "signal_engine/reports/jobs-2026-11-03.md",
+        "signal_engine/reports/open-day-2026-11-04.md"
+      ],
+      "history": [
+        {
+          "at": "2026-11-04T13:09:16+05:30",
+          "status": "in_progress",
+          "note": "recorded"
+        },
+        {
+          "at": "2026-11-04T13:11:15+05:30",
+          "status": "fixed",
+          "note": "Verify with: 2026-11-04 15:36 close-day writes jobs-2026-11-04 with no FAIL from phase open-day, and 2026-11-05 09:12 open-day shows close-day 2026-11-04 OK or WARN, not FAIL. Replay of 11-03 evidence already gives WARN."
+        },
+        {
+          "at": "2026-11-04T15:42:17+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-04] 2026-11-04: partly exercised. open-day was RED at 09:12 and jobs-2026-11-04.md recorded it as WARN ('it ran and reported RED'), not a failed job, which is the fixed behaviour. The close-day phase still FAILs in jobs-2026-11-04.md, but because the logs and backfill steps exited 1, which is a separate cause."
+        },
+        {
+          "at": "2026-11-04T21:23:48+05:30",
+          "status": "fixed",
+          "note": "2026-11-04 night: extended REPORTING_STEPS to close-day logs and value_areas (both exit 1 on a RED verdict, confirmed from today's logs and value-areas reports); backfill stays a failure. Test added. Acceptance criterion now reads: tomorrow's open-day close-day line must not fail because a step reported RED (today it will still FAIL, on the genuine backfill failure, BUG-018)."
+        },
+        {
+          "at": "2026-11-04T22:01:11+05:30",
+          "status": "fixed",
+          "note": "2026-11-04 night: acceptance criterion 1 MET from live evidence. jobs-2026-11-04.md (written by the 15:36 cron) shows 'phase open-day ... exit 1 ... it ran and reported RED' as WARN, not FAIL. Criterion 2 (the 2026-11-05 09:12 open-day: yesterday's close-day OK or WARN, not FAIL because a step reported RED) is still pending; expect it to show FAIL for the genuine backfill step of 11-04 only, and the 11-04 evening backfill re-run does not rewrite close-day-2026-11-04-status.tsv. Stays fixed."
+        },
+        {
+          "at": "2026-11-04T22:06:38+05:30",
+          "status": "fixed",
+          "note": "updated"
+        }
+      ],
+      "created_at": "2026-11-04T13:09:16+05:30",
+      "updated_at": "2026-11-04T22:06:38+05:30"
+    },
+    {
+      "id": "BUG-014",
+      "title": "Readiness check reports a healthy OpenAlgo as 'not answering' when its health status is warn",
+      "plain": "The morning readiness check calls OpenAlgo 'not answering' whenever its health status is a warning, even though it is answering normally. That raises a false RED for a problem that does not exist.",
+      "kind": "BUG",
+      "severity": "LOW",
+      "status": "fixed",
+      "area": "ops",
+      "strategies": [],
+      "first_seen": "2026-11-04",
+      "last_seen": "2026-11-04",
+      "occurrences": [
+        "2026-11-04"
+      ],
+      "impact": "An open-day run after about 09:30 IST reports FAIL and RED for a server that returns HTTP 200. The 09:12 cron run passes only because the thread count has not yet risen. A real outage is hidden among false alarms.",
+      "evidence": [
+        "signal_engine/ops/readiness.py:66 maps any status other than 'pass' to FAIL. 2026-11-04 13:10 open-day re-run: 'OpenAlgo health: http://127.0.0.1:5000/health/status status=warn' FAIL while curl returned HTTP 200. db/health.db latest row: thread_count=70, thread_status=warn, every other component pass. Warn samples on every trading day 2026-10-28 to 2026-11-04."
+      ],
+      "root_cause": "readiness._health returns OK only for 'pass' and FAIL for everything else. The endpoint's contract (blueprints/health.py) is pass, warn, fail, with HTTP 503 only on fail. Expected mapping: pass to OK, warn to WARN, fail or HTTP 503 or unreachable to FAIL. The warn itself is the thread count above its 50 threshold (a separate matter, not part of this entry).",
+      "fix": "signal_engine/ops/readiness.py _health: pass is OK, warn is WARN (check 'OpenAlgo health warning', plain sentence in ops/plain.py), fail, an unknown status, HTTP 503 and an unreachable endpoint stay FAIL. Tests in signal_engine/tests/test_ops_phases.py (3). Uncommitted. A mid-day run changes from RED to AMBER; 09:12 unchanged.",
+      "fix_commit": "299606651",
+      "verification": "",
+      "sources": [
+        "signal_engine/ops/readiness.py"
+      ],
+      "history": [
+        {
+          "at": "2026-11-04T13:52:33+05:30",
+          "status": "open",
+          "note": "recorded"
+        },
+        {
+          "at": "2026-11-04T21:23:48+05:30",
+          "status": "fixed",
+          "note": "updated"
+        },
+        {
+          "at": "2026-11-04T22:06:39+05:30",
+          "status": "fixed",
+          "note": "updated"
+        }
+      ],
+      "created_at": "2026-11-04T13:52:33+05:30",
+      "updated_at": "2026-11-04T22:06:39+05:30"
+    },
+    {
+      "id": "BUG-015",
+      "title": "Scheduler auto-login logs a cache-notification error on every master contract download and skips the Python strategy restore",
+      "plain": "Every automatic morning login logs two false errors after the symbols load correctly. They make the end-of-day report show a FAIL for application errors every day, and they hide any real error. No trade was affected.",
+      "kind": "BUG",
+      "severity": "LOW",
+      "status": "fixed",
+      "area": "openalgo-core",
+      "strategies": [],
+      "first_seen": "2026-11-03",
+      "last_seen": "2026-11-04",
+      "occurrences": [
+        "2026-11-03",
+        "2026-11-04"
+      ],
+      "impact": "The EOD check 'OpenAlgo app errors today' FAILs daily (49 errors on 2026-11-03) and open-day shows a WARN, both from this one cause, so a real app error is buried. In the scheduler process the post-login Python strategy restore never runs; on this install that restore finds nothing pending (1 strategy, 'No pending strategies to start'), so no effect was observed.",
+      "evidence": [
+        "log/openalgo_2026-11-04.log 08:50:28: 'Successfully loaded 164011 symbols into cache' then 'Error loading symbols to cache: NoneType has no attribute emit' then 'Error in master contract cache hook' (4 ms later, same cause); the catch-up tasks, 'Master contract download completed and confirmed ... 164011 symbols' and 'Auto-login successful' follow at 08:50:28-29. 56 records in log/errors.jsonl = 28 events x 2 records, 10-27 to 11-04. Main logs 10-21 to 11-04: 57 cache loads, 36 with the error, and each of the 36 has openalgoscheduler lines within 90 s; of the 21 without the error, 20 show the Python strategy restore line and the other (11-02 08:46:08) has the error 1 s later. In 35 of the 36 failing loads there is no Python strategy restore line within 30 s.",
+        "logs-2026-11-04.md: recurring x4 from 01:21:14 database.master_contract_cache_hook: Error loading symbols to cache: 'NoneType' object has no attribute 'emit'"
+      ],
+      "root_cause": "The scheduler 'startup' is a short-lived CLI process. It imports extensions.socketio, a SerializedSocketIO that was never bound to a Flask app (socketio.init_app is only called in app.py:180), so socketio.server is None and emit() raises AttributeError. database/master_contract_cache_hook.py:55 emits unguarded after the cache load has succeeded; the except block at line 86 emits again unguarded, so the second exception escapes load_symbols_to_cache, is caught at hook_into_master_contract_download line 119, and skips the Python strategy restore that follows (lines 106-114). Not an init race or shutdown race: deterministic for every download run from the scheduler process. Same defect class as the 2026-09-29 Flattrade failure, fixed in signal_engine/scripts/openalgoscheduler.py _detach_serverless_socketio (commit 1507b167a) for broker.<name>.database.master_contract_db only, which guards with 'if socketio'. The cache hook imports the same object and was missed. Note the hook has no 'if socketio' guard, so setting its module attribute to None would raise the same error. The fix lives in OpenAlgo core (needs owner approval and a line in docs/strategy-pnl-fork-modification.md) or in a scheduler-side stub with a no-op emit().",
+      "fix": "database/master_contract_cache_hook.py (core, uncommitted): _notify_browser skips the cache_loaded emit when socketio.server is None and swallows any other emit failure with logger.exception, at all three emit sites; hook_into_master_contract_download no longer starts the Python strategy restore from a process with no Socket.IO server. Why that last part: with the false error gone the restore would now import blueprints.python_strategy inside the short-lived scheduler CLI, which starts a second APScheduler and could launch strategy processes there; before the fix the restore never ran there, so this keeps that behaviour and the question stays a separate decision. In the app (server bound) browser notifications are unchanged and a failed emit cannot block the restore. Tests: test/test_master_contract_cache_hook_socketio.py 7, test_gthread_core_mode_and_cache_routes + test_gthread_integration 20, session/cache tests 12. Line added to docs/strategy-pnl-fork-modification.md. Full gthread suite run (see report).",
+      "fix_commit": "5cf355a28",
+      "verification": "",
+      "sources": [
+        "signal_engine/reports/eod-2026-11-03.md",
+        "signal_engine/reports/open-day-2026-11-04.md",
+        "signal_engine/reports/logs-2026-11-04.md"
+      ],
+      "history": [
+        {
+          "at": "2026-11-04T13:54:30+05:30",
+          "status": "open",
+          "note": "recorded"
+        },
+        {
+          "at": "2026-11-04T15:42:17+05:30",
+          "status": "open",
+          "note": "seen on 2026-11-04"
+        },
+        {
+          "at": "2026-11-04T21:23:48+05:30",
+          "status": "fixed",
+          "note": "Verify with: tomorrow's 08:50 auto-login logs no 'Error loading symbols to cache' and the EOD 'OpenAlgo app errors' FAIL from this cause is gone."
+        },
+        {
+          "at": "2026-11-04T22:06:39+05:30",
+          "status": "fixed",
+          "note": "updated"
+        }
+      ],
+      "created_at": "2026-11-04T13:54:30+05:30",
+      "updated_at": "2026-11-04T22:06:39+05:30"
+    },
+    {
+      "id": "BUG-016",
+      "title": "Unattended close-day review skips fixed-bug notes, week-to-date and tomorrow's readiness, and stops after about a minute",
+      "plain": "The automatic end-of-day review leaves out parts of the report it is meant to include, and does not record whether the fixed bugs held. It ends within a minute when it has about fourteen.",
+      "kind": "BUG",
+      "severity": "LOW",
+      "status": "fixed",
+      "area": "ops",
+      "strategies": [],
+      "first_seen": "2026-11-03",
+      "last_seen": "2026-11-03",
+      "occurrences": [
+        "2026-11-03"
+      ],
+      "impact": "No fixed bug was checked or noted by the 2 and 3 Nov reviews, so fixes cannot be promoted to verified from the daily run. Week-to-date and tomorrow's readiness were missing from both reports, and real candidates (for example BUG-015) were left unchecked and unrecorded. No trading effect.",
+      "evidence": [
+        "Claude Code transcripts under ~/.claude/projects/-home-anand-github-openalgo: 2026-11-02 review 9 tool calls in 41 s, 2026-11-03 review 20 tool calls in 61 s, both on claude-haiku-5-5, neither opened .claude/skills/bug-tracker/SKILL.md nor ran 'bugs list'. 11-02 report says sections 6 and 9 were skipped 'because of the time budget'; 11-03 report says 'Week to date: not computed' and 'Tomorrow: not checked'. Both returned an empty bug-tracker block. Review window 15:44 to the 15:58 deadline, so about 13 minutes were unused. Before that, reviews of 10-26 to 10-30 ran on Sonnet or Opus."
+      ],
+      "root_cause": "Four causes, none of them data: (1) The prompt in eod_claude_review.sh names bug-tracker/SKILL.md only for the output block format, and the one-note-per-fixed-bug rule lives only in that skill's unattended section, so a run that does not open it never sees the rule; the close-day skill refers to it only indirectly. (2) Sections 4 (week to date) and 9 (tomorrow) are written as optional under 'if short, finish sections 1-3 first'. (3) 'Hard time budget' gives no clock time or remaining time, so the model stops early on its own judgment. (4) The claude call has no --model, so the model followed whatever the CLI resolved: Haiku on 10-31 17:36, 11-02 and 11-03 although ~/.claude/settings.json says sonnet; why is not established. The data for sections 4 and 9 exists (EOD reports per day, market_holidays).",
+      "fix": "signal_engine/analysis/eod_claude_review.sh (uncommitted): P1 --model sonnet; P2 prompt now (1) runs 'bugs list --all', reads the bug-tracker 'Unattended runs' section and runs date first, (2) makes every skill section required (an unavailable section must be kept with what is missing), (3) requires one note per fixed bug, (4) gives clock times: stop investigating at 15:55, hard end 15:58 (a re-run of an earlier day gets 20 minutes, matching close_day.sh). Telegram, tracker application and report format unchanged. Scratch test (copy, output to ~/.hermes/cache/scratch/p1p2, apply replaced by inspection) on 2026-11-03: Sonnet, 15 tool calls, 12 min 21 s, finished before its stop time, notes for all 4 fixed bugs, sections 4 and 9 present. Live 15:36 cron run on 2026-11-04 used the new script: 97 s, notes for BUG-001/003/004/013, two new entries (BUG-017, BUG-018).",
+      "fix_commit": "023f665ac",
+      "verification": "",
+      "sources": [
+        "signal_engine/analysis/eod_claude_review.sh",
+        "signal_engine/reports/eod-2026-11-03-claude-review.md"
+      ],
+      "history": [
+        {
+          "at": "2026-11-04T15:27:26+05:30",
+          "status": "open",
+          "note": "recorded"
+        },
+        {
+          "at": "2026-11-04T15:44:01+05:30",
+          "status": "fixed",
+          "note": "Verify with: the next two same-day cron reviews each carry one note per fixed bug, sections 4 and 9, run on Sonnet (transcript model), and finish before 15:55. Known gaps seen in the test: 'since start' sessions count was reported as not computed with 'ran out of time' although time remained; the per-strategy week-to-date nets were not independently re-derived (the account total was, and matched)."
+        },
+        {
+          "at": "2026-11-04T22:01:11+05:30",
+          "status": "fixed",
+          "note": "2026-11-04 15:36 live cron run checked after the restart: model claude-sonnet-5-5 (pinned), 23 tool calls, read the tracker rules and ran 'bugs list --all' first, wrote one note for each of the four fixed bugs, sections 4 and 9 both present, finished 15:42 (97 s). NOT promoted to verified: the criterion is two cron runs and this is one; and section 4 reported 'I did not compute this section. This run had no prior-day pages_vs_fills runs' although eod-2026-11-02 and eod-2026-11-03 hold them, so the week-to-date content is still missing (stated openly, not skipped silently). Look at 11-05 and 11-06 (11-06 is a Friday, so the weekly report also runs)."
+        },
+        {
+          "at": "2026-11-04T22:06:39+05:30",
+          "status": "fixed",
+          "note": "updated"
+        }
+      ],
+      "created_at": "2026-11-04T15:27:26+05:30",
+      "updated_at": "2026-11-04T22:06:39+05:30"
+    },
+    {
+      "id": "BUG-017",
+      "title": "Time exit gives up on CGPOWER after 3 attempts, clears both tracker legs and writes no closing row",
+      "plain": "When the 14:45 exit order timed out, the engine stopped trying, cleared its records for the position and wrote no closing trade.",
+      "kind": "BUG",
+      "severity": "HIGH",
+      "status": "fixed",
+      "area": "signal_engine",
+      "strategies": [
+        "BREAKINGTRADE",
+        "BREAKINGTRADE-RI"
+      ],
+      "first_seen": "2026-11-04",
+      "last_seen": "2026-11-04",
+      "occurrences": [
+        "2026-11-04"
+      ],
+      "impact": "CGPOWER (BREAKINGTRADE and BREAKINGTRADE-RI) had no closing row and no confirmed exit; the sandbox square-off at 15:15 then failed with 'Missing required field: quantity'. The sandbox ended flat, but I did not find which path closed it.",
+      "evidence": [
+        "signal_engine_analyze_2026-11-04.log 14:46:18 EXIT UNCERTAIN CGPOWER",
+        "14:46:40-14:46:46 'FAILED to close CGPOWER, CGPOWER after 3 attempts' and 'still open at the broker - no closing row written' while the legs were cleared",
+        "logs-2026-11-04.md: sandbox.squareoff_manager 15:15:43 Failed to square-off CGPOWER: Missing required field: quantity"
+      ],
+      "root_cause": "Not confirmed. A human should trace what closed the position, why the tracker cleared the legs after a failed close, and why the square-off lost the quantity.",
+      "fix": "signal_engine/tracker.py, signal_engine/main.py (uncommitted). After an independent Opus review the first version was tightened. (1) _own_close_qty excludes another leg's uncertain exit from the 'others' count ONLY when the order book shows that exit order COMPLETE (new _uncertain_exit_filled); an exit still working or not on the book keeps the old count, so a sibling whose stop just filled cannot sell the first leg's shares and reverse the position. (2) _book_one_time_exit returns early for a position the broker still holds: it stays tracked, no close row, no trade counted, no 'closed' message, and is flagged time_exit_left_open; the no-progress exit (tracker._check_no_progress) and a signal EXIT (main._handle_exit_locked) skip a flagged leg, so no second unchecked exit is sent. Dead branches removed. Tests: signal_engine/tests/test_time_exit_uncertain_leg.py 13 (includes the still-working, opposite-direction, no-progress and signal-exit cases), 273 targeted tracker, time-exit, exit-recovery and no-progress tests pass. Old: second leg sent nothing, both legs deleted with the broker still holding the shares. New: second leg sold when its sibling's exit is proven filled; a leg the broker still holds stays tracked and is not exited again on its own. Not changed: the cancelled stop is not re-placed, so a kept leg stays without a stop until it is closed by hand or by the broker square-off (a critical alert is already sent).",
+      "fix_commit": "f7bb6b799",
+      "verification": "",
+      "sources": [],
+      "history": [
+        {
+          "at": "2026-11-04T15:42:17+05:30",
+          "status": "open",
+          "note": "recorded"
+        },
+        {
+          "at": "2026-11-04T21:12:04+05:30",
+          "status": "fixed",
+          "note": "Verify with: a time exit where one leg's exit times out (EXIT UNCERTAIN) on a symbol two strategies hold; expect no 'leaves nothing for this leg to close' for the other leg and no 'cleared tracker entry' while the broker still holds the symbol. Needs the engine restarted to take effect."
+        },
+        {
+          "at": "2026-11-04T21:23:48+05:30",
+          "status": "fixed",
+          "note": "updated"
+        },
+        {
+          "at": "2026-11-04T22:06:39+05:30",
+          "status": "fixed",
+          "note": "updated"
+        }
+      ],
+      "created_at": "2026-11-04T15:42:17+05:30",
+      "updated_at": "2026-11-04T22:06:39+05:30"
+    },
+    {
+      "id": "BUG-018",
+      "title": "Close-day backfill leaves the daily store behind (211 symbols) on 2026-11-04",
+      "plain": "The end-of-day data refresh did not finish, so the daily price history is a day behind for most stocks.",
+      "kind": "DATA",
+      "severity": "MEDIUM",
+      "status": "fixed",
+      "area": "signal_engine",
+      "strategies": [],
+      "first_seen": "2026-11-04",
+      "last_seen": "2026-11-04",
+      "occurrences": [
+        "2026-11-04"
+      ],
+      "impact": "verify D reports 211 symbols behind the last expected session; value-area rows are missing for 31 of 206 symbols (a duckdb lock conflict on historify.duckdb was one cause).",
+      "evidence": [
+        "signal_engine/logs/backfill_cron.log: verify D: expected last session 2026-11-04; symbols behind: 211",
+        "value-areas-2026-11-04.md: coverage 175/206; COCHINSHIP failed on 'Could not set lock on file historify.duckdb'",
+        "close-day-2026-11-04-status.tsv: backfill exit 1"
+      ],
+      "root_cause": "Not confirmed. Likely the backfill ran while OpenAlgo held historify.duckdb, and the 15:36 cron started it before the day's data was available.",
+      "fix": "signal_engine/backtest/backfill.py (uncommitted): every read of db/historify.duckdb now goes through _connect_read_only, which waits up to 240 s (5 s polls) while another process holds the lock, and raises any other error at once; the daily refresh and verify no longer die on the first locked read. Tests: signal_engine/tests/test_backfill_lock_wait.py 4, plus 32 existing backfill tests pass. Data: value-areas for 2026-11-04 re-run (backup ~/.hermes/cache/scratch/bug018/): coverage 175/206 to 206/206. NOT done: the daily (D) store is still at 2026-11-03 for 211 symbols and 5 symbols miss 11-04 1m bars; the refresh needs the broker session, so it must be re-run after the 08:50 login on 2026-11-05: ./signal_engine/backtest/backfill_cron.sh (idempotent). The holder of the lock inside the app was not identified.",
+      "fix_commit": "30c53c647",
+      "verification": "",
+      "sources": [],
+      "history": [
+        {
+          "at": "2026-11-04T15:42:17+05:30",
+          "status": "open",
+          "note": "recorded"
+        },
+        {
+          "at": "2026-11-04T21:23:48+05:30",
+          "status": "fixed",
+          "note": "Verify with: the next 15:36 close-day backfill log shows 'symbols behind: 0' for both intervals and no 'Could not set lock'."
+        },
+        {
+          "at": "2026-11-04T22:05:57+05:30",
+          "status": "fixed",
+          "note": "2026-11-04 22:01-22:05 recovery, checked in the store (not only the script's exit code): backfill_cron.sh re-run after the restart exited 0; db/historify.duckdb now has 211 of 211 NSE symbols at 2026-11-04 for both the daily and the 1-minute interval (outliers are the tolerated COCHINSHIP, GVT&D, and one daily symbol at 2026-09-29); all 40 engine-universe symbols hold a full 4 Nov session (at least 370 of 375 bars), including BSE and KALYANKJIL which were missing and would have been rejected by the 08:51 warm-up; 0 'Could not set lock' errors in the re-run. Value areas for 11-04: 211/211 (was 175/206). The warm-up reads 1m and 5m bars from the store, not the daily bars (pipeline/context.py:71). The holder of the lock inside the app at 15:36 was never identified; the lock wait hides it, so it is not resolved, only tolerated."
+        },
+        {
+          "at": "2026-11-04T22:06:39+05:30",
+          "status": "fixed",
+          "note": "updated"
+        }
+      ],
+      "created_at": "2026-11-04T15:42:17+05:30",
+      "updated_at": "2026-11-04T22:06:39+05:30"
+    },
+    {
+      "id": "BUG-019",
+      "title": "A timed-out exit is resent while the first copy is still being processed, so one exit fills three times (AXISBANK 154 sold as 462)",
+      "plain": "When the broker was slow, the system sold the same AXISBANK position three times. It briefly ended up 308 shares short, then bought them back about two minutes later.",
+      "kind": "BUG",
+      "severity": "HIGH",
+      "status": "open",
+      "area": "signal_engine",
+      "strategies": [
+        "EVWAP-EARLY-PY"
+      ],
+      "first_seen": "2026-11-04",
+      "last_seen": "2026-11-04",
+      "occurrences": [
+        "2026-11-04"
+      ],
+      "impact": "A trader briefly held a short position they never intended (308 AXISBANK for roughly 100 seconds, corrected by a duplicate-closing BUY at 13:55:16). Net flat afterwards, so the loss is slippage and charges, but a larger stall or a missed correction would leave a reversed position.",
+      "evidence": [
+        "signal_engine_analyze_2026-11-04.log: 13:50:38 EXIT AXISBANK 154; 13:50:59 attempt 1/3 'Timeout sending order'; 13:51:05 'book is clean: watching 93s for a late fill before any resend'; 13:53:05 attempt 2/3 timeout; 13:53:33 attempt 3/3 timeout; 13:53:37 confirmed id=26110450012762; 13:55:16 CRITICAL 'broker holds extra completed copies (extra: 26110450104136, 26110450103046)'; 13:55:16 'closed the duplicate 308 with BUY id=26110450116202'. Core log: place_order AXISBANK took 168,099 ms (done 13:53:32) and 88,157 ms (done 13:55:03), price stage 167,987 ms and 87,969 ms."
+      ],
+      "root_cause": "The core inserts a sandbox order only after its price lookup returns, so while the lookup hangs (BUG-007, up to 354 s today) the order is not on the book and a read of the book is clean. The engine's late-fill window (about 93 s, signal_engine/main.py _watch_exit_for_late_fill) is shorter than the stall (168 s here), so it treats the exit as absent and resends; every copy then runs once the lookup returns. The existing duplicate detector and correcting BUY worked, which bounded the damage. No window length fixes this: today's stalls ran from 20 s to 354 s. Options, all execution semantics and not implemented: (a) keep waiting longer before any resend, at the cost of up to that long unprotected (the stop is already cancelled); (b) the core refuses a second order for the same symbol, side, quantity and strategy while one is still in flight, which is a core change; (c) remove the stall for exits by pricing a MARKET exit that reduces a held position without a live quote (core change, also fixes BUG-007).",
+      "fix": "",
+      "fix_commit": "",
+      "verification": "",
+      "sources": [
+        "signal_engine/logs/signal_engine_analyze_2026-11-04.log"
+      ],
+      "history": [
+        {
+          "at": "2026-11-04T21:16:47+05:30",
+          "status": "open",
+          "note": "recorded"
+        }
+      ],
+      "created_at": "2026-11-04T21:16:47+05:30",
+      "updated_at": "2026-11-04T21:16:47+05:30"
     }
   ]
 }
