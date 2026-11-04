@@ -57,6 +57,19 @@ if [ ! -x "$CLAUDE_BIN" ]; then
   exit 1
 fi
 
+# Concrete clock times for the prompt. A same-day run ends at close_day.sh's 15:58 deadline and
+# the review stops investigating at 15:55; a re-run of an earlier day gets the same 20 minutes
+# close_day.sh gives it. A model told only "hard time budget" stopped after about a minute with
+# thirteen unused (2026-11-02, 2026-11-03).
+if [ "$DAY" = "$(date +%F)" ]; then
+  HARD_END="$(date -d "$DAY 15:58" +%s)"
+  STOP_AT="$(date -d "$DAY 15:55" +%H:%M)"
+else
+  HARD_END="$(( $(date +%s) + ${CLOSE_DAY_BUDGET_SECONDS:-1200} ))"
+  STOP_AT="$(date -d "@$(( HARD_END - 180 ))" +%H:%M)"
+fi
+HARD_AT="$(date -d "@$HARD_END" +%H:%M)"
+
 read -r -d '' PROMPT <<PROMPT_EOF || true
 Read .claude/skills/close-day/SKILL.md in this repository and run it for $DAY in its
 "Unattended run" mode. close_day.sh has already produced today's deterministic outputs (step
@@ -69,9 +82,25 @@ confirmed bug precisely instead - root cause, the evidence you checked, the exac
 human applies it later. Do not guess at a root cause you have not verified against trades.db,
 the broker tradebook, or the logs.
 
-You have a hard time budget (the run is stopped before OpenAlgo shuts down at 16:00): follow
-the skill's order, and if time is short finish the verdict, the P&L table and the tracker block
-before anything else.
+Before anything else, in this order:
+1. Run: uv run python -m signal_engine.bugs list --all
+2. Read the "Unattended runs" section of .claude/skills/bug-tracker/SKILL.md in full. It holds the
+   rules for the tracker block at the end of your response.
+3. Run: date
+
+Every section of the skill's report is required, including section 4 (week to date and since
+start) and section 9 (tomorrow). Never skip a section silently. If its evidence is not available,
+or you ran out of time, keep the section heading and write what is missing and why.
+
+The tracker block must hold one note action for every bug whose status is fixed in the list from
+step 1. Each note says whether $DAY exercised that bug's fixed path and what you found, with the
+evidence you checked (a log line, a trades.db row, a report line). "Not exercised" is a valid note
+when the evidence shows the trigger did not occur; say what you looked for. A problem you could
+not confirm goes in the report as unconfirmed, not in the tracker block.
+
+Timing: the run is stopped at $HARD_AT, and a stopped run applies no tracker changes. Stop
+investigating at $STOP_AT (check with date). By then write the sections still missing from what
+you have, then the verdict block, then the tracker block.
 
 Just before that last block, write the day's verdict as a fenced code block with the info string
 close-day-verdict holding one JSON object: {"verdict": "GREEN" | "AMBER" | "RED", "line": "<one
@@ -87,7 +116,10 @@ run. That is expected: do not report it as a failure.
 PROMPT_EOF
 
 echo "=== EOD Claude review $DAY ==="
+# --model is pinned: without it the CLI resolved Haiku on 2026-10-31, 11-02 and 11-03, and those
+# runs skipped mandatory work. The review needs a consistent reasoning level.
 "$CLAUDE_BIN" -p "$PROMPT" \
+  --model sonnet \
   --permission-mode plan \
   --disallowedTools Edit,Write,NotebookEdit \
   --dangerously-skip-permissions \
