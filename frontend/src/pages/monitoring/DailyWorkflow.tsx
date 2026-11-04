@@ -1,28 +1,19 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery } from '@tanstack/react-query'
 import {
-  AlertTriangle,
   CalendarCheck,
-  CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  CircleDashed,
   Clock,
-  FileText,
   RefreshCw,
-  XCircle,
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
-import Markdown, { type Components } from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import {
-  opsWorkflowApi,
-  type WorkflowCheck,
-  type WorkflowCheckResult,
-  type WorkflowDay,
-  type WorkflowPhase,
-  type WorkflowStep,
-} from '@/api/opsWorkflow'
-import { Badge } from '@/components/ui/badge'
+import { createContext, useContext, useMemo, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router'
+import { bugsApi } from '@/api/bugs'
+import { type FindingLink, opsFindingsApi } from '@/api/opsFindings'
+import { opsWorkflowApi, type WorkflowDay, type WorkflowStep } from '@/api/opsWorkflow'
+import { ReportBugDialog } from '@/components/ops/ReportBugDialog'
+import { StatusBadge, TONE_TEXT, type Tone, ToneIcon } from '@/components/ops/StatusBadge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -33,31 +24,42 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { type BugSummary, groupOfStatus, summarizeBugs } from '@/lib/bugModel'
+import { findingRef } from '@/lib/reportFinding'
+import { parseExecutionHealth } from '@/lib/reportParsers'
+import {
+  ACTION_TEXT,
+  buildFindings,
+  CATEGORIES,
+  countSeverities,
+  defaultPhase,
+  type Finding,
+  type Health,
+  healthOf,
+  metricFindings,
+  PHASE_CHECKS,
+  type PhaseKey,
+  phaseCompleted,
+  SEVERITY_LABEL,
+  type Severity,
+  sortFindings,
+  stepFailed,
+} from '@/lib/workflowFindings'
+import { type ReportKey, reportFile, WorkflowReports } from './WorkflowReports'
 
-type PhaseKey = WorkflowPhase['phase']
-type Tone = 'good' | 'warn' | 'bad' | 'idle'
-
-const PHASES: { key: PhaseKey; title: string; when: string; duty: string; checks: string[] }[] = [
-  {
-    key: 'open-day',
-    title: 'Open',
-    when: '09:12',
-    duty: 'Is the stack ready to trade',
-    checks: ['open-day'],
-  },
+const PHASES: { key: PhaseKey; title: string; when: string; duty: string }[] = [
+  { key: 'open-day', title: 'Open', when: '09:12', duty: 'Is the stack ready to trade' },
   {
     key: 'liveness',
     title: 'After the open',
     when: '09:27',
     duty: 'Is the engine actually trading',
-    checks: ['liveness'],
   },
   {
     key: 'close-day',
     title: 'Close',
     when: '15:36',
     duty: 'Books, data, errors and jobs, then the review',
-    checks: ['logs', 'value-areas', 'jobs'],
   },
 ]
 
@@ -82,41 +84,18 @@ const CHECK_TITLES: Record<string, string> = {
   jobs: 'Scheduled jobs',
 }
 
-const REPORT_NAMES: [RegExp, string][] = [
-  [/^eod-.*-claude-review\.md$/, 'Close-day review'],
-  [/^eod-\d{4}-\d{2}-\d{2}\.md$/, 'EOD report'],
-  [/^execution-health-/, 'Execution health'],
-  [/^logs-/, 'Errors'],
-  [/^jobs-/, 'Scheduled jobs'],
-  [/^value-areas-/, 'Value areas'],
-  [/^open-day-/, 'Open checks'],
-  [/^liveness-/, 'After-open checks'],
-  [/^weekly-/, 'Weekly roll-up'],
-]
-
-const TONE_CLASS: Record<Tone, string> = {
-  good: 'bg-green-600 text-white',
-  warn: 'bg-amber-500 text-white',
-  bad: 'bg-red-600 text-white',
-  idle: 'bg-muted text-muted-foreground',
+const SEVERITY_TONE: Record<Severity, Tone> = {
+  critical: 'bad',
+  warning: 'warn',
+  unverified: 'idle',
+  info: 'info',
 }
 
-const STATUS_ORDER: Record<WorkflowCheck['status'], number> = {
-  FAIL: 0,
-  WARN: 1,
-  'NOT VERIFIED': 2,
-  OK: 3,
-}
-
-function verdictTone(verdict: string | undefined): Tone {
-  if (verdict === 'GREEN' || verdict === 'OK') return 'good'
-  if (verdict === 'RED' || verdict === 'FAIL') return 'bad'
-  if (verdict === undefined) return 'idle'
-  return 'warn'
-}
-
-function reportName(file: string): string {
-  return REPORT_NAMES.find(([pattern]) => pattern.test(file))?.[1] ?? file
+const HEALTH: Record<Health, { tone: Tone; label: string }> = {
+  healthy: { tone: 'good', label: 'Healthy' },
+  degraded: { tone: 'warn', label: 'Degraded' },
+  critical: { tone: 'bad', label: 'Critical' },
+  nodata: { tone: 'idle', label: 'No data' },
 }
 
 function seconds(hms: string): number {
@@ -129,74 +108,328 @@ function duration(step: WorkflowStep): string {
   return total >= 60 ? `${Math.floor(total / 60)}m ${total % 60}s` : `${total}s`
 }
 
-function phaseTone(phase: WorkflowPhase | undefined, day: WorkflowDay, checks: string[]): Tone {
-  if (!phase?.steps) return 'idle'
-  if (phase.steps.some((s) => s.exit !== 0)) return 'bad'
-  const verdicts = checks.map((c) => day.checks[c]?.verdict).filter(Boolean)
-  if (verdicts.includes('RED')) return 'bad'
-  if (verdicts.includes('AMBER')) return 'warn'
-  return 'good'
+function phaseFindings(findings: Finding[], phase: PhaseKey): Finding[] {
+  return findings.filter((f) => f.phase === phase)
 }
 
-function dayTone(day: WorkflowDay): Tone {
-  if (day.verdict) return verdictTone(day.verdict.verdict)
-  const tones = PHASES.map((p) =>
-    phaseTone(
-      day.phases.find((x) => x.phase === p.key),
-      day,
-      p.checks
-    )
+function summaryLine(counts: Record<Severity, number>): string {
+  const parts = [
+    counts.critical && `${counts.critical} critical`,
+    counts.warning && `${counts.warning} ${counts.warning === 1 ? 'warning' : 'warnings'}`,
+    counts.unverified && `${counts.unverified} unverified`,
+  ].filter(Boolean)
+  return parts.length ? parts.join(', ') : 'No open findings'
+}
+
+function Stat({
+  label,
+  value,
+  tone,
+  sub,
+  to,
+}: {
+  label: string
+  value: string | number
+  tone: Tone
+  sub?: string
+  to?: string
+}) {
+  const body = (
+    <div className={`h-full rounded-md border px-3 py-2 ${to ? 'hover:bg-muted/50' : ''}`}>
+      <div className="text-[13px] text-muted-foreground">{label}</div>
+      <div className={`text-2xl font-semibold tabular-nums ${TONE_TEXT[tone]}`}>{value}</div>
+      {sub && <div className="text-[13px] text-muted-foreground">{sub}</div>}
+    </div>
   )
-  if (tones.includes('bad')) return 'bad'
-  if (tones.includes('warn')) return 'warn'
-  return tones.includes('good') ? 'good' : 'idle'
+  return to ? <Link to={to}>{body}</Link> : body
 }
 
-function ToneIcon({ tone, className = 'h-4 w-4' }: { tone: Tone; className?: string }) {
-  if (tone === 'good') return <CheckCircle2 className={`${className} text-green-600`} />
-  if (tone === 'bad') return <XCircle className={`${className} text-red-600`} />
-  if (tone === 'warn') return <AlertTriangle className={`${className} text-amber-500`} />
-  return <CircleDashed className={`${className} text-muted-foreground`} />
-}
-
-function Summary({ day }: { day: WorkflowDay }) {
-  const tone = dayTone(day)
-  const allChecks = Object.values(day.checks).flatMap((c) => c.checks)
-  const failedSteps = day.phases.flatMap((p) => (p.steps ?? []).filter((s) => s.exit !== 0))
-  const tiles = [
-    {
-      label: 'Phases run',
-      value: `${day.phases.filter((p) => p.steps !== null).length} / ${PHASES.length}`,
-    },
-    { label: 'Steps failed', value: failedSteps.length },
-    { label: 'Checks failing', value: allChecks.filter((c) => c.status === 'FAIL').length },
-    { label: 'Checks to look at', value: allChecks.filter((c) => c.status === 'WARN').length },
-  ]
-  const label = { good: 'GREEN', warn: 'AMBER', bad: 'RED', idle: 'NO RUN' }[tone]
+function SessionOverview({
+  day,
+  findings,
+  bugs,
+}: {
+  day: WorkflowDay
+  findings: Finding[]
+  bugs: BugSummary | null
+}) {
+  const counts = countSeverities(findings)
+  const h = HEALTH[healthOf(day, findings)]
+  const done = PHASES.filter((p) => phaseCompleted(day, p.key) === true).length
+  const withFailedSteps = PHASES.filter((p) => phaseCompleted(day, p.key) === false).length
+  const ran = done + withFailedSteps
   return (
     <Card>
-      <CardContent className="pt-6 flex flex-col lg:flex-row gap-6 lg:items-center">
-        <div className="flex items-start gap-3 lg:w-1/2">
-          <ToneIcon tone={tone} className="h-8 w-8 shrink-0" />
-          <div>
-            <div className="flex items-center gap-2">
-              <Badge className={TONE_CLASS[tone]}>{label}</Badge>
-              <span className="text-sm text-muted-foreground">{day.day}</span>
+      <CardContent className="pt-6 space-y-4">
+        <div className="flex flex-col lg:flex-row gap-6">
+          <div className="flex items-start gap-3 lg:w-2/5">
+            <ToneIcon tone={h.tone} className="h-10 w-10 shrink-0" />
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-xl font-bold">{h.label}</span>
+                <span className="text-[15px] text-muted-foreground">{day.day}</span>
+              </div>
+              <p className="mt-1 text-[15px]">{summaryLine(counts)}</p>
+              <p className="mt-1 text-[15px] text-muted-foreground">
+                {day.verdict
+                  ? `Close-day review (${day.verdict.verdict}): ${day.verdict.line}`
+                  : 'No close-day review verdict yet. It is written after the 15:36 close checks.'}
+              </p>
             </div>
-            <p className="mt-2 text-sm">
-              {day.verdict?.line ??
-                'No close-day verdict yet. It is written by the review after 15:36.'}
-            </p>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2 lg:flex-1">
+            <Stat
+              label="Checkpoints completed"
+              value={`${done} / ${PHASES.length}`}
+              tone={withFailedSteps ? 'warn' : ran === 0 ? 'idle' : 'info'}
+              sub={
+                withFailedSteps
+                  ? `${withFailedSteps} had failed steps`
+                  : ran < PHASES.length
+                    ? `${PHASES.length - ran} not run`
+                    : 'all steps exited cleanly'
+              }
+            />
+            <Stat
+              label="Failed checks"
+              value={counts.critical}
+              tone={counts.critical ? 'bad' : 'idle'}
+            />
+            <Stat label="Warnings" value={counts.warning} tone={counts.warning ? 'warn' : 'idle'} />
+            <Stat
+              label="Unverified"
+              value={counts.unverified}
+              tone="idle"
+              sub={counts.unverified ? 'not confirmed healthy' : undefined}
+            />
+            <Stat
+              label="Bugs needing a fix"
+              value={bugs ? bugs.needsFix : 'n/a'}
+              tone={bugs?.highNeedsFix ? 'bad' : bugs?.needsFix ? 'warn' : 'idle'}
+              sub={bugs ? `${bugs.highNeedsFix} high risk` : 'tracker unavailable'}
+              to="/logs/bugs"
+            />
+            <Stat
+              label="High-risk awaiting proof"
+              value={bugs ? bugs.highAwaitingProof : 'n/a'}
+              tone={bugs?.highAwaitingProof ? 'warn' : 'idle'}
+              sub={bugs ? `${bugs.awaitingProof} awaiting proof in all` : 'tracker unavailable'}
+              to="/logs/bugs?group=proving&severity=HIGH"
+            />
           </div>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 lg:w-1/2">
-          {tiles.map((t) => (
-            <div key={t.label} className="rounded-md border p-3">
-              <div className="text-xl font-semibold">{t.value}</div>
-              <div className="text-xs text-muted-foreground">{t.label}</div>
-            </div>
-          ))}
+        <p className="text-[13px] text-muted-foreground border-t pt-3">
+          Status comes from what the checks found. A checkpoint can complete cleanly and still
+          report failures, and an unverified check never counts as healthy.
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+
+/** The last few days as one cell each, so a bad day stands out without paging back. */
+function Trend({
+  days,
+  current,
+  onSelect,
+}: {
+  days: string[]
+  current: string
+  onSelect: (d: string) => void
+}) {
+  const recent = days.slice(0, 7)
+  const results = useQueries({
+    queries: recent.map((d) => ({
+      queryKey: ['ops-workflow', d],
+      queryFn: () => opsWorkflowApi.get(d),
+      staleTime: 5 * 60_000,
+    })),
+  })
+  if (recent.length < 2) return null
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <span className="text-[13px] font-semibold uppercase text-muted-foreground">Last days</span>
+      {[...recent].reverse().map((d) => {
+        const view = results[recent.indexOf(d)]?.data?.data
+        const health = view ? HEALTH[healthOf(view, buildFindings(view))] : null
+        return (
+          <button
+            type="button"
+            key={d}
+            onClick={() => onSelect(d)}
+            title={`${d}: ${health?.label ?? 'No result'}${view?.verdict ? ` - ${view.verdict.line}` : ''}`}
+            className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-[13px] transition-colors ${
+              d === current
+                ? 'border-primary ring-1 ring-primary bg-primary/5'
+                : 'hover:bg-muted/50'
+            }`}
+          >
+            <ToneIcon tone={health?.tone ?? 'idle'} className="h-3 w-3" />
+            {d.slice(5)}
+            <span className="text-muted-foreground">{health?.label ?? 'No result'}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** The day on screen and the bugs already filed for its findings, keyed by finding reference. */
+const FindingBugs = createContext<{ day: string; links: Map<string, FindingLink> }>({
+  day: '',
+  links: new Map(),
+})
+
+function FindingRow({
+  finding,
+  onOpenReport,
+}: {
+  finding: Finding
+  onOpenReport: (key: ReportKey) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [reporting, setReporting] = useState(false)
+  const { day, links } = useContext(FindingBugs)
+  const bug = links.get(findingRef(finding))
+  const phase = PHASES.find((p) => p.key === finding.phase)
+  return (
+    <li className="px-4 py-2.5">
+      <div className="flex flex-wrap items-start gap-x-3 gap-y-1">
+        <StatusBadge tone={SEVERITY_TONE[finding.severity]}>
+          {SEVERITY_LABEL[finding.severity]}
+        </StatusBadge>
+        <div className="min-w-[14rem] flex-1">
+          <div className="text-[15px] break-words">{finding.title}</div>
+          <div className="text-[13px] text-muted-foreground">
+            {finding.source} | {phase?.title} checkpoint
+            {finding.checkedAt ? `, ${finding.checkedAt.slice(0, 5)}` : ''} |{' '}
+            <span className={finding.severity === 'critical' ? TONE_TEXT.bad : ''}>
+              {ACTION_TEXT[finding.severity]}
+            </span>
+          </div>
         </div>
+        <div className="flex items-center gap-3 text-[13px]">
+          {finding.report && (
+            <button
+              type="button"
+              className="text-primary hover:underline"
+              onClick={() => onOpenReport(finding.report as ReportKey)}
+            >
+              Open report
+            </button>
+          )}
+          {bug ? (
+            <Link
+              to={`/logs/bugs?q=${bug.bug_id}&group=${groupOfStatus(bug.status)}`}
+              className="font-medium text-primary hover:underline"
+              title="Open this bug in the Bug Tracker"
+            >
+              Tracked as {bug.bug_id}
+            </Link>
+          ) : (
+            day && (
+              <button
+                type="button"
+                className="text-primary hover:underline"
+                onClick={() => setReporting(true)}
+              >
+                Report as bug
+              </button>
+            )
+          )}
+          <button
+            type="button"
+            aria-expanded={open}
+            className="flex items-center gap-0.5 text-muted-foreground hover:text-foreground"
+            onClick={() => setOpen(!open)}
+          >
+            <ChevronDown className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} />
+            Details
+          </button>
+        </div>
+      </div>
+      {open && (
+        <pre className="mt-2 whitespace-pre-wrap break-words rounded-md bg-muted/60 p-2 text-[13px] font-mono">
+          {finding.evidence}
+        </pre>
+      )}
+      {reporting && (
+        <ReportBugDialog finding={finding} day={day} onClose={() => setReporting(false)} />
+      )}
+    </li>
+  )
+}
+
+function Attention({
+  findings,
+  hasData,
+  onOpenReport,
+}: {
+  findings: Finding[]
+  hasData: boolean
+  onOpenReport: (key: ReportKey) => void
+}) {
+  const [showInfo, setShowInfo] = useState(false)
+  const actionable = findings.filter((f) => f.severity !== 'info')
+  const informational = findings.filter((f) => f.severity === 'info')
+  const groups = CATEGORIES.map((c) => ({
+    ...c,
+    items: sortFindings(actionable.filter((f) => f.category === c.key)),
+  })).filter((g) => g.items.length > 0)
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">
+          Needs attention{' '}
+          <span className="font-normal text-muted-foreground">({actionable.length})</span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {!hasData ? (
+          <p className="text-[15px] text-muted-foreground">
+            No checkpoint has run on this day, so there is nothing to assess.
+          </p>
+        ) : groups.length === 0 ? (
+          <p className="text-[15px]">
+            <StatusBadge tone="good">Clear</StatusBadge>
+            <span className="ml-2">
+              Nothing failed, warned or went unverified in the recorded checks.
+            </span>
+          </p>
+        ) : (
+          groups.map((g) => (
+            <div key={g.key} className="rounded-lg border">
+              <div className="flex items-center justify-between border-b bg-muted/30 px-4 py-2">
+                <span className="text-[15px] font-medium">{g.label}</span>
+                <span className="text-[13px] text-muted-foreground">{g.items.length}</span>
+              </div>
+              <ul className="divide-y">
+                {g.items.map((f) => (
+                  <FindingRow key={f.id} finding={f} onOpenReport={onOpenReport} />
+                ))}
+              </ul>
+            </div>
+          ))
+        )}
+        {informational.length > 0 && (
+          <div>
+            <button
+              type="button"
+              className="text-[13px] text-muted-foreground hover:text-foreground"
+              onClick={() => setShowInfo(!showInfo)}
+            >
+              {showInfo ? 'Hide' : 'Show'} {informational.length} informational{' '}
+              {informational.length === 1 ? 'item' : 'items'} (on watch, no action)
+            </button>
+            {showInfo && (
+              <ul className="mt-2 divide-y rounded-lg border">
+                {informational.map((f) => (
+                  <FindingRow key={f.id} finding={f} onOpenReport={onOpenReport} />
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   )
@@ -204,209 +437,254 @@ function Summary({ day }: { day: WorkflowDay }) {
 
 function Timeline({
   day,
+  findings,
   selected,
   onSelect,
 }: {
   day: WorkflowDay
+  findings: Finding[]
   selected: PhaseKey
   onSelect: (p: PhaseKey) => void
 }) {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-      {PHASES.map((p) => {
-        const phase = day.phases.find((x) => x.phase === p.key)
-        const tone = phaseTone(phase, day, p.checks)
-        const active = selected === p.key
-        return (
-          <button
-            type="button"
-            key={p.key}
-            onClick={() => onSelect(p.key)}
-            className={`text-left rounded-lg border p-4 transition-colors ${
-              active ? 'border-primary ring-1 ring-primary bg-primary/5' : 'hover:bg-muted/50'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <span className="font-semibold">{p.title}</span>
-              <ToneIcon tone={tone} />
-            </div>
-            <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-              <Clock className="h-3 w-3" />
-              {p.when}
-              {phase?.steps?.length ? ` - ran ${phase.steps[0].started}` : ' - not run'}
-            </div>
-            <div className="mt-2 text-xs text-muted-foreground">{p.duty}</div>
-          </button>
-        )
-      })}
+    <div className="relative">
+      <div
+        className="absolute left-0 right-0 top-5 hidden border-t border-dashed sm:block"
+        aria-hidden="true"
+      />
+      <ol className="relative grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {PHASES.map((p) => {
+          const steps = day.phases.find((x) => x.phase === p.key)?.steps ?? null
+          const counts = countSeverities(phaseFindings(findings, p.key))
+          const completed = phaseCompleted(day, p.key)
+          const needs = counts.critical + counts.warning + counts.unverified > 0
+          const tone: Tone =
+            completed === null
+              ? 'idle'
+              : counts.critical
+                ? 'bad'
+                : counts.warning
+                  ? 'warn'
+                  : counts.unverified
+                    ? 'idle'
+                    : 'good'
+          const status =
+            completed === null ? 'Not run' : completed ? 'Completed' : 'Completed with failed steps'
+          const active = selected === p.key
+          return (
+            <li key={p.key}>
+              <button
+                type="button"
+                aria-current={active}
+                onClick={() => onSelect(p.key)}
+                className={`w-full text-left rounded-lg border bg-card p-3 transition-colors ${
+                  active ? 'border-primary ring-1 ring-primary' : 'hover:bg-muted/50'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2 font-semibold">
+                    <ToneIcon tone={tone} />
+                    {p.title}
+                  </span>
+                  {needs && (
+                    <StatusBadge tone={counts.critical ? 'bad' : 'warn'}>
+                      Needs attention
+                    </StatusBadge>
+                  )}
+                </div>
+                <div className="mt-1 flex items-center gap-1 text-[13px] text-muted-foreground">
+                  <Clock className="h-3 w-3" />
+                  Scheduled {p.when}
+                  {steps?.length ? `, ran ${steps[0].started}` : ''}
+                </div>
+                <div className="mt-2 text-[15px]">{status}</div>
+                <div className="mt-1 flex flex-wrap gap-x-3 text-[13px] text-muted-foreground">
+                  {completed === null ? (
+                    <span>No checks recorded</span>
+                  ) : (
+                    <>
+                      <span className={counts.critical ? TONE_TEXT.bad : ''}>
+                        {counts.critical} failed
+                      </span>
+                      <span className={counts.warning ? TONE_TEXT.warn : ''}>
+                        {counts.warning} {counts.warning === 1 ? 'warning' : 'warnings'}
+                      </span>
+                      <span>{counts.unverified} unverified</span>
+                    </>
+                  )}
+                </div>
+              </button>
+            </li>
+          )
+        })}
+      </ol>
     </div>
   )
 }
 
-function Steps({ phase }: { phase: WorkflowPhase | undefined }) {
-  if (!phase?.steps) {
-    return <p className="text-sm text-muted-foreground">This phase did not run on this day.</p>
+function Steps({
+  steps,
+  day,
+  phase,
+}: {
+  steps: WorkflowStep[] | null | undefined
+  day: WorkflowDay
+  phase: PhaseKey
+}) {
+  if (!steps) {
+    return (
+      <p className="text-[15px] text-muted-foreground">This checkpoint did not run on this day.</p>
+    )
   }
   return (
     <ol className="space-y-2">
-      {phase.steps.map((s) => {
-        const tone: Tone = s.exit === 0 ? 'good' : 'bad'
-        return (
-          <li key={s.step} className="flex items-start gap-3 rounded-md border p-2">
-            <ToneIcon tone={tone} className="h-4 w-4 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="flex justify-between gap-2">
-                <span className="text-sm font-medium">{STEP_INFO[s.step] ?? s.step}</span>
-                <span className="text-xs text-muted-foreground whitespace-nowrap">
-                  {s.started} | {duration(s)}
-                </span>
-              </div>
-              {s.exit !== 0 && (
-                <div className="text-xs text-red-600">
+      {steps.map((s) => (
+        <li key={s.step} className="flex items-start gap-3 rounded-md border p-2">
+          <ToneIcon
+            tone={s.exit === 0 ? 'good' : stepFailed(day, phase, s) ? 'bad' : 'warn'}
+            className="h-4 w-4 mt-0.5 shrink-0"
+          />
+          <div className="flex-1 min-w-0">
+            <div className="flex justify-between gap-2">
+              <span className="text-[15px] font-medium">{STEP_INFO[s.step] ?? s.step}</span>
+              <span className="text-[13px] text-muted-foreground whitespace-nowrap">
+                {s.started} | {duration(s)}
+              </span>
+            </div>
+            {s.exit !== 0 &&
+              (stepFailed(day, phase, s) ? (
+                <div className={`text-[13px] ${TONE_TEXT.bad}`}>
                   {s.exit === 124 ? 'Stopped at the deadline' : `Failed (exit ${s.exit})`}
                 </div>
-              )}
-            </div>
-          </li>
-        )
-      })}
+              ) : (
+                <div className={`text-[13px] ${TONE_TEXT.warn}`}>
+                  Ran and reported RED. See the findings.
+                </div>
+              ))}
+          </div>
+        </li>
+      ))}
     </ol>
   )
 }
 
-function CheckGroup({ name, result }: { name: string; result: WorkflowCheckResult }) {
-  const [showOk, setShowOk] = useState(false)
-  const sorted = [...result.checks].sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status])
-  const attention = sorted.filter((c) => c.status !== 'OK')
-  const ok = sorted.filter((c) => c.status === 'OK')
+function PassedChecks({ day, phase }: { day: WorkflowDay; phase: PhaseKey }) {
+  const [open, setOpen] = useState(false)
+  const groups = PHASE_CHECKS[phase]
+    .filter((k) => day.checks[k])
+    .map((k) => ({ key: k, ok: day.checks[k].checks.filter((c) => c.status === 'OK') }))
+  const total = groups.reduce((n, g) => n + g.ok.length, 0)
+  if (total === 0) return null
   return (
-    <div className="rounded-lg border">
-      <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
-        <div>
-          <div className="font-medium">{CHECK_TITLES[name] ?? name}</div>
-          <div className="text-xs text-muted-foreground">
-            {result.summary}{' '}
-            {attention.length === 0
-              ? `All ${result.checks.length} checks passed.`
-              : `${attention.length} of ${result.checks.length} need a look.`}
-          </div>
-        </div>
-        <Badge className={TONE_CLASS[verdictTone(result.verdict)]}>{result.verdict}</Badge>
-      </div>
-      <ul className="divide-y">
-        {attention.map((c) => (
-          <li key={`${c.name}-${c.evidence}`} className="flex gap-3 px-4 py-2">
-            <ToneIcon tone={verdictTone(c.status)} className="h-4 w-4 mt-0.5 shrink-0" />
-            <div className="min-w-0">
-              <div className="text-sm">{c.plain || c.name}</div>
-              <div className="text-xs text-muted-foreground break-words">
-                {c.name}: {c.evidence}
-              </div>
+    <div>
+      <button
+        type="button"
+        className="text-[13px] text-muted-foreground hover:text-foreground"
+        onClick={() => setOpen(!open)}
+      >
+        {open ? 'Hide' : 'Show'} {total} checks that passed
+      </button>
+      {open && (
+        <div className="mt-2 space-y-3">
+          {groups.map((g) => (
+            <div key={g.key}>
+              <div className="text-[13px] font-medium">{CHECK_TITLES[g.key] ?? g.key}</div>
+              <ul className="mt-1 space-y-1">
+                {g.ok.map((c) => (
+                  <li key={`${c.name}-${c.evidence}`} className="text-[13px] text-muted-foreground">
+                    <span className="text-foreground">{c.plain || c.name}</span> ({c.evidence})
+                  </li>
+                ))}
+              </ul>
             </div>
-          </li>
-        ))}
-      </ul>
-      {ok.length > 0 && (
-        <div className="px-4 py-2 border-t">
-          <button
-            type="button"
-            className="text-xs text-muted-foreground hover:text-foreground"
-            onClick={() => setShowOk(!showOk)}
-          >
-            {showOk ? 'Hide' : 'Show'} {ok.length} checks that passed
-          </button>
-          {showOk && (
-            <ul className="mt-2 space-y-1">
-              {ok.map((c) => (
-                <li key={`${c.name}-${c.evidence}`} className="text-xs text-muted-foreground">
-                  <span className="text-foreground">{c.plain || c.name}</span> ({c.evidence})
-                </li>
-              ))}
-            </ul>
-          )}
+          ))}
         </div>
       )}
     </div>
   )
 }
 
-const MARKDOWN: Components = {
-  h1: ({ children }) => <h2 className="text-lg font-semibold mt-4 mb-2">{children}</h2>,
-  h2: ({ children }) => <h3 className="text-base font-semibold mt-4 mb-2">{children}</h3>,
-  h3: ({ children }) => <h4 className="text-sm font-semibold mt-3 mb-1">{children}</h4>,
-  p: ({ children }) => <p className="text-sm my-2 leading-relaxed">{children}</p>,
-  ul: ({ children }) => <ul className="list-disc pl-5 text-sm space-y-1 my-2">{children}</ul>,
-  ol: ({ children }) => <ol className="list-decimal pl-5 text-sm space-y-1 my-2">{children}</ol>,
-  table: ({ children }) => (
-    <div className="overflow-x-auto my-3">
-      <table className="w-full text-xs border-collapse">{children}</table>
-    </div>
-  ),
-  th: ({ children }) => (
-    <th className="border px-2 py-1 text-left font-medium bg-muted/50">{children}</th>
-  ),
-  td: ({ children }) => <td className="border px-2 py-1 align-top">{children}</td>,
-  pre: ({ children }) => (
-    <pre className="text-xs bg-muted/60 rounded-md p-3 overflow-x-auto my-2">{children}</pre>
-  ),
-  code: ({ children }) => <code className="text-xs font-mono">{children}</code>,
-  blockquote: ({ children }) => (
-    <blockquote className="border-l-2 pl-3 text-sm text-muted-foreground my-2">
-      {children}
-    </blockquote>
-  ),
-}
-
-function Reports({ reports }: { reports: string[] }) {
-  const ordered = useMemo(
-    () =>
-      [...reports].sort(
-        (a, b) =>
-          REPORT_NAMES.findIndex(([p]) => p.test(a)) - REPORT_NAMES.findIndex(([p]) => p.test(b))
-      ),
-    [reports]
-  )
-  const [chosen, setChosen] = useState<string | null>(null)
-  const current = chosen && ordered.includes(chosen) ? chosen : (ordered[0] ?? null)
-  const report = useQuery({
-    queryKey: ['ops-report', current],
-    queryFn: () => opsWorkflowApi.report(current ?? ''),
-    enabled: current !== null,
-  })
-  if (ordered.length === 0) return null
+function CheckpointDetails({
+  day,
+  phase,
+  findings,
+  onOpenReport,
+}: {
+  day: WorkflowDay
+  phase: PhaseKey
+  findings: Finding[]
+  onOpenReport: (key: ReportKey) => void
+}) {
+  const meta = PHASES.find((p) => p.key === phase) ?? PHASES[2]
+  const list = sortFindings(phaseFindings(findings, phase))
+  const results = PHASE_CHECKS[phase].filter((k) => day.checks[k])
+  const steps = day.phases.find((p) => p.phase === phase)?.steps
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-base flex items-center gap-2">
-          <FileText className="h-4 w-4" />
-          Reports
+        <CardTitle className="text-base">
+          {meta.title}{' '}
+          <span className="font-normal text-muted-foreground">
+            {meta.when} - {meta.duty}
+          </span>
         </CardTitle>
       </CardHeader>
-      <CardContent className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-        <nav className="flex lg:flex-col gap-1 overflow-x-auto">
-          {ordered.map((name) => (
-            <button
-              type="button"
-              key={name}
-              onClick={() => setChosen(name)}
-              className={`text-left whitespace-nowrap rounded-md px-3 py-2 text-sm ${
-                name === current ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
-              }`}
-            >
-              {reportName(name)}
-            </button>
-          ))}
-        </nav>
-        <div className="lg:col-span-3 min-w-0 rounded-md border p-4 max-h-[75vh] overflow-y-auto">
-          {report.isLoading ? (
-            <Skeleton className="h-48 w-full" />
-          ) : report.error ? (
-            <p className="text-sm">{(report.error as Error).message}</p>
-          ) : (
-            <Markdown remarkPlugins={[remarkGfm]} skipHtml components={MARKDOWN}>
-              {report.data ?? ''}
-            </Markdown>
+      <CardContent className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+        <div className="lg:col-span-2 space-y-4">
+          <div>
+            <div className="text-[13px] font-semibold uppercase text-muted-foreground mb-2">
+              Steps executed
+            </div>
+            <Steps steps={steps} day={day} phase={phase} />
+          </div>
+          {results.length > 0 && (
+            <div>
+              <div className="text-[13px] font-semibold uppercase text-muted-foreground mb-2">
+                Check results
+              </div>
+              <ul className="space-y-1.5">
+                {results.map((k) => {
+                  const r = day.checks[k]
+                  const bad = r.checks.filter((c) => c.status !== 'OK').length
+                  const tone: Tone =
+                    r.verdict === 'GREEN' ? 'good' : r.verdict === 'RED' ? 'bad' : 'warn'
+                  return (
+                    <li
+                      key={k}
+                      className="flex items-center justify-between gap-2 rounded-md border px-2 py-1.5"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-[15px] font-medium">{CHECK_TITLES[k] ?? k}</div>
+                        <div className="text-[13px] text-muted-foreground">
+                          {r.checks.length - bad} of {r.checks.length} passed
+                        </div>
+                      </div>
+                      <StatusBadge tone={tone}>{r.verdict}</StatusBadge>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
           )}
+        </div>
+        <div className="lg:col-span-3 space-y-3">
+          <div className="text-[13px] font-semibold uppercase text-muted-foreground">
+            Findings and observations
+          </div>
+          {list.length === 0 ? (
+            <p className="text-[15px] text-muted-foreground">
+              {steps
+                ? 'No failures, warnings or unverified checks were recorded for this checkpoint.'
+                : 'No findings. This checkpoint did not run.'}
+            </p>
+          ) : (
+            <ul className="divide-y rounded-lg border">
+              {list.map((f) => (
+                <FindingRow key={f.id} finding={f} onOpenReport={onOpenReport} />
+              ))}
+            </ul>
+          )}
+          <PassedChecks day={day} phase={phase} />
         </div>
       </CardContent>
     </Card>
@@ -419,21 +697,64 @@ function lastRunPhase(day: WorkflowDay): PhaseKey {
 }
 
 export default function DailyWorkflow() {
-  const [day, setDay] = useState<string | undefined>(undefined)
+  const [params] = useSearchParams()
+  const dayParam = params.get('day')
+  const [day, setDay] = useState<string | undefined>(
+    dayParam && /^\d{4}-\d{2}-\d{2}$/.test(dayParam) ? dayParam : undefined
+  )
   const [phase, setPhase] = useState<PhaseKey | null>(null)
+  const [report, setReport] = useState<ReportKey | null>(null)
+  const reportsRef = useRef<HTMLDivElement>(null)
+
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['ops-workflow', day],
     queryFn: () => opsWorkflowApi.get(day),
+    // Today's phases land through the day; a past day never changes.
+    refetchInterval: day === undefined ? 60_000 : false,
   })
   const view = data?.data
   const days = data?.days ?? []
   const index = view ? days.indexOf(view.day) : -1
-  const selected = phase ?? (view ? lastRunPhase(view) : 'close-day')
-  const meta = PHASES.find((p) => p.key === selected) ?? PHASES[2]
 
+  // The execution-health table feeds extra findings; the report panel shares this cached request.
+  const execFile = view ? reportFile(view.reports, 'execution') : undefined
+  const exec = useQuery({
+    queryKey: ['ops-report', execFile],
+    queryFn: () => opsWorkflowApi.report(execFile ?? ''),
+    enabled: execFile !== undefined,
+  })
+  const bugs = useQuery({
+    queryKey: ['bug-tracker'],
+    queryFn: bugsApi.list,
+    refetchInterval: 60_000,
+  })
+  const linkRows = useQuery({
+    queryKey: ['finding-links', view?.day],
+    queryFn: () => opsFindingsApi.links(view?.day ?? ''),
+    enabled: Boolean(view?.day),
+  })
+  const linkMap = useMemo(
+    () => new Map((linkRows.data ?? []).map((l) => [findingRef(l), l])),
+    [linkRows.data]
+  )
+  const bugContext = useMemo(() => ({ day: view?.day ?? '', links: linkMap }), [view?.day, linkMap])
+  const bugSummary = useMemo(() => (bugs.data ? summarizeBugs(bugs.data) : null), [bugs.data])
+
+  const findings = useMemo(() => {
+    if (!view) return []
+    const metrics = exec.data ? (parseExecutionHealth(exec.data)?.rows ?? []) : []
+    return [...buildFindings(view), ...metricFindings(metrics, view)]
+  }, [view, exec.data])
+
+  const selected = phase ?? defaultPhase(findings) ?? (view ? lastRunPhase(view) : 'close-day')
   const pick = (d: string) => {
     setDay(d)
     setPhase(null)
+    setReport(null)
+  }
+  const openReport = (key: ReportKey) => {
+    setReport(key)
+    reportsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
   return (
@@ -445,7 +766,7 @@ export default function DailyWorkflow() {
             Daily Workflow
           </h1>
           <p className="text-muted-foreground mt-1">
-            The day's three checkpoints: before the open, after the open and at the close
+            Is the trading system healthy, what happened, and what needs your attention
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -492,51 +813,39 @@ export default function DailyWorkflow() {
         <Skeleton className="h-64 w-full" />
       ) : error ? (
         <Card>
-          <CardContent className="pt-6 text-sm">{(error as Error).message}</CardContent>
+          <CardContent className="pt-6 text-[15px]">{(error as Error).message}</CardContent>
         </Card>
       ) : !view || !view.day ? (
         <Card>
-          <CardContent className="pt-6 text-sm text-muted-foreground">
+          <CardContent className="pt-6 text-[15px] text-muted-foreground">
             No workflow runs yet. The first runs at 09:12 on the next trading day.
           </CardContent>
         </Card>
       ) : (
-        <>
-          <Summary day={view} />
-          <Timeline day={view} selected={selected} onSelect={setPhase} />
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">
-                {meta.title} <span className="font-normal text-muted-foreground">{meta.when}</span>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div>
-                <div className="text-xs font-semibold uppercase text-muted-foreground mb-2">
-                  Steps
-                </div>
-                <Steps phase={view.phases.find((p) => p.phase === selected)} />
-              </div>
-              <div className="lg:col-span-2 space-y-4">
-                <div className="text-xs font-semibold uppercase text-muted-foreground">
-                  Findings
-                </div>
-                {meta.checks.filter((c) => view.checks[c]).length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    No checks recorded for this phase on this day.
-                  </p>
-                ) : (
-                  meta.checks
-                    .filter((c) => view.checks[c])
-                    .map((c) => <CheckGroup key={c} name={c} result={view.checks[c]} />)
-                )}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Reports key={view.day} reports={view.reports} />
-        </>
+        <FindingBugs.Provider value={bugContext}>
+          <SessionOverview day={view} findings={findings} bugs={bugSummary} />
+          <Trend days={days} current={view.day} onSelect={pick} />
+          <Attention
+            findings={findings}
+            hasData={healthOf(view, findings) !== 'nodata'}
+            onOpenReport={openReport}
+          />
+          <section aria-label="Session timeline" className="space-y-2">
+            <div className="text-[13px] font-semibold uppercase text-muted-foreground">
+              Session timeline
+            </div>
+            <Timeline day={view} findings={findings} selected={selected} onSelect={setPhase} />
+          </section>
+          <CheckpointDetails
+            day={view}
+            phase={selected}
+            findings={findings}
+            onOpenReport={openReport}
+          />
+          <div ref={reportsRef} className="scroll-mt-4">
+            <WorkflowReports key={view.day} day={view} selected={report} onSelect={setReport} />
+          </div>
+        </FindingBugs.Provider>
       )}
     </div>
   )
