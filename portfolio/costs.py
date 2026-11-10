@@ -75,9 +75,18 @@ class Charge:
                 return 0.0
             if self.flat > 0:
                 return self.flat * orders
-            # Rate on each order, capped per order. The exact split across
-            # orders is unknowable from aggregates, so the average is used --
-            # the cap only bites on the large ones either way.
+            # Exactly one buy and one sell with both values known: price each
+            # leg as its own order, so the cap applies per leg. Averaging the
+            # legs overstated brokerage when they straddle the cap.
+            if orders == 2 and buy_value > 0 and sell_value > 0 and self.cap > 0:
+                return min(buy_value * self.rate, self.cap) + min(
+                    sell_value * self.rate, self.cap
+                )
+            # Rate on each order, capped per order. For N > 2 orders the
+            # individual order values are unknowable from aggregates, so the
+            # average is used. KNOWN APPROXIMATION: it can only overstate
+            # brokerage (the cap is concave), and only when some orders sit
+            # above the cap threshold and others below it.
             per_order = (buy_value + sell_value) / orders
             charged = per_order * self.rate
             if self.cap > 0:
