@@ -56,6 +56,22 @@ def _angel_history_window(start_date: str, end_date: str) -> tuple[pd.Timestamp,
     return from_date, to_date
 
 
+def _angel_chunk_end(
+    chunk_start: pd.Timestamp, chunk_days: int, to_date: pd.Timestamp
+) -> pd.Timestamp:
+    """Return the request end for a chunk that starts at ``chunk_start``.
+
+    A chunk covers at most ``chunk_days`` calendar days. Every chunk is requested
+    through 23:59 of its last day (the final chunk ends at ``to_date``), so the
+    last day of a non-final chunk is not dropped. The next chunk starts on the
+    day after ``current_end.normalize()``.
+    """
+    last_day = chunk_start.normalize() + pd.Timedelta(days=chunk_days - 1)
+    if last_day >= to_date.normalize():
+        return to_date
+    return last_day + pd.Timedelta(hours=23, minutes=59)
+
+
 def _angel_timestamps_to_epoch(timestamps: pd.Series) -> pd.Series:
     """Convert Angel's ISO timestamps (normally carrying +05:30) to UTC epochs."""
     parsed = pd.to_datetime(timestamps, format="ISO8601")
@@ -529,7 +545,7 @@ class BrokerData:
             current_start = from_date
             while current_start <= to_date:
                 # Calculate chunk end date
-                current_end = min(current_start + timedelta(days=chunk_days - 1), to_date)
+                current_end = _angel_chunk_end(current_start, chunk_days, to_date)
 
                 # Prepare payload for historical data API
                 payload = {
@@ -620,7 +636,7 @@ class BrokerData:
 
                 # Move to next chunk (inter-chunk pacing handled by the shared
                 # history rate limiter inside get_api_response).
-                current_start = current_end + timedelta(days=1)
+                current_start = current_end.normalize() + timedelta(days=1)
 
             # If no data was found, return empty DataFrame
             if not dfs:
@@ -721,7 +737,7 @@ class BrokerData:
             current_start = from_date
             while current_start <= to_date:
                 # Calculate chunk end date
-                current_end = min(current_start + timedelta(days=chunk_days - 1), to_date)
+                current_end = _angel_chunk_end(current_start, chunk_days, to_date)
 
                 # Prepare payload for OI data API
                 payload = {
@@ -744,14 +760,14 @@ class BrokerData:
                         logger.debug(
                             f"Debug - No OI data for chunk {current_start} to {current_end}"
                         )
-                        current_start = current_end + timedelta(days=1)
+                        current_start = current_end.normalize() + timedelta(days=1)
                         continue
 
                 except BrokerBusyError:
                     raise
                 except Exception as chunk_error:
                     logger.error(f"Debug - Error fetching OI chunk: {str(chunk_error)}")
-                    current_start = current_end + timedelta(days=1)
+                    current_start = current_end.normalize() + timedelta(days=1)
                     continue
 
                 # Extract OI data and create DataFrame
@@ -764,7 +780,7 @@ class BrokerData:
 
                 # Move to next chunk (inter-chunk pacing handled by the shared
                 # history rate limiter inside get_api_response).
-                current_start = current_end + timedelta(days=1)
+                current_start = current_end.normalize() + timedelta(days=1)
 
             # If no data was found, return empty DataFrame
             if not dfs:
