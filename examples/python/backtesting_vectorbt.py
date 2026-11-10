@@ -1,12 +1,14 @@
 """
 RELIANCE 5-Minute EMA Crossover Backtest using VectorBT
 Author : OpenAlgo GPT
+Requires:    uv sync --group backtest  (vectorbt is an optional dependency)
 Description: Backtests 10/20 EMA crossover strategy on RELIANCE 5m data
              Data fetched from OpenAlgo API, backtested with VectorBT
 """
 
 print("OpenAlgo Python Bot is running.")
 
+import os
 from datetime import datetime
 
 import numpy as np
@@ -17,7 +19,7 @@ from openalgo import api, ta
 from plotly.subplots import make_subplots
 
 # ───────────────────────── CONFIG ─────────────────────────
-API_KEY = "dfae8e3a1ce08f60754b0d3597553d7c14957542104b431e4b881c089864a35e"
+API_KEY = os.getenv("OPENALGO_API_KEY")  # Set OPENALGO_API_KEY in your environment
 API_HOST = "http://127.0.0.1:5000"
 
 SYMBOL = "SBIN"
@@ -38,6 +40,9 @@ POSITION_SIZE = 0.5  # 50% of equity
 FEES = 0.0011  # 0.11% trading fees
 
 # ─────────────────────── INIT CLIENT ──────────────────────
+if not API_KEY:
+    raise SystemExit("Set the OPENALGO_API_KEY environment variable before running this example.")
+
 client = api(api_key=API_KEY, host=API_HOST)
 
 
