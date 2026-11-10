@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BacktestIdeaResponse, EvaluationBlock, RegimesBlock } from '@/api/backtestResults'
@@ -70,13 +71,13 @@ const REGIMES: RegimesBlock = {
   vol: [],
 }
 
-function renderPage(response: BacktestIdeaResponse) {
+function renderPage(response: BacktestIdeaResponse, view = '') {
   mocks.idea.mockReturnValue(Promise.resolve(response))
   mocks.run.mockRejectedValue(new Error('run detail not mocked'))
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/backtest-results/IDEA-023']}>
+      <MemoryRouter initialEntries={[`/backtest-results/IDEA-023${view ? `?view=${view}` : ''}`]}>
         <Routes>
           <Route path="/backtest-results/:ideaId" element={<BacktestResultsDetail />} />
         </Routes>
@@ -89,7 +90,7 @@ describe('BacktestResultsDetail additions', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('shows the export links for the selected run', async () => {
-    renderPage({ status: 'success', idea: IDEA, runs: [makeRun()] })
+    renderPage({ status: 'success', idea: IDEA, runs: [makeRun()] }, 'history')
     const menu = await screen.findByTestId('export-2026-09-30-x-v1')
     expect(within(menu).getAllByRole('link')[0]).toHaveAttribute(
       'href',
@@ -105,10 +106,16 @@ describe('BacktestResultsDetail additions', () => {
       spec: { name: 'Gap RSI', entry: ['Gap down 2 percent at the open'] },
       research_notes: 'Decision log entry',
     })
+    // Each block lives behind its own link; open them one at a time.
+    expect(await screen.findByTestId('regimes')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Validation details' }))
     expect(await screen.findByTestId('evaluation')).toBeInTheDocument()
-    expect(screen.getByTestId('regimes')).toBeInTheDocument()
-    expect(screen.getByTestId('rejection-basis')).toHaveTextContent('no-gross-edge')
+    await userEvent.keyboard('{Escape}')
+    await userEvent.click(screen.getByRole('button', { name: 'Strategy rules' }))
     expect(await screen.findByTestId('strategy-definition')).toHaveTextContent('Gap down 2 percent')
+    await userEvent.keyboard('{Escape}')
+    await userEvent.click(screen.getByRole('button', { name: 'Research notes' }))
+    expect(await screen.findByTestId('rejection-basis')).toHaveTextContent('no-gross-edge')
     expect(screen.getByTestId('research-notes')).toHaveTextContent('Decision log entry')
   })
 
@@ -131,8 +138,8 @@ describe('BacktestResultsDetail additions', () => {
   })
 
   it('degrades for an old record with none of the new blocks', async () => {
-    renderPage({ status: 'success', idea: IDEA, runs: [makeRun()], spec: null })
-    await waitFor(() => expect(screen.getByTestId('run-tearsheet')).toBeInTheDocument())
+    renderPage({ status: 'success', idea: IDEA, runs: [makeRun()], spec: null }, 'rules')
+    await waitFor(() => expect(screen.getByTestId('run-tearsheet-chart')).toBeInTheDocument())
     expect(screen.queryByTestId('evaluation')).not.toBeInTheDocument()
     expect(screen.queryByTestId('regimes')).not.toBeInTheDocument()
     expect(await screen.findByText('Run detail unavailable')).toBeInTheDocument()
@@ -142,7 +149,10 @@ describe('BacktestResultsDetail additions', () => {
   })
 
   it('offers trades export only when the run has a stored per-trade file', async () => {
-    renderPage({ status: 'success', idea: IDEA, runs: [makeRun({ trades_export: true })] })
+    renderPage(
+      { status: 'success', idea: IDEA, runs: [makeRun({ trades_export: true })] },
+      'history'
+    )
     expect(await screen.findByText('Trades CSV')).toBeInTheDocument()
   })
 
@@ -161,7 +171,7 @@ describe('BacktestResultsDetail additions', () => {
         info: [],
       })
     )
-    renderPage({ status: 'success', idea: IDEA, runs: [v1, v2] })
+    renderPage({ status: 'success', idea: IDEA, runs: [v1, v2] }, 'history')
     const body = await screen.findByTestId('compare-body')
     expect(within(body).getByTestId('export-2026-09-30-x-v1')).toBeInTheDocument()
     expect(within(body).getByTestId('export-2026-10-05-x-v2')).toBeInTheDocument()

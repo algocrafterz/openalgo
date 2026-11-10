@@ -39,7 +39,7 @@ function visibleText(b: ReturnType<typeof buildDecisionBrief>): string {
 describe('buildDecisionBrief', () => {
   it('leads a profitable but unproven run with one plain recommendation', () => {
     const b = buildDecisionBrief(REJECTED, makeSwingRun(), makeSwingDetail())
-    expect(b.headline).toBe('Do not pursue this version.')
+    expect(b.headline).toBe('Do not continue this version.')
     expect(b.tone).toBe('stop')
     expect(b.reason).toBe(
       "The portfolio made money, but the tests did not show that the strategy's selection rule caused the profit."

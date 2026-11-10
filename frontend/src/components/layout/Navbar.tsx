@@ -42,7 +42,10 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
     <nav className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div
         data-testid="navbar-row"
-        className={cn('px-4 flex h-14 items-center', fluid ? 'w-full' : 'container mx-auto')}
+        className={cn(
+          'px-4 flex h-14 items-center',
+          fluid ? 'w-full' : 'container mx-auto min-[1800px]:max-w-none'
+        )}
       >
         {/* Mobile Menu */}
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
@@ -156,23 +159,16 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
         </Link>
 
         {/* Desktop Navigation.
-            Icon-only between md and xl so all 9 items fit portrait monitors
-            and small laptops (768-1280px wide) without squashing or pushing
-            the profile menu off-screen; full labels from xl up (issue #1384).
+            Icon-only from md up to 1800px; text labels from 1800px (issues #1384, #1507).
 
-            From xl the labels appear but the bar does not grow to match: inside
-            Layout it shares the page `container`, which Tailwind caps at 1280px
-            for every viewport from 1280px to 1535px. Nine labelled items are
-            986px and the logo plus the right-hand controls take 394px, so the
-            row needed 1412px and had 1248px (issue #1507). Below 2xl the items
-            therefore use px-1.5 with tighter gaps, and the right-hand controls
-            keep their tighter gap and the short mode wording already used below
-            lg (203px instead of 255px). The padding is deliberately tighter
-            than it needs to be on the fonts we develop against: this row is
-            laid out with fixed spacing but rendered in whatever the OS resolves
-            for `system-ui`, and the widest common face (DejaVu Sans, a Linux
-            default) runs ~7% wider than macOS. px-2 left only 2px of slack
-            there; px-1.5 leaves ~38px. At 2xl and above nothing changes, and
+            The bar now has 12 items. Labelled they are 1344px wide, the logo takes 96px and
+            the right-hand controls 247 to 299px, so the row needs about 1770px. Inside Layout
+            the row sits in the page `container`, which Tailwind caps at 1536px, so below 1800px
+            the labelled row never fit: on a wide screen the controls spilled into the empty
+            side margin where nobody saw it, and at 1280px (no margin) the whole page scrolled
+            sideways. From 1800px the row is released from the container cap and the labels fit.
+            Below that the items are icons with the label in the title (hover) and the link's
+            accessible name, so nothing is lost for keyboard or screen-reader users.
             e2e/navbar-fit.spec.ts asserts the row never overflows. */}
         <nav className="hidden md:flex items-center gap-0.5 2xl:gap-1">
           {navItems.map((item) => {
@@ -186,7 +182,7 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
             const content = (
               <>
                 <item.icon className="h-4 w-4 shrink-0" />
-                <span className="hidden xl:inline">{item.label}</span>
+                <span className="hidden min-[1800px]:inline">{item.label}</span>
               </>
             )
             // Flask-served pages (e.g. /trading) need a full page load,

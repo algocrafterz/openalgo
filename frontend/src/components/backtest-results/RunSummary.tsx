@@ -22,10 +22,10 @@ const EQUITY_COLOR = '#3b82f6'
 const DRAWDOWN_COLOR = '#eab308'
 
 const VERDICT_LABEL = {
-  EDGE: 'Edge',
-  MARGINAL: 'Marginal',
-  NO_EDGE: 'No edge',
-  INCONCLUSIVE: 'Inconclusive',
+  EDGE: 'Promising',
+  MARGINAL: 'Borderline',
+  NO_EDGE: 'Weak',
+  INCONCLUSIVE: 'Needs more data',
 } as const
 
 const STATE_LABEL: Record<ResearchState, string> = {
@@ -304,19 +304,21 @@ export function PortfolioChart({ portfolio }: { portfolio: PortfolioView | null 
   if (!portfolio || portfolio.unavailable || !portfolio.equity_pct?.length) return null
   return (
     <section
-      className="grid gap-4 rounded-md border p-3 lg:grid-cols-2"
+      className="grid gap-2 rounded-md border p-3"
       data-testid="portfolio-chart"
       aria-label="Portfolio equity and drawdown"
     >
       <LineChart
         title="Book return (% of the book)"
         unit="%"
+        height={230}
         series={[{ label: 'Return %', color: EQUITY_COLOR, points: portfolio.equity_pct }]}
       />
       <LineChart
         title="Drawdown (% below the prior peak)"
         signed
         unit="%"
+        height={120}
         series={[
           { label: 'Drawdown %', color: DRAWDOWN_COLOR, points: portfolio.drawdown_pct ?? [] },
         ]}

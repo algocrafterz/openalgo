@@ -138,10 +138,10 @@ describe('DecisionPanel keeps long reason lists short', () => {
 
 describe('DecisionPanel verdict', () => {
   const cases: [RunVerdictValue, string][] = [
-    ['EDGE', 'Edge'],
-    ['MARGINAL', 'Marginal'],
-    ['NO_EDGE', 'No edge'],
-    ['INCONCLUSIVE', 'Inconclusive'],
+    ['EDGE', 'Promising'],
+    ['MARGINAL', 'Borderline'],
+    ['NO_EDGE', 'Weak'],
+    ['INCONCLUSIVE', 'Needs more data'],
   ]
   for (const [value, label] of cases) {
     it(`renders ${value} with its reasons`, () => {
@@ -179,7 +179,7 @@ describe('DecisionPanel verdict', () => {
 
 describe('DecisionPanel research state', () => {
   it('keeps state and verdict in separate labelled regions', () => {
-    renderPanel({ researchState: 'promising', stage: 'backtest' })
+    renderPanel({ researchState: 'promising', stage: 'backtest', verdict: verdict('NO_EDGE') })
     const state = screen.getByTestId('research-state')
     const run = screen.getByTestId('run-verdict')
     expect(state).not.toContainElement(run)
@@ -196,7 +196,9 @@ describe('DecisionPanel research state', () => {
   })
 
   it('never shows promising or robust as a verdict', () => {
-    renderPanel({ researchState: 'promising' })
+    // A hand-set research state of 'promising' must not turn the calculated verdict into one.
+    renderPanel({ researchState: 'promising', verdict: verdict('NO_EDGE') })
+    expect(screen.getByTestId('verdict-badge')).toHaveTextContent('Weak')
     expect(screen.getByTestId('verdict-badge')).not.toHaveTextContent(/promising|robust/i)
   })
 })

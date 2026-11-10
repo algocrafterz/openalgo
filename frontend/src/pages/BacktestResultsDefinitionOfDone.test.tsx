@@ -176,14 +176,14 @@ const IDEA = {
   revisit_when: 'never',
 }
 
-function renderPage(detail: RunDetail = DETAIL) {
+function renderPage(detail: RunDetail = DETAIL, view = '') {
   const response: BacktestIdeaResponse = { status: 'success', idea: IDEA, runs: [RUN] }
   mocks.idea.mockResolvedValue(response)
   mocks.run.mockResolvedValue({ status: 'success', run: detail })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/backtest-results/IDEA-029']}>
+      <MemoryRouter initialEntries={[`/backtest-results/IDEA-029${view ? `?view=${view}` : ''}`]}>
         <Routes>
           <Route path="/backtest-results/:ideaId" element={<BacktestResultsDetail />} />
         </Routes>
@@ -200,7 +200,7 @@ describe('Definition of Done: what the page shows', () => {
   })
 
   it('1: the exact strategy version, parent and fingerprints used by the run', async () => {
-    renderPage()
+    renderPage(undefined, 'rules')
     const meta = await screen.findByTestId('frozen-meta')
     expect(meta).toHaveTextContent('Version v1')
     expect(meta).toHaveTextContent('Parent none')
@@ -211,7 +211,7 @@ describe('Definition of Done: what the page shows', () => {
   })
 
   it('2: the complete backtest scope, with session, cutoff and force-flat as separate lines', async () => {
-    renderPage()
+    renderPage(undefined, 'rules')
     const scope = await screen.findByTestId('backtest-scope')
     for (const text of [
       'current_fno',
@@ -229,7 +229,7 @@ describe('Definition of Done: what the page shows', () => {
   })
 
   it('3: the dataset and its fingerprint', async () => {
-    renderPage()
+    renderPage(undefined, 'rules')
     const scope = await screen.findByTestId('backtest-scope')
     expect(scope).toHaveTextContent('nse-intraday-5m-20261006-001')
     expect(scope).toHaveTextContent('2026-10-06')
@@ -237,54 +237,61 @@ describe('Definition of Done: what the page shows', () => {
   })
 
   it('11 and 12: the verdict and its explicit reasons', async () => {
-    renderPage()
+    renderPage(undefined, 'validation')
     const verdict = await screen.findByTestId('run-verdict')
-    expect(within(verdict).getByTestId('verdict-badge')).toHaveTextContent(/no edge/i)
+    expect(within(verdict).getByTestId('verdict-badge')).toHaveTextContent(/weak/i)
     expect(within(verdict).getByTestId('verdict-reasons')).toHaveTextContent(
       'Net expectancy at 1.0x cost'
     )
   })
 
   it('13 and 14: stage-aware promotion with failed and not-run checks visible', async () => {
-    renderPage()
+    renderPage(undefined, 'validation')
     const gate = await screen.findByTestId('promotion-gate')
     expect(within(gate).getByTestId('gate-stage-backtest')).toHaveTextContent(/not ready/i)
-    expect(within(gate).getByTestId('gate-stage-paper')).toHaveTextContent(/blocked/i)
-    expect(within(gate).getByTestId('gate-stage-live')).toHaveTextContent(/blocked/i)
+    // Paper and live readiness are not part of the backtest's gates: they have their own section.
+    expect(within(gate).queryByTestId('gate-stage-paper')).toBeNull()
+    expect(within(gate).queryByTestId('gate-stage-live')).toBeNull()
+    const readiness = await screen.findByTestId('readiness-gate')
+    expect(within(readiness).getByTestId('gate-stage-paper')).toHaveTextContent(/blocked/i)
+    expect(within(readiness).getByTestId('gate-stage-live')).toHaveTextContent(/blocked/i)
     expect(within(gate).getByTestId('promotion-gate-G1.2')).toHaveTextContent(/fail/i)
     expect(within(gate).getByTestId('promotion-gate-G5.1')).toHaveTextContent(/not run/i)
   })
 
   it('15: the next research action and its reason', async () => {
-    renderPage()
+    renderPage(undefined, 'validation')
     const action = await screen.findByTestId('next-action')
     expect(action).toHaveTextContent('Reject or redesign the entry')
     expect(action).toHaveTextContent('Net expectancy is negative after costs')
   })
 
   it('16: a verdict reason links to the gate row that backs it', async () => {
-    renderPage()
+    renderPage(undefined, 'validation')
     const reasons = await screen.findByTestId('verdict-reasons')
     const link = within(reasons).getAllByRole('link')[0]
     expect(link.getAttribute('href')).toMatch(/G1\.2/)
   })
 
   it('17: reproducibility status is visible', async () => {
-    renderPage()
+    renderPage(undefined, 'rules')
     const repro = await screen.findByTestId('repro-state')
     expect(repro).toHaveTextContent('Reproducible: Yes')
   })
 
   it('17: a dirty run is shown as not reproducible and not eligible', async () => {
-    renderPage({
-      ...DETAIL,
-      reproducibility: {
-        ...(DETAIL.reproducibility as NonNullable<RunDetail['reproducibility']>),
-        reproducible: false,
-        code_dirty: true,
-        dirty_paths: ['signal_engine/backtest/x.py'],
-      },
-    } as RunDetail)
+    renderPage(
+      {
+        ...DETAIL,
+        reproducibility: {
+          ...(DETAIL.reproducibility as NonNullable<RunDetail['reproducibility']>),
+          reproducible: false,
+          code_dirty: true,
+          dirty_paths: ['signal_engine/backtest/x.py'],
+        },
+      } as RunDetail,
+      'rules'
+    )
     const repro = await screen.findByTestId('repro-state')
     expect(repro).toHaveTextContent('Reproducible: No')
     expect(repro).toHaveTextContent('signal_engine/backtest/x.py')
@@ -292,15 +299,15 @@ describe('Definition of Done: what the page shows', () => {
   })
 
   it('18: the glossary is reachable by a button and does not show until opened', async () => {
-    renderPage()
-    await screen.findByTestId('run-verdict')
-    expect(screen.queryByRole('dialog')).toBeNull()
+    renderPage(undefined, 'validation')
+    await screen.findByTestId('decision-panel')
+    expect(screen.queryByRole('dialog', { name: /glossary/i })).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: /glossary/i }))
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })
 
   it('20: the decision, its reasons and the next step are on the page without reading metrics', async () => {
-    renderPage()
+    renderPage(undefined, 'validation')
     const panel = await screen.findByTestId('decision-panel')
     expect(within(panel).getByTestId('verdict-badge')).toBeInTheDocument()
     expect(within(panel).getByTestId('verdict-reasons')).toBeInTheDocument()
@@ -309,7 +316,7 @@ describe('Definition of Done: what the page shows', () => {
   })
 
   it('20: a user can follow the failed reason to the gate row with its threshold and measured value', async () => {
-    renderPage()
+    renderPage(undefined, 'validation')
     const reasons = await screen.findByTestId('verdict-reasons')
     const href = within(reasons).getAllByRole('link')[0].getAttribute('href') ?? ''
     expect(href).toBe('#gate-G1.2')
@@ -322,7 +329,7 @@ describe('Definition of Done: what the page shows', () => {
   })
 
   it('20: the unevaluated gate is shown as not run, not as a pass', async () => {
-    renderPage()
+    renderPage(undefined, 'validation')
     const row = await screen.findByTestId('promotion-gate-G5.1')
     expect(row).toHaveTextContent(/not run/i)
     expect(row).not.toHaveTextContent(/pass/i)
@@ -350,9 +357,9 @@ describe('Definition of Done: what the page shows', () => {
         gate: 'G5.1',
       },
     } as unknown as RunDetail
-    renderPage(marginal)
+    renderPage(marginal, 'validation')
     const panel = await screen.findByTestId('decision-panel')
-    expect(within(panel).getByTestId('verdict-badge')).toHaveTextContent(/marginal/i)
+    expect(within(panel).getByTestId('verdict-badge')).toHaveTextContent(/borderline/i)
     expect(within(panel).getByTestId('verdict-reasons')).toHaveTextContent('Monte Carlo')
     expect(within(panel).getByTestId('verdict-reasons')).not.toHaveTextContent(/hard requirement/i)
     expect(within(panel).getByTestId('next-action')).toHaveTextContent(
@@ -361,11 +368,13 @@ describe('Definition of Done: what the page shows', () => {
     expect(within(panel).getByTestId('next-action')).not.toHaveTextContent('Reject or redesign')
   })
 
-  it('20: the decision comes before the evidence on the page', async () => {
+  it('20: the verdict and figures come before the links to the evidence', async () => {
     renderPage()
-    const panel = await screen.findByTestId('decision-panel')
-    const scope = await screen.findByTestId('backtest-scope')
-    expect(panel.compareDocumentPosition(scope) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const result = await screen.findByTestId('result-card')
+    const links = screen.getByTestId('report-links')
+    expect(result.compareDocumentPosition(links) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(result).getByTestId('plain-verdict-chip')).toBeInTheDocument()
+    expect(within(result).getByTestId('key-metrics')).toBeInTheDocument()
   })
 
   it.todo(

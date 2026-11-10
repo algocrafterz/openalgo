@@ -12,17 +12,21 @@ import {
   tagOptionsFor,
 } from '@/lib/backtestResults'
 import { cn } from '@/lib/utils'
+import { PLAIN_VERDICT } from './plainVerdict'
 
 function FilterSelect({
   label,
   value,
   options,
   onChange,
+  display = (v) => v,
 }: {
   label: string
   value: string
   options: FacetOption[]
   onChange: (v: string) => void
+  /** Reads a stored value as the user sees it, e.g. the verdict `no-edge` as Weak. */
+  display?: (v: string) => string
 }) {
   return (
     <label className="text-sm flex flex-col gap-1">
@@ -35,7 +39,7 @@ function FilterSelect({
         <option value={ALL}>All</option>
         {options.map((o) => (
           <option key={o.value} value={o.value}>
-            {`${o.value} (${o.count})`}
+            {`${display(o.value)} (${o.count})`}
           </option>
         ))}
       </select>
@@ -48,13 +52,16 @@ const LEGACY: { label: string; key: 'status' | 'horizon' }[] = [
   { label: 'Horizon', key: 'horizon' },
 ]
 
+const verdictText = (v: string): string =>
+  PLAIN_VERDICT[v as keyof typeof PLAIN_VERDICT]?.label ?? v
+
 /** Human labels for each filter that is set, for the active filters summary. */
 function activeLabels(filters: IdeaFilters): string[] {
   const out: string[] = []
   if (filters.search.trim()) out.push(`Search: ${filters.search.trim()}`)
   for (const f of [...FACETS, ...LEGACY]) {
     const v = filters[f.key] as string
-    if (v !== ALL) out.push(`${f.label}: ${v}`)
+    if (v !== ALL) out.push(`${f.label}: ${f.key === 'verdict' ? verdictText(v) : v}`)
   }
   for (const t of filters.tags) out.push(`Tag: ${t}`)
   return out
@@ -67,7 +74,7 @@ const FACETS: { label: string; facet: FacetKey; key: keyof IdeaFilters }[] = [
   { label: 'Market', facet: 'market', key: 'market' },
   { label: 'Timeframe', facet: 'timeframe', key: 'timeframe' },
   { label: 'Research state', facet: 'researchState', key: 'researchState' },
-  { label: 'Verdict', facet: 'verdict', key: 'verdict' },
+  { label: 'Assessment', facet: 'verdict', key: 'verdict' },
 ]
 
 interface StrategyFiltersProps {
@@ -126,6 +133,7 @@ export function StrategyFilters({ ideas, filters, onChange, shown }: StrategyFil
             label={f.label}
             value={filters[f.key] as string}
             options={facetOpts[i]}
+            display={f.key === 'verdict' ? verdictText : undefined}
             onChange={(v) => set({ [f.key]: v } as Partial<IdeaFilters>)}
           />
         ))}

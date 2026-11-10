@@ -37,6 +37,7 @@ import {
   openPositionOf,
   type ReportTrade,
 } from '@/lib/trading/openPosition'
+import { chartFacts, declaredFacts } from '@/lib/trading/backtestSetup'
 import { quantityNote, quantityOf, unitsFor } from '@/lib/trading/strategyQuantity'
 import { backtestLookbackDays } from '@/lib/trading/intervals'
 import {
@@ -47,7 +48,7 @@ import {
   type StoredScript,
 } from '@/lib/trading/openscriptFiles'
 import { BacktestResultTabs } from './BacktestResultTabs'
-import { StrategyInputs } from './StrategyInputs'
+import { SetupAdvanced, SetupEssentials } from './BacktestSetup'
 import { PANEL_HEADER, PanelShell } from './panelShell'
 
 /** The three chart facts a run is of. */
@@ -257,16 +258,10 @@ export function BacktestPanel({
   /** What the trader typed into an input box, by key. Only what they changed. */
   const [edited, setEdited] = useState<Record<string, string>>({})
   /**
-   * Whether the settings section is open.
-   *
-   * It opens itself for a script that declares inputs, because a collapsed
-   * section is indistinguishable from a strategy that has no parameters, and a
-   * trader looking for the ones they wrote finds neither them nor a reason.
-   * `controlsAreTheirs` records a trader closing it by hand, after which it
-   * stays as they left it.
+   * Whether the Advanced section is open. Closed by default and stays as the trader leaves it:
+   * everything in it is shown for reading, and nothing in it is needed to run a backtest.
    */
-  const [showControls, setShowControls] = useState(false)
-  const [controlsAreTheirs, setControlsAreTheirs] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(false)
   // Only for the header. The run reads its own, fresh, at the moment it starts.
   const [target, setTarget] = useState<RunTarget | null>(null)
   const [scripts, setScripts] = useState<StoredScript[]>([])
@@ -425,13 +420,6 @@ export function BacktestPanel({
   }, [file])
 
   const shown = outcome?.program ?? chosen
-  const declaredInputs = useMemo(() => inputsOf(shown), [shown])
-
-  useEffect(() => {
-    if (controlsAreTheirs) return
-    setShowControls(declaredInputs.length > 0)
-  }, [declaredInputs, controlsAreTheirs])
-
   const declarations = useMemo(() => inputsOf(shown), [shown])
   const declared = useMemo(() => declaredOf(shown), [shown])
 
@@ -588,56 +576,35 @@ export function BacktestPanel({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
-        <label className="flex flex-col gap-1">
-          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Strategy</span>
-          <select
-            className="h-8 rounded border border-border bg-background px-2 text-xs"
-            value={file}
-            onChange={(e) => {
-              setFile(e.target.value)
-              // The boxes belong to the script that declared them. Carrying
-              // them across would set one script's input from another's.
-              setEdited({})
-            }}
-            disabled={scripts.length === 0}
-          >
-            {scripts.length === 0 && <option value="">No strategies saved</option>}
-            {scripts.map((one) => (
-              <option key={one.file} value={one.file}>
-                {one.file}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <div className="grid grid-cols-2 gap-2">
-          <label className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wide text-muted-foreground">From</span>
-            <input
-              type="date"
-              className="h-8 rounded border border-border bg-background px-2 text-xs"
-              value={from}
-              max={to}
-              onChange={(e) => {
-                setDatesAreTheirs(true)
-                setFrom(e.target.value)
-              }}
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wide text-muted-foreground">To</span>
-            <input
-              type="date"
-              className="h-8 rounded border border-border bg-background px-2 text-xs"
-              value={to}
-              min={from}
-              onChange={(e) => {
-                setDatesAreTheirs(true)
-                setTo(e.target.value)
-              }}
-            />
-          </label>
-        </div>
+        <SetupEssentials
+          scripts={scripts}
+          file={file}
+          onFile={(next) => {
+            setFile(next)
+            // The boxes belong to the script that declared them. Carrying them across would
+            // set one script's input from another's.
+            setEdited({})
+          }}
+          from={from}
+          to={to}
+          onFrom={(value) => {
+            setDatesAreTheirs(true)
+            setFrom(value)
+          }}
+          onTo={(value) => {
+            setDatesAreTheirs(true)
+            setTo(value)
+          }}
+          datesAreTheirs={datesAreTheirs}
+          onResetDates={() => setDatesAreTheirs(false)}
+          interval={interval}
+          chart={chartFacts(target)}
+          script={declaredFacts(declared, sending, quantity.kind === 'input')}
+          declared={declared}
+          declarations={declarations}
+          edited={edited}
+          onEdit={(key, value) => setEdited((held) => ({ ...held, [key]: value }))}
+        />
 
         <button
           type="button"
@@ -730,75 +697,13 @@ export function BacktestPanel({
         )}
 
 
-        {file !== '' && (declarations.length > 0 || declared) && (
-          <div className="rounded border border-border">
-            <button
-              type="button"
-              className="flex h-7 w-full items-center px-2 text-[10px] uppercase tracking-wide text-muted-foreground hover:bg-accent/50"
-              onClick={() => {
-                setControlsAreTheirs(true)
-                setShowControls((open) => !open)
-              }}
-              aria-expanded={showControls}
-            >
-              Settings
-              <span className="ml-auto">{showControls ? 'hide' : 'show'}</span>
-            </button>
-
-            {showControls && (
-              <div className="flex flex-col gap-2 border-t border-border p-2">
-                {declarations.length === 0 ? (
-                  <p className="text-[10px] leading-relaxed text-muted-foreground">
-                    This script declares no settings, so there is nothing to change here. Its
-                    numbers are written into it: to make one adjustable, give it a name with
-                    input(), as in length = input(9, "Fast length", min = 1).
-                  </p>
-                ) : (
-                  <StrategyInputs
-                    declarations={declarations}
-                    edited={edited}
-                    onChange={(key, value) => setEdited((held) => ({ ...held, [key]: value }))}
-                    note="A box left empty uses the script's own default. Run again to apply a change. These are for testing on this chart only and never reach a strategy that is running live: set those under Strategies."
-                  />
-                )}
-
-                {declared && (
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                      Declared by the script
-                    </span>
-                    <dl className="grid grid-cols-2 gap-x-2 gap-y-0.5 font-mono text-[10px] text-muted-foreground">
-                      <dt>Capital</dt>
-                      <dd className="text-right">
-                        {declared.capital.toLocaleString()} {declared.currency}
-                      </dd>
-                      <dt>Order size</dt>
-                      <dd className="text-right">
-                        {sending === null ? `${declared.qty} ${declared.qtyType}` : `${sending} ${declared.qtyType}`}
-                        {quantity.kind === 'input' && ' (yours)'}
-                      </dd>
-                      <dt>Pyramiding</dt>
-                      <dd className="text-right">{declared.pyramiding}</dd>
-                      <dt>Commission</dt>
-                      <dd className="text-right">
-                        {declared.commission} {declared.commissionType}
-                      </dd>
-                      <dt>Slippage</dt>
-                      <dd className="text-right">{declared.slippage} ticks</dd>
-                      <dt>Fills on</dt>
-                      <dd className="text-right">{declared.fillOn}</dd>
-                    </dl>
-                    <p className="text-[10px] leading-relaxed text-muted-foreground">
-                      These are the script's own, set in its `strategy()` line, and are shown
-                      rather than offered: a commission supplied here beside a declared one
-                      describes the same money twice and is refused before the first bar. Edit
-                      the script to change them.
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+        {file !== '' && declared && (
+          <SetupAdvanced
+            open={showAdvanced}
+            onToggle={() => setShowAdvanced((open) => !open)}
+            declared={declared}
+            sizeNote={quantity.kind !== 'unknown' ? quantityNote(quantity) : null}
+          />
         )}
 
         {!target && (
@@ -848,16 +753,6 @@ export function BacktestPanel({
               to test the whole range.
             </span>
           </div>
-        )}
-
-        {quantity.kind !== 'unknown' && (
-          <p className="rounded border border-border px-2 py-1.5 text-[10px] leading-relaxed text-muted-foreground">
-            <span className="font-medium text-foreground">
-              Order size {sending === null ? '' : sending}
-            </span>
-            {' - '}
-            {quantityNote(quantity)}
-          </p>
         )}
 
         {holding && (

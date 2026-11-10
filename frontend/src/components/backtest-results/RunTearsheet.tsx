@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils'
 import { EvaluationTable } from './EvaluationTable'
 import { ExportMenu } from './ExportMenu'
 import { LineChart } from './LineChart'
+import { MetricTip, type MetricTipId } from './MetricTip'
 import { MonthlyGrid } from './MonthlyGrid'
 import { RealityChecks } from './RealityChecks'
 import { RegimeTable } from './RegimeTable'
@@ -35,22 +36,36 @@ function Stat({
   value,
   hint,
   valueClass,
+  tip,
 }: {
   label: string
+  tip?: MetricTipId
   value: string
   hint?: string
   valueClass?: string
 }) {
   return (
     <div className="rounded-md border p-3">
-      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-xs text-muted-foreground">
+        {label}
+        {tip && <MetricTip metric={tip} />}
+      </div>
       <div className={cn('text-xl font-semibold font-mono', valueClass)}>{value}</div>
       {hint && <div className="text-xs text-muted-foreground mt-1">{hint}</div>}
     </div>
   )
 }
 
-function HeadlineStats({ run, portfolio }: { run: RunRecord; portfolio?: PortfolioView | null }) {
+export function HeadlineStats({
+  run,
+  portfolio,
+  secondary = false,
+}: {
+  run: RunRecord
+  portfolio?: PortfolioView | null
+  /** Leave out the figures the report's key cards already show (trades, win rate, profit factor, drawdown). */
+  secondary?: boolean
+}) {
   const m = run.metrics
   const net = metricText(m, m.net_bps)
   const book = portfolio && !portfolio.unavailable ? portfolio.stats : undefined
@@ -64,23 +79,34 @@ function HeadlineStats({ run, portfolio }: { run: RunRecord; portfolio?: Portfol
         hint={`Gross ${metricText(m, m.gross_bps)}. Average over ${m.trades} trades, in bps of each position's notional (100 bps = 1%); not a portfolio return. Green only when statistically significant.`}
         valueClass={netClass(m)}
       />
-      <Stat label="Trades" value={m.trades === undefined ? 'n/a' : String(m.trades)} />
-      <Stat label="Win rate" value={isKnown(m, m.win_rate) ? fmtPercent(m.win_rate) : 'n/a'} />
-      <Stat
-        label="Profit factor"
-        value={metricText(m, m.profit_factor, (v) => fmtNum(v))}
-        hint="Gross wins divided by gross losses, after costs"
-      />
-      <Stat label="Expectancy (R)" value={metricText(m, m.expectancy_r)} />
+      {!secondary && (
+        <>
+          <Stat label="Trades" value={m.trades === undefined ? 'n/a' : String(m.trades)} />
+          <Stat
+            label="Win rate"
+            tip="win_rate"
+            value={isKnown(m, m.win_rate) ? fmtPercent(m.win_rate) : 'n/a'}
+          />
+          <Stat
+            label="Profit factor"
+            tip="profit_factor"
+            value={metricText(m, m.profit_factor, (v) => fmtNum(v))}
+            hint="Gross wins divided by gross losses, after costs"
+          />
+        </>
+      )}
+      <Stat label="Expectancy (R)" tip="expectancy" value={metricText(m, m.expectancy_r)} />
       {book?.sharpe !== undefined && book.sharpe !== null ? (
         <Stat
           label="Sharpe (portfolio)"
+          tip="sharpe"
           value={fmtNum(book.sharpe)}
           hint={`Daily book returns over all ${book.sessions} sessions, annualised. The record's ${metricText(m, m.sharpe, (v) => fmtNum(v))} sums trades by entry session and is not a portfolio Sharpe.`}
         />
       ) : (
         <Stat
           label="Sharpe"
+          tip="sharpe"
           value={metricText(m, m.sharpe, (v) => fmtNum(v))}
           hint={
             noR
@@ -89,15 +115,17 @@ function HeadlineStats({ run, portfolio }: { run: RunRecord; portfolio?: Portfol
           }
         />
       )}
-      {book?.max_drawdown_pct !== undefined ? (
+      {secondary ? null : book?.max_drawdown_pct !== undefined ? (
         <Stat
           label="Max drawdown (portfolio)"
+          tip="max_drawdown"
           value={`${fmtNum(book.max_drawdown_pct, 1)}%`}
           hint="Peak to trough of the daily book, % of its prior peak"
         />
       ) : (
         <Stat
           label="Max drawdown (R)"
+          tip="max_drawdown"
           value={metricText(m, m.max_dd_r, (v) => `${fmtNum(v, 1)}R`)}
           hint="Peak to trough of cumulative net R"
         />
@@ -123,7 +151,10 @@ export function RunTearsheet({
   onShowTrades,
   portfolio,
   corrections,
+  part = 'all',
 }: {
+  /** Which blocks to draw: the performance figures and charts, or the technical remainder. */
+  part?: 'all' | 'performance' | 'advanced' | 'chart' | 'breakdown' | 'monthly'
   run: RunRecord
   ideaId?: string
   assumptions?: RunDetail['assumptions']
@@ -137,10 +168,30 @@ export function RunTearsheet({
   const book =
     portfolio && !portfolio.unavailable && portfolio.equity_pct?.length ? portfolio : null
   const months = bookMonths(book)
+  // 'chart' and 'breakdown' split the performance part: the report draws the equity chart under
+  // its key cards, and the remaining statistics and monthly grid further down.
+  const showCharts = part === 'all' || part === 'performance' || part === 'chart'
+  const showStats =
+    part === 'all' || part === 'performance' || part === 'breakdown' || part === 'monthly'
+  const showPerformance = showCharts || showStats
+  const showAdvanced = part === 'all' || part === 'advanced'
   return (
-    <div className="space-y-6" data-testid="run-tearsheet">
-      {ideaId && <ExportMenu ideaId={ideaId} runId={run.run_id} hasTrades={run.trades_export} />}
-      {isExtrapolated(run.metrics, run.years) && (
+    <div
+      className="space-y-6"
+      data-testid={
+        part === 'advanced'
+          ? 'run-tearsheet-advanced'
+          : part === 'chart'
+            ? 'run-tearsheet-chart'
+            : part === 'breakdown'
+              ? 'run-tearsheet-breakdown'
+              : 'run-tearsheet'
+      }
+    >
+      {showStats && part !== 'monthly' && ideaId && (
+        <ExportMenu ideaId={ideaId} runId={run.run_id} hasTrades={run.trades_export} />
+      )}
+      {showStats && isExtrapolated(run.metrics, run.years) && (
         <div role="note" className="rounded-md border border-yellow-500/50 p-3 text-sm">
           {typeof run.years === 'number'
             ? `Only ${run.years} years tested`
@@ -149,68 +200,83 @@ export function RunTearsheet({
           with caution.
         </div>
       )}
-      <HeadlineStats run={run} portfolio={portfolio} />
-      <RealityChecks run={run} />
-      {book ? (
+      {showStats && part !== 'monthly' && (
+        <HeadlineStats run={run} portfolio={portfolio} secondary={part === 'breakdown'} />
+      )}
+      {/* The report keeps this evidence with the reliability detail, not the statistics tab. */}
+      {(part === 'all' || part === 'performance' || part === 'advanced') && (
+        <RealityChecks run={run} />
+      )}
+      {!showPerformance ? null : book ? (
         <>
-          <PortfolioChart portfolio={book} />
-          <Card>
-            <CardHeader>
-              <CardTitle>Monthly book return (%)</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <MonthlyGrid
-                rows={months}
-                caption="Book return per month, % of the book"
-                cellTitle={(r) => `${fmtNum(r.total_r)}% of the book`}
-              />
-            </CardContent>
-          </Card>
+          {showCharts && <PortfolioChart portfolio={book} />}
+          {showStats && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Monthly book return (%)</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <MonthlyGrid
+                  rows={months}
+                  caption="Book return per month, % of the book"
+                  cellTitle={(r) => `${fmtNum(r.total_r)}% of the book`}
+                />
+              </CardContent>
+            </Card>
+          )}
         </>
       ) : (
         <>
-          <Card>
-            <CardHeader>
-              <CardTitle>Equity and drawdown</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-6 lg:grid-cols-2">
-              <LineChart
-                title="Cumulative net R"
-                series={[{ label: 'Net R', color: EQUITY_COLOR, points: series.equity_r ?? [] }]}
-              />
-              <LineChart
-                title="Drawdown (R below prior peak)"
-                series={[
-                  { label: 'Drawdown', color: DRAWDOWN_COLOR, points: series.drawdown_r ?? [] },
-                ]}
-              />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Monthly net R</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <MonthlyGrid rows={series.monthly ?? []} />
-            </CardContent>
-          </Card>
+          {showCharts && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Equity and drawdown</CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-2">
+                <LineChart
+                  height={230}
+                  title="Cumulative net R"
+                  series={[{ label: 'Net R', color: EQUITY_COLOR, points: series.equity_r ?? [] }]}
+                />
+                <LineChart
+                  height={120}
+                  title="Drawdown (R below prior peak)"
+                  series={[
+                    { label: 'Drawdown', color: DRAWDOWN_COLOR, points: series.drawdown_r ?? [] },
+                  ]}
+                />
+              </CardContent>
+            </Card>
+          )}
+          {showStats && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Monthly net R</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <MonthlyGrid rows={series.monthly ?? []} />
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
-      {run.evaluation && (
+      {showAdvanced && run.evaluation && (
         <EvaluationTable
           evaluation={run.evaluation}
           onShowTrades={onShowTrades}
           corrections={corrections}
         />
       )}
-      {run.regimes && <RegimeTable regimes={run.regimes} />}
-      <RunRobustness run={run} />
-      <RunAssumptions run={run} assumptions={assumptions} />
-      <p className="text-xs text-muted-foreground" data-testid="caveat">
-        Backtests overstate live performance: fills, slippage, data quality and regime change all
-        cut results after a strategy goes live. No metric on this page is a threshold that proves a
-        strategy works. Treat a result as evidence to test forward, not a forecast.
-      </p>
+      {part === 'all' && run.regimes && <RegimeTable regimes={run.regimes} />}
+      {showAdvanced && <RunRobustness run={run} />}
+      {showAdvanced && <RunAssumptions run={run} assumptions={assumptions} />}
+      {showStats && (
+        <p className="text-xs text-muted-foreground" data-testid="caveat">
+          Backtests overstate live performance: fills, slippage, data quality and regime change all
+          cut results after a strategy goes live. No metric on this page is a threshold that proves
+          a strategy works. Treat a result as evidence to test forward, not a forecast.
+        </p>
+      )}
     </div>
   )
 }

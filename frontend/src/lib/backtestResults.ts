@@ -7,6 +7,7 @@ import type {
   RunMetrics,
   RunRecord,
   RunVerdictValue,
+  RupeePnl,
   SeriesPoint,
   Verdict,
 } from '@/api/backtestResults'
@@ -703,4 +704,33 @@ export function findGateRow(
   if (!evaluation) return undefined
   const rows = (evaluation.dimensions ?? []).flatMap((d) => d.rows ?? [])
   return rows.find((r) => r.gate === gate) ?? rows.find((r) => r.gate.startsWith(`${gate}.`))
+}
+
+/**
+ * The recorded modelled rupee result of a run: the listing's `rupee_pnl`, else the same fields in
+ * the full run record's cost model. Nothing is computed; null means the run did not record it.
+ */
+export function rupeePnl(run: {
+  rupee_pnl?: RupeePnl | null
+  cost_model?: { modelled_net_pnl_rs?: number; modelled_total_cost_rs?: number; pnl_basis?: string }
+}): RupeePnl | null {
+  if (run.rupee_pnl && Number.isFinite(run.rupee_pnl.net_rs)) return run.rupee_pnl
+  const m = run.cost_model
+  if (!m || typeof m.modelled_net_pnl_rs !== 'number' || !Number.isFinite(m.modelled_net_pnl_rs)) {
+    return null
+  }
+  const cost = m.modelled_total_cost_rs
+  return {
+    net_rs: m.modelled_net_pnl_rs,
+    total_cost_rs: typeof cost === 'number' && Number.isFinite(cost) ? cost : null,
+    basis: m.pnl_basis ?? null,
+  }
+}
+
+/** Indian digit grouping with a rupee sign and an explicit minus, no decimals: -Rs 16,400. */
+export function fmtRupees(value: number | null | undefined, signed = false): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return NA
+  const body = `Rs ${Math.abs(Math.round(value)).toLocaleString('en-IN')}`
+  if (value < 0 && Math.round(value) !== 0) return `-${body}`
+  return signed && Math.round(value) > 0 ? `+${body}` : body
 }

@@ -22,6 +22,14 @@ export interface RunMetrics {
   [key: string]: number | undefined
 }
 
+/** Modelled rupee result as recorded: net of statutory charges and slippage. */
+export interface RupeePnl {
+  net_rs: number
+  total_cost_rs: number | null
+  /** How the trades were sized, as the engine recorded it. */
+  basis: string | null
+}
+
 /** How far back a run tested and how stale its data snapshot is. */
 export interface CoverageFields {
   years: number | null
@@ -65,7 +73,7 @@ export interface SplitMetrics {
   t_stat?: number
 }
 
-export interface LatestRun {
+export interface LatestRun extends EngineBlocks {
   run_id: string
   date: string
   code_version: string
@@ -89,6 +97,21 @@ export interface LatestRun {
   sparkline: number[]
   /** Calculated verdict of this latest run, when the server sends it. */
   run_verdict?: RunVerdictValue | null
+  promotion_decision?: PromotionDecision | null
+  next_action?: NextAction | null
+  /** Required tests that failed, as the engine recorded them. */
+  hard_failed?: string[]
+  failed_count?: number | null
+  /** Whole-portfolio headline from the run's daily book; null when the run has none. */
+  book?: {
+    source: 'recorded' | 'reconstructed'
+    total_return_pct: number | null
+    annual_return_pct: number | null
+    max_drawdown_pct: number | null
+    years: number | null
+  } | null
+  /** The run's recorded modelled rupee result, passed through by the server; null when absent. */
+  rupee_pnl?: RupeePnl | null
 }
 
 export interface IdeaCard {
@@ -386,7 +409,7 @@ export interface RunFingerprints {
  * Everything a run folder says about one run. `captured` is false for a schema 2 record that has
  * no run folder: every other field is then null or empty and the UI shows "not captured".
  */
-export interface RunDetail {
+export interface RunDetail extends EngineBlocks {
   run_id: string
   schema: number
   captured: boolean
@@ -412,6 +435,8 @@ export interface RunDetail {
   trials: TrialsBlock | null
   ledgers: LedgerSummary | null
   cost_components: CostComponentSummary | null
+  /** Net result grouped by instrument, side, exit reason, weekday and entry hour. */
+  diagnostics?: TradeDiagnostics | null
   /** True when evidence/trades.parquet exists, so the trade drill-down can open. */
   has_trades: boolean
   /** True when the lineage ledgers exist, so a trade can be followed to its signal and fills. */
@@ -586,6 +611,25 @@ export interface CostComponentSummary {
   engine_cost_bps_mean: number | null
 }
 
+export interface DiagnosticGroup {
+  label: string
+  trades: number
+  net_bps_mean: number
+  net_bps_total: number
+  win_rate: number
+}
+
+export interface TradeDiagnostics {
+  trades: number
+  symbols_total?: number
+  symbols_best?: DiagnosticGroup[]
+  symbols_worst?: DiagnosticGroup[]
+  by_side?: DiagnosticGroup[]
+  by_exit_reason?: DiagnosticGroup[]
+  by_weekday?: DiagnosticGroup[]
+  by_entry_hour?: DiagnosticGroup[]
+}
+
 export type TradeSubset = 'all' | 'in_sample' | 'oos' | 'losers' | 'gap_exits'
 
 export interface TradeRow {
@@ -655,7 +699,102 @@ export interface BacktestRunDetailResponse extends Envelope {
   run: RunDetail
 }
 
-export interface RunRecord {
+/** Engine 1.6: how much of the result rests on a guess about the bars. Absent on older runs. */
+export interface ExecutionWarnings {
+  trades: number
+  ambiguous_exit_trades: number
+  ambiguous_exit_share: number
+  data_gap_trades: number
+  data_gap_share: number
+  /** Null when the run did not count them. */
+  entries_skipped_missing_bar: number | null
+  ambiguous_sensitivity?: {
+    label?: string
+    trades?: number
+    actual_mean_net_r: number | null
+    upper_bound_mean_net_r: number | null
+    run_mean_net_r_actual?: number | null
+    run_mean_net_r_upper_bound?: number | null
+    target_basis?: string
+    /** True when the bound uses the resting target of each single-exit trade. */
+    exact?: boolean
+  }
+}
+
+/** Engine 1.6: what the look-ahead guard and the truncation re-run covered. Absent on older runs. */
+export interface LookaheadGuard {
+  mode: 'full' | 'partial' | 'not_run'
+  symbols_checked: number
+  sessions_checked: number
+  symbols_unguarded?: string[]
+  violations: number
+  lookahead_check: 'run' | 'not_run'
+  truncation?: {
+    status: 'run' | 'not_run'
+    ok?: boolean
+    symbols?: string[]
+    session_cuts?: number
+    mid_session_cuts?: number
+    mismatches?: number
+  }
+}
+
+/** By the share of missing whole sessions: none, up to 1%, over 1% to 5%, over 5% (inclusive upward). */
+export type CoverageClass = 'COMPLETE' | 'MINOR_GAPS' | 'MATERIAL_GAPS' | 'SEVERE_GAPS'
+
+export interface SessionCoverageSymbol {
+  symbol: string
+  class: CoverageClass
+  calendar_sessions: number
+  loaded_sessions: number
+  split_excluded?: string[]
+  coverage_share: number | null
+  /** The denominator: sessions in the symbol's own window minus out-of-scope and split-excluded ones. */
+  expected_sessions_after_exclusions?: number
+  missing_share?: number
+  missing_full_sessions: { count: number; ranges: string[]; share?: number }
+  /** Sessions that exist but lack bars; kept apart from whole missing sessions. */
+  partial_sessions?: { audited: boolean; count: number | null; missing_bars: number | null }
+}
+
+/** Engine 1.6: which sessions each symbol has, the session basis and the coverage class. */
+export interface SessionCoverage {
+  coverage_class: CoverageClass
+  /** Plain-language note for a material or severe run; shown to the trader as written. */
+  disclosure?: string | null
+  session_basis: { used: 'common' | 'own'; source?: string; symbols?: number }
+  effective: {
+    period?: { start: string | null; end: string | null }
+    sessions_kept: number
+    sessions_excluded_by_basis: { count: number; ranges?: string[] }
+  }
+  universe: {
+    symbols: number
+    symbols_complete?: number
+    symbols_minor_gaps?: number
+    symbols_material_gaps?: number
+    symbols_severe_gaps?: number
+    expected_sessions_after_exclusions_total?: number
+    missing_share_total?: number
+    missing_full_sessions_total: number
+    partial_sessions_total?: number | null
+    missing_bars_total?: number | null
+  }
+  symbols: SessionCoverageSymbol[]
+  symbols_not_listed?: number
+  continuity_note: string
+}
+
+/** The optional engine 1.6 fields, on a run record, a run detail and the listing summary. */
+export interface EngineBlocks {
+  execution_warnings?: ExecutionWarnings | null
+  lookahead_guard?: LookaheadGuard | null
+  session_coverage?: SessionCoverage | null
+  cost_model_version?: number | string | null
+  engine_version?: number | string | null
+}
+
+export interface RunRecord extends EngineBlocks {
   run_id: string
   date: string
   code_version: string
@@ -672,7 +811,14 @@ export interface RunRecord {
   position_caps?: PositionCap[]
   baseline?: Baseline
   /** Statutory charges plus slippage per trade (G1.1, G1.3). Not the headline cost of a flat run. */
-  cost_model?: { mean_total_bps?: number; net_bps?: number; flat_bps?: number }
+  cost_model?: {
+    mean_total_bps?: number
+    net_bps?: number
+    flat_bps?: number
+    modelled_net_pnl_rs?: number
+    modelled_total_cost_rs?: number
+    pnl_basis?: string
+  }
   years?: number | null
   data_age_days?: number | null
   split?: { type: string; oos_start: string }
@@ -935,6 +1081,8 @@ export interface RunComparison {
    * Null when there is no incremental view.
    */
   curves_incremental: ComparisonCurves | null
+  /** Whether both runs traded comparable session sets. Absent on an older server. */
+  session_coverage?: { comparable: boolean | null; reason: string | null }
 }
 
 export interface BacktestCompareResponse extends Envelope {

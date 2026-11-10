@@ -11,6 +11,7 @@ import type {
   RunDetail,
   RunRecord,
   RunVerdictValue,
+  Verdict,
 } from '@/api/backtestResults'
 import { fmtNum, fmtSigned } from './backtestResults'
 
@@ -76,6 +77,49 @@ export const VERDICT_MEANING: Record<RunVerdictValue, string> = {
 
 const STOPPED_STATES: ResearchState[] = ['rejected', 'shelved', 'evidence_against_edge']
 
+/** The one sentence every surface uses when the researcher has stopped work on a version. */
+export const STOPPED_TEXT = 'Do not continue this version.'
+
+const DECISION_LABEL: Partial<Record<ResearchState, string>> = {
+  rejected: 'Rejected',
+  shelved: 'Shelved',
+  evidence_against_edge: 'Evidence against an edge',
+}
+
+export interface ResearchDecision {
+  /** For example "Rejected (not robust)". */
+  label: string
+  revisit: string | null
+}
+
+/**
+ * The researcher's recorded decision on a strategy, when work on it has been stopped. It is
+ * recorded separately from the calculated result of any one run, so a surface that shows both
+ * must say which is which. Null while the strategy is still open.
+ */
+export function researchDecision(
+  idea: Pick<IdeaCard, 'research_state' | 'rejection_basis' | 'revisit_when'>
+): ResearchDecision | null {
+  const state = idea.research_state
+  if (!state || !STOPPED_STATES.includes(state)) return null
+  const basis = idea.rejection_basis ? ` (${idea.rejection_basis.replace(/-/g, ' ')})` : ''
+  return { label: `${DECISION_LABEL[state] ?? state}${basis}`, revisit: idea.revisit_when ?? null }
+}
+
+/**
+ * A short note for when the run's calculated result and the researcher's decision point in
+ * different directions. Only a stopped decision beside a result that is not "Weak" differs.
+ * Nothing here judges which is right: it says the recommendation follows the research record.
+ */
+export function decisionNote(
+  idea: Pick<IdeaCard, 'research_state' | 'rejection_basis' | 'revisit_when'>,
+  verdict: Verdict | null
+): string | null {
+  if (!researchDecision(idea) || !verdict || verdict === 'no-edge' || verdict === 'none')
+    return null
+  return 'The calculated result of this run and the research decision are recorded separately. The next step follows the research decision.'
+}
+
 export interface RecommendedAction {
   text: string
   why: string
@@ -90,7 +134,7 @@ function recommendedAction(idea: SummaryIdea, detail: RunDetail): RecommendedAct
   const platform = detail.next_action ?? null
   if (idea.research_state && STOPPED_STATES.includes(idea.research_state)) {
     return {
-      text: 'Do not continue this version.',
+      text: STOPPED_TEXT,
       why: idea.revisit_when ?? `The research disposition is ${idea.research_state}.`,
       platform,
     }

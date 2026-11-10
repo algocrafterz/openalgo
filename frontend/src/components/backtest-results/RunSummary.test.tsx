@@ -22,7 +22,9 @@ const IDEA = makeCard({
 describe('RunSummary', () => {
   it('shows the three answers as separate, labelled results', () => {
     render(<RunSummary idea={IDEA} run={makeSwingRun()} detail={makeSwingDetail()} />)
-    expect(within(screen.getByTestId('summary-verdict')).getByText('Marginal')).toBeInTheDocument()
+    expect(
+      within(screen.getByTestId('summary-verdict')).getByText('Borderline')
+    ).toBeInTheDocument()
     expect(
       within(screen.getByTestId('summary-disposition')).getByText('Rejected (not-robust)')
     ).toBeInTheDocument()

@@ -109,7 +109,8 @@ function ideaResponse(runs: RunRecord[]): BacktestIdeaResponse {
 
 function renderPage(
   response: BacktestIdeaResponse,
-  detail: RunDetail | Error = makeDetail({ captured: false, verdict: null })
+  detail: RunDetail | Error = makeDetail({ captured: false, verdict: null }),
+  view = ''
 ) {
   mocks.idea.mockReturnValue(Promise.resolve(response))
   if (detail instanceof Error) {
@@ -120,7 +121,7 @@ function renderPage(
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/backtest-results/IDEA-012']}>
+      <MemoryRouter initialEntries={[`/backtest-results/IDEA-012${view ? `?view=${view}` : ''}`]}>
         <Routes>
           <Route path="/backtest-results/:ideaId" element={<BacktestResultsDetail />} />
         </Routes>
@@ -174,27 +175,37 @@ describe('BacktestResultsDetail tearsheet', () => {
     mocks.createChart.mockReset()
   })
 
-  it('shows the idea header with conclusion and revisit condition', async () => {
+  it('shows the idea header, and the researcher conclusion and revisit condition on request', async () => {
     renderPage(ideaResponse([RUN_V1]))
-    expect(
-      await screen.findByRole('heading', { name: /IDEA-012: EMA9 x VWAP/ })
-    ).toBeInTheDocument()
-    // A legacy run has no decision brief, so the header keeps the record once the run loads.
+    expect(await screen.findByRole('heading', { name: /EMA9 x VWAP/ })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Research notes' }))
+    // A legacy run has no decision brief, so the record is kept with the research notes.
     expect(await screen.findByText(/Cross follows through less than random/)).toBeInTheDocument()
     expect(screen.getByText(/Only as a mean-reversion variant/)).toBeInTheDocument()
-    expect(screen.getByText('no edge')).toBeInTheDocument()
+    expect(screen.getByTestId('recorded-status')).toHaveTextContent('Recorded status: rejected')
   })
 
-  it('leads with net bps after costs and shows gross beside it', async () => {
+  it('shows the key figures and an average trade after costs in the statistics', async () => {
     renderPage(ideaResponse([RUN_V1]))
-    const tearsheet = await screen.findByTestId('run-tearsheet')
-    const label = within(tearsheet).getByText('Mean net bps per trade (after costs)')
-    const card = label.parentElement as HTMLElement
-    expect(within(card).getByText('-1.30')).toHaveClass('text-red-600')
-    expect(within(card).getByText(/Gross \+8\.10/)).toBeInTheDocument()
-    expect(within(tearsheet).getByText('41.0%')).toBeInTheDocument()
-    expect(within(tearsheet).getByText('12.5R')).toBeInTheDocument()
-    expect(within(tearsheet).getAllByText('1.90 vs 1.97').length).toBeGreaterThan(0)
+    const stats = await screen.findByTestId('statistics-table')
+    expect(within(screen.getByTestId('kpi-avg-trade')).getByText('-1 bps')).toHaveClass(
+      'text-red-600'
+    )
+    // Win rate is a row of the table; drawdown is both a key card and a table row.
+    expect(within(stats).getByTestId('stat-win-rate')).toHaveTextContent('41.0%')
+    expect(screen.getByTestId('kpi-drawdown')).toHaveTextContent('12.5R')
+  })
+
+  it('keeps the significance figure in the validation details, not on the first screen', async () => {
+    renderPage(ideaResponse([RUN_V1]), undefined, 'validation')
+    expect(await screen.findByTestId('significance-rows')).toBeInTheDocument()
+    expect(within(screen.getByTestId('stat-t')).getByText('1.90 vs 1.97')).toBeInTheDocument()
+  })
+
+  it('does not show the significance figure in the main statistics table', async () => {
+    renderPage(ideaResponse([RUN_V1]))
+    const stats = await screen.findByTestId('statistics-table')
+    expect(within(stats).queryByTestId('stat-t')).toBeNull()
   })
 
   it('renders n/a, never zero, when the run has no trades', async () => {
@@ -206,15 +217,22 @@ describe('BacktestResultsDetail tearsheet', () => {
       split: undefined,
     })
     renderPage(ideaResponse([empty]))
-    const tearsheet = await screen.findByTestId('run-tearsheet')
-    expect(within(tearsheet).getAllByText('n/a').length).toBeGreaterThanOrEqual(6)
-    expect(within(tearsheet).queryByText('0.00')).toBeNull()
-    expect(within(tearsheet).queryByText('+0.00')).toBeNull()
+    const keys = await screen.findByTestId('key-metrics')
+    // Net P&L, return, drawdown, profit factor and win rate are unknown; trades is a true zero.
+    expect(within(keys).getAllByText('n/a')).toHaveLength(5)
+    expect(within(screen.getByTestId('kpi-trades'))).toBeTruthy()
+    expect(screen.getByTestId('kpi-trades')).toHaveTextContent('0')
+    const stats = screen.getByTestId('section-performance')
+    // A run with no trades leaves its figures out; it never prints them as zero.
+    expect(within(keys).queryByText('0.00')).toBeNull()
+    expect(within(stats).queryByText('0.00')).toBeNull()
+    expect(within(stats).queryByText('+0.00')).toBeNull()
+    expect(within(screen.getByTestId('kpi-avg-trade')).queryByText('0.00')).toBeNull()
   })
 
   it('plots equity and drawdown series', async () => {
     renderPage(ideaResponse([RUN_V1]))
-    await screen.findByTestId('run-tearsheet')
+    await screen.findByTestId('run-tearsheet-chart')
     expect(screen.getAllByTestId('line-chart')).toHaveLength(2)
     await waitFor(() => expect(mocks.createChart).toHaveBeenCalledTimes(2))
     expect(mocks.setData).toHaveBeenCalled()
@@ -222,7 +240,7 @@ describe('BacktestResultsDetail tearsheet', () => {
 
   it('says when a run has no series', async () => {
     renderPage(ideaResponse([makeRun({ series: undefined })]))
-    await screen.findByTestId('run-tearsheet')
+    await screen.findByTestId('run-tearsheet-chart')
     expect(screen.getAllByText('No series recorded for this run')).toHaveLength(2)
     expect(screen.getByText('No monthly breakdown recorded')).toBeInTheDocument()
   })
@@ -235,7 +253,7 @@ describe('BacktestResultsDetail tearsheet', () => {
   })
 
   it('states clearly when there is no in-sample / out-of-sample split', async () => {
-    renderPage(ideaResponse([RUN_V1]))
+    renderPage(ideaResponse([RUN_V1]), undefined, 'validation')
     expect(
       await screen.findByText(/No in-sample \/ out-of-sample split was recorded/)
     ).toBeInTheDocument()
@@ -247,21 +265,21 @@ describe('BacktestResultsDetail tearsheet', () => {
       in_sample: { trades: 900, gross_bps: 9, net_bps: 1.2, win_rate: 0.45, t_stat: 2.1 },
       out_of_sample: { trades: 300, gross_bps: 2, net_bps: -4, win_rate: 0.38 },
     })
-    renderPage(ideaResponse([split]))
+    renderPage(ideaResponse([split]), undefined, 'validation')
     expect(await screen.findByText('In-sample')).toBeInTheDocument()
-    expect(screen.getByText('Out-of-sample')).toBeInTheDocument()
+    expect(screen.getAllByText('Out-of-sample').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText(/Out-of-sample starts 2025-01-01/)).toBeInTheDocument()
     expect(screen.getByText('-4.00')).toBeInTheDocument()
   })
 
   it('shows cost sensitivity with break-even cost', async () => {
-    renderPage(ideaResponse([RUN_V1]))
+    renderPage(ideaResponse([RUN_V1]), undefined, 'validation')
     expect(await screen.findByText('9.4 (modelled, headline)')).toBeInTheDocument()
     expect(screen.getByText('8.10 bps')).toBeInTheDocument()
   })
 
   it('says so when no cost sensitivity was recorded', async () => {
-    renderPage(ideaResponse([makeRun({ cost_sensitivity: undefined })]))
+    renderPage(ideaResponse([makeRun({ cost_sensitivity: undefined })]), undefined, 'validation')
     expect(await screen.findByText('No cost sensitivity recorded')).toBeInTheDocument()
   })
 
@@ -270,10 +288,11 @@ describe('BacktestResultsDetail tearsheet', () => {
       validation: ['known-answer suite passed'],
       notes: 'Ran on full universe.',
     })
-    renderPage(ideaResponse([run]))
-    // Once in the coverage strip at the top and once in the assumptions block.
+    renderPage(ideaResponse([run]), undefined, 'validation')
+    // The report header and the recorded assumptions.
     expect(await screen.findAllByText('fno-208')).toHaveLength(2)
-    expect(screen.getByText('2021-01-01 to 2026-09-25')).toBeInTheDocument()
+    // The period is in the report header as well as the coverage strip.
+    expect(screen.getAllByText('2021-01-01 to 2026-09-25').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('zerodha-mis')).toBeInTheDocument()
     expect(screen.getByText('or_minutes')).toBeInTheDocument()
     expect(screen.getByText('known-answer suite passed')).toBeInTheDocument()
@@ -281,7 +300,7 @@ describe('BacktestResultsDetail tearsheet', () => {
   })
 
   it('shows None recorded when a run has no params', async () => {
-    renderPage(ideaResponse([makeRun({ params: {} })]))
+    renderPage(ideaResponse([makeRun({ params: {} })]), undefined, 'validation')
     expect(await screen.findByText('None recorded')).toBeInTheDocument()
   })
 
@@ -309,7 +328,7 @@ describe('BacktestResultsDetail run history', () => {
   })
 
   it('lists runs newest first with lineage and change notes', async () => {
-    renderPage(ideaResponse([RUN_V1, RUN_V2]))
+    renderPage(ideaResponse([RUN_V1, RUN_V2]), undefined, 'history')
     const heading = await screen.findByText('Run history (2)')
     const card = heading.closest('[data-slot="card"]') as HTMLElement
     const rows = within(card).getAllByRole('row').slice(1)
@@ -320,19 +339,19 @@ describe('BacktestResultsDetail run history', () => {
   })
 
   it('defaults to the latest run and switches when another date is picked', async () => {
-    renderPage(ideaResponse([RUN_V1, RUN_V2]))
+    renderPage(ideaResponse([RUN_V1, RUN_V2]), undefined, 'history')
     expect(await screen.findByText(/Showing run 2026-10-05-x-v2/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '2026-09-30' }))
     expect(screen.getByText(/Showing run 2026-09-30-x-v1/)).toBeInTheDocument()
   })
 
   it('labels a promoted run in text', async () => {
-    renderPage(ideaResponse([makeRun({ promoted: true })]))
+    renderPage(ideaResponse([makeRun({ promoted: true })]), undefined, 'history')
     expect(await screen.findByText(/promoted to forward test/)).toBeInTheDocument()
   })
 
   it('shows a single-run message instead of compare controls', async () => {
-    renderPage(ideaResponse([RUN_V1]))
+    renderPage(ideaResponse([RUN_V1]), undefined, 'history')
     expect(await screen.findByText(/Only one run is recorded/)).toBeInTheDocument()
     expect(screen.queryByLabelText('Run A')).toBeNull()
     expect(mocks.compare).not.toHaveBeenCalled()
@@ -380,13 +399,13 @@ describe('BacktestResultsDetail compare', () => {
   })
 
   it('compares previous against latest by default', async () => {
-    renderPage(ideaResponse([RUN_V1, RUN_V2]))
+    renderPage(ideaResponse([RUN_V1, RUN_V2]), undefined, 'history')
     await screen.findByTestId('compare-body')
     expect(mocks.compare).toHaveBeenCalledWith('IDEA-012', RUN_V1.run_id, RUN_V2.run_id)
   })
 
   it('shows neutral deltas with no verdict wording or green/red colour', async () => {
-    renderPage(ideaResponse([RUN_V1, RUN_V2]))
+    renderPage(ideaResponse([RUN_V1, RUN_V2]), undefined, 'history')
     await screen.findByTestId('compare-body')
     const body = screen.getByTestId('compare-body')
     expect(body.textContent ?? '').not.toMatch(/improved|worse|assessment/i)
@@ -395,7 +414,7 @@ describe('BacktestResultsDetail compare', () => {
   })
 
   it('does not judge trade counts and formats win rate in points', async () => {
-    renderPage(ideaResponse([RUN_V1, RUN_V2]))
+    renderPage(ideaResponse([RUN_V1, RUN_V2]), undefined, 'history')
     await screen.findByTestId('compare-body')
     const trades = deltaRow('Trades')
     expect(trades).toHaveTextContent('+100')
@@ -407,7 +426,7 @@ describe('BacktestResultsDetail compare', () => {
   })
 
   it('shows parameter changes, additions, removals and trial counts', async () => {
-    renderPage(ideaResponse([RUN_V1, RUN_V2]))
+    renderPage(ideaResponse([RUN_V1, RUN_V2]), undefined, 'history')
     await screen.findByTestId('compare-body')
     expect(screen.getByText('changed sl_atr: 1.5 to 1')).toBeInTheDocument()
     expect(screen.getByText('added vol_filter: true')).toBeInTheDocument()
@@ -418,12 +437,12 @@ describe('BacktestResultsDetail compare', () => {
 
   it('shows identical parameters when nothing changed', async () => {
     mocks.compare.mockResolvedValue(compareOk({ params: { changed: {}, added: {}, removed: {} } }))
-    renderPage(ideaResponse([RUN_V1, RUN_V2]))
+    renderPage(ideaResponse([RUN_V1, RUN_V2]), undefined, 'history')
     expect(await screen.findByText('Parameters are identical')).toBeInTheDocument()
   })
 
   it('shows no warning banner for like-for-like runs', async () => {
-    renderPage(ideaResponse([RUN_V1, RUN_V2]))
+    renderPage(ideaResponse([RUN_V1, RUN_V2]), undefined, 'history')
     await screen.findByTestId('compare-body')
     expect(screen.queryByText(/not like-for-like/)).toBeNull()
   })
@@ -432,7 +451,7 @@ describe('BacktestResultsDetail compare', () => {
     mocks.compare.mockResolvedValue(
       compareOk({ comparable: false, warnings: ['universe differs: fno-208 vs fno-40'] })
     )
-    renderPage(ideaResponse([RUN_V1, RUN_V2]))
+    renderPage(ideaResponse([RUN_V1, RUN_V2]), undefined, 'history')
     const banner = await screen.findByText(/not like-for-like/)
     const alert = banner.closest('[role="alert"]') as HTMLElement
     expect(alert).toHaveTextContent('universe differs: fno-208 vs fno-40')
@@ -440,13 +459,13 @@ describe('BacktestResultsDetail compare', () => {
 
   it('shows the comparison error', async () => {
     mocks.compare.mockResolvedValue({ status: 'error', message: 'Run not found: x' })
-    renderPage(ideaResponse([RUN_V1, RUN_V2]))
+    renderPage(ideaResponse([RUN_V1, RUN_V2]), undefined, 'history')
     expect(await screen.findByText('Run not found: x')).toBeInTheDocument()
   })
 
   it('refetches when a different run is chosen and refuses the same run twice', async () => {
     const RUN_V3 = makeRun({ run_id: '2026-10-09-x-v3', date: '2026-10-09' })
-    renderPage(ideaResponse([RUN_V1, RUN_V2, RUN_V3]))
+    renderPage(ideaResponse([RUN_V1, RUN_V2, RUN_V3]), undefined, 'history')
     await screen.findByTestId('compare-body')
     await userEvent.selectOptions(screen.getByLabelText('Run A'), RUN_V1.run_id)
     await waitFor(() =>
@@ -459,7 +478,7 @@ describe('BacktestResultsDetail compare', () => {
   })
 
   it('overlays both runs on one chart with a legend', async () => {
-    renderPage(ideaResponse([RUN_V1, RUN_V2]))
+    renderPage(ideaResponse([RUN_V1, RUN_V2]), undefined, 'history')
     await screen.findByTestId('compare-body')
     expect(screen.getByText('A: 2026-09-30')).toBeInTheDocument()
     expect(screen.getByText('B: 2026-10-05')).toBeInTheDocument()
@@ -473,26 +492,33 @@ describe('BacktestResultsDetail data coverage and reality checks', () => {
   })
 
   it('puts the data coverage above the run history so the window is read before the numbers', async () => {
-    renderPage(ideaResponse([RUN_V1]))
+    renderPage(ideaResponse([RUN_V1]), undefined, 'history')
     const coverage = await screen.findByTestId('data-coverage')
     // The run-history heading itself, not the collapsed section title that names it.
-    const history = screen.getByRole('heading', { name: /Run history/i })
+    const history = screen.getAllByRole('heading', { name: /Run history/i }).at(-1) as HTMLElement
     expect(
       coverage.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
   })
 
-  it('shows the reality checks right after the headline numbers', async () => {
+  it('shows the key figures before the chart', async () => {
     renderPage(ideaResponse([RUN_V1]))
-    const checks = await screen.findByTestId('reality-checks')
-    const chart = within(screen.getByTestId('run-tearsheet')).getByText(/Equity and drawdown/i)
-    expect(checks.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const keys = await screen.findByTestId('key-metrics')
+    const chart = within(await screen.findByTestId('run-tearsheet-chart')).getByText(
+      /Equity and drawdown/i
+    )
+    expect(keys.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('keeps the reality checks with the validation details', async () => {
+    renderPage(ideaResponse([RUN_V1]), undefined, 'validation')
+    expect(await screen.findByTestId('reality-checks')).toBeInTheDocument()
   })
 
   it('shows the coverage of the run being viewed, not only the latest', async () => {
     const older = makeRun({ run_id: 'r-old', date: '2026-09-01', years: 4.2, data_age_days: 40 })
     const latest = makeRun({ run_id: 'r-new', date: '2026-09-30', years: 10, data_age_days: 0 })
-    renderPage(ideaResponse([older, latest]))
+    renderPage(ideaResponse([older, latest]), undefined, 'history')
     expect(await screen.findByTestId('data-coverage')).toHaveTextContent('10.0 years')
     await userEvent.click(screen.getByRole('button', { name: /2026-09-01/ }))
     expect(screen.getByTestId('data-coverage')).toHaveTextContent('4.2 years')
@@ -514,16 +540,20 @@ describe('BacktestResultsDetail decision-first layout', () => {
   })
 
   it('shows the calculated verdict from the run detail, not the legacy idea verdict', async () => {
-    renderPage(withIdea({ verdict: 'no-edge' }), makeDetail())
+    renderPage(withIdea({ verdict: 'no-edge' }), makeDetail(), 'validation')
     const panel = await screen.findByTestId('decision-panel')
-    expect(await within(panel).findByTestId('verdict-badge')).toHaveTextContent('Edge')
+    expect(await within(panel).findByTestId('verdict-badge')).toHaveTextContent('Promising')
     expect(within(panel).queryByTestId('legacy-note')).toBeNull()
     expect(mocks.run).toHaveBeenCalledWith('IDEA-012', RUN_V1.run_id)
     expect(within(panel).getByTestId('next-action')).toHaveTextContent('Start paper incubation')
   })
 
   it('labels the research state separately from the run verdict', async () => {
-    renderPage(withIdea({ research_state: 'promising', stage: 'backtest' }), makeDetail())
+    renderPage(
+      withIdea({ research_state: 'promising', stage: 'backtest' }),
+      makeDetail(),
+      'validation'
+    )
     const state = await screen.findByTestId('research-state')
     expect(state).toHaveTextContent('Research state')
     expect(state).toHaveTextContent('Promising')
@@ -533,7 +563,8 @@ describe('BacktestResultsDetail decision-first layout', () => {
   it('shows strategy details from the frozen spec when run detail is present', async () => {
     renderPage(
       { ...withIdea({}), spec: { name: 'Current spec name', entry: ['current rule'] } },
-      makeDetail()
+      makeDetail(),
+      'rules'
     )
     expect(await screen.findByText(/frozen entry rule/)).toBeInTheDocument()
     expect(screen.queryByText(/current rule/)).toBeNull()
@@ -552,7 +583,8 @@ describe('BacktestResultsDetail decision-first layout', () => {
           market: 'NSE Equities',
         },
       }),
-      makeDetail()
+      makeDetail(),
+      'notes'
     )
     const identity = await screen.findByTestId('run-identity')
     expect(identity).toHaveTextContent('v3')
@@ -561,8 +593,8 @@ describe('BacktestResultsDetail decision-first layout', () => {
   })
 
   it('still renders the existing blocks and a note when the run detail request fails', async () => {
-    renderPage(withIdea({}), new Error('boom'))
-    expect(await screen.findByTestId('run-tearsheet')).toBeInTheDocument()
+    renderPage(withIdea({}), new Error('boom'), 'history')
+    expect(await screen.findByTestId('run-tearsheet-chart')).toBeInTheDocument()
     expect(await screen.findByText('Run detail unavailable')).toBeInTheDocument()
     expect(screen.getByTestId('data-coverage')).toBeInTheDocument()
     expect(screen.queryByTestId('decision-panel')).toBeNull()
@@ -582,27 +614,28 @@ describe('BacktestResultsDetail decision-first layout', () => {
       </QueryClientProvider>
     )
     expect(await screen.findByTestId('run-detail-loading')).toBeInTheDocument()
-    expect(screen.getByTestId('run-tearsheet')).toBeInTheDocument()
+    expect(screen.getByTestId('run-tearsheet-chart')).toBeInTheDocument()
   })
 
   it('shows the legacy note for a run that was not captured', async () => {
     renderPage(
       withIdea({ verdict: 'marginal' }),
-      makeDetail({ captured: false, verdict: null, spec: null })
+      makeDetail({ captured: false, verdict: null, spec: null }),
+      'validation'
     )
     expect(await screen.findByTestId('legacy-note')).toBeInTheDocument()
     expect(screen.getByTestId('legacy-verdict')).toHaveTextContent(/marginal/i)
   })
 
   it('has a glossary button and the drawer is closed by default', async () => {
-    renderPage(withIdea({}), makeDetail())
-    await screen.findByTestId('decision-panel')
+    renderPage(withIdea({}), makeDetail(), 'validation')
+    await screen.findByTestId('decision-brief')
     expect(screen.getByRole('button', { name: /glossary/i })).toBeInTheDocument()
-    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByRole('dialog', { name: /glossary/i })).toBeNull()
   })
 
   it('renders the promotion gate and the gate anchors the reasons link to', async () => {
-    renderPage(withIdea({}), makeDetail())
+    renderPage(withIdea({}), makeDetail(), 'validation')
     expect(await screen.findByTestId('promotion-gate')).toBeInTheDocument()
   })
 })
@@ -634,20 +667,24 @@ describe('BacktestResultsDetail verdict provenance', () => {
       </QueryClientProvider>
     )
     expect(await screen.findByText('Latest run verdict')).toBeInTheDocument()
-    expect(screen.getByText('edge')).toBeInTheDocument()
+    expect(screen.getByTestId('plain-verdict-chip')).toHaveTextContent('Promising')
   })
 
   it('shows no idea verdict in the header for an older run whose detail failed', async () => {
-    renderPage(twoRuns(), new Error('boom'))
+    renderPage(twoRuns(), new Error('boom'), 'history')
     await userEvent.click(await screen.findByRole('button', { name: '2026-09-30' }))
     await screen.findByTestId('run-detail-unavailable')
     expect(screen.queryByText('Latest run verdict')).toBeNull()
-    expect(screen.queryByText('edge')).toBeNull()
+    expect(screen.queryByTestId('plain-verdict-chip')).toBeNull()
+    expect(screen.getByTestId('no-run-verdict')).toBeInTheDocument()
   })
 
   it('does not show the latest verdict as the recorded verdict of an older legacy run', async () => {
-    renderPage(twoRuns(), makeDetail({ captured: false, verdict: null, spec: null }))
+    renderPage(twoRuns(), makeDetail({ captured: false, verdict: null, spec: null }), 'history')
     await userEvent.click(await screen.findByRole('button', { name: '2026-09-30' }))
+    // Back to the report, then into the validation details of the run just chosen.
+    await userEvent.keyboard('{Escape}')
+    await userEvent.click(await screen.findByRole('button', { name: 'Validation details' }))
     await screen.findByTestId('legacy-note')
     expect(screen.queryByTestId('legacy-verdict')).toBeNull()
     expect(screen.getByTestId('decision-panel')).toHaveTextContent(
@@ -674,7 +711,8 @@ describe('BacktestResultsDetail verdict provenance', () => {
       },
       makeDetail({
         scope: { style: 'FROZEN-STYLE', market: 'FROZEN-MKT' } as unknown as RunDetail['scope'],
-      })
+      }),
+      'notes'
     )
     const chips = await screen.findByTestId('classification')
     expect(chips).toHaveTextContent('FROZEN-STYLE')
@@ -686,7 +724,8 @@ describe('BacktestResultsDetail verdict provenance', () => {
   it('shows a not captured note when the captured run has no frozen spec', async () => {
     renderPage(
       { ...ideaResponse([RUN_V1]), spec: { name: 'Idea spec', entry: 'CURRENT RULE' } } as never,
-      makeDetail({ spec: null })
+      makeDetail({ spec: null }),
+      'rules'
     )
     expect(await screen.findByTestId('frozen-spec-missing')).toBeInTheDocument()
     expect(screen.queryByText(/CURRENT RULE/)).toBeNull()

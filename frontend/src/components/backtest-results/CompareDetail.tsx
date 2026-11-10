@@ -39,6 +39,11 @@ function CompareDetailInner({
         classes={comparison.change_classes}
       />
       <OverlapBanner overlap={overlap} views={views} value={view} onChange={setView} />
+      {comparison.session_coverage?.comparable === false && comparison.session_coverage.reason && (
+        <p className="rounded-md border p-2 text-sm" data-testid="session-comparability-note">
+          {comparison.session_coverage.reason}
+        </p>
+      )}
       <StrategySection strategy={strategy} />
       <DiffSection id="cmp-scope" title="Scope" rows={comparison.scope} />
       <DiffSection id="cmp-dataset" title="Dataset" rows={dataset.fields}>

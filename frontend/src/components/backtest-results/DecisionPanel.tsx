@@ -19,10 +19,10 @@ import { ShowTradesButton } from './ShowTradesButton'
 import { VerdictBadge } from './VerdictBadge'
 
 const VERDICT_LABEL: Record<RunVerdictValue, string> = {
-  EDGE: 'Edge',
-  MARGINAL: 'Marginal',
-  NO_EDGE: 'No edge',
-  INCONCLUSIVE: 'Inconclusive',
+  EDGE: 'Promising',
+  MARGINAL: 'Borderline',
+  NO_EDGE: 'Weak',
+  INCONCLUSIVE: 'Needs more data',
 }
 
 const VERDICT_CLASS: Record<RunVerdictValue, string> = {

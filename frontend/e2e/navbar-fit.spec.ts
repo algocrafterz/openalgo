@@ -56,12 +56,20 @@ test.describe('Navbar fits the space it has', () => {
         scrollWidth,
         `navbar row is ${scrollWidth - clientWidth}px wider than its ${clientWidth}px of space`
       ).toBeLessThanOrEqual(clientWidth)
+
+      // The row spilling into the empty side margin of a wide screen is invisible, so also
+      // require that the page itself never scrolls sideways.
+      const page_ = await page.evaluate(() => ({
+        scroll: document.documentElement.scrollWidth,
+        inner: window.innerWidth,
+      }))
+      expect(page_.scroll, 'page scrolls sideways').toBeLessThanOrEqual(page_.inner)
     })
   }
 
   test('keeps the right-hand controls inside the bar at the tightest width', async ({ page }) => {
     await signedIn(page)
-    // 1280 is the worst case: the labels switch on and the container is capped here.
+    // 1280 is the worst case: the container is capped here and the bar holds 12 items.
     await page.setViewportSize({ width: 1280, height: 900 })
     await page.goto('/dashboard')
 
@@ -80,12 +88,18 @@ test.describe('Navbar fits the space it has', () => {
     expect(overhang, `right-hand controls hang ${overhang}px past the bar`).toBeLessThanOrEqual(1)
   })
 
-  test('shows the text labels from xl up, which is what needs the room', async ({ page }) => {
+  test('shows icons only below 1800px and text labels from 1800px', async ({ page }) => {
     await signedIn(page)
     await page.setViewportSize({ width: 1280, height: 900 })
     await page.goto('/dashboard')
-
     await expect(page.getByTestId('navbar-row')).toBeVisible()
-    await expect(page.getByRole('link', { name: 'Dashboard', exact: true })).toBeVisible()
+    // The link keeps its name for keyboard and screen-reader users, and its title for hover.
+    const dashboard = page.getByRole('link', { name: 'Dashboard', exact: true })
+    await expect(dashboard).toBeVisible()
+    await expect(dashboard).toHaveAttribute('title', 'Dashboard')
+    await expect(dashboard.locator('span')).toBeHidden()
+
+    await page.setViewportSize({ width: 1920, height: 900 })
+    await expect(dashboard.locator('span')).toBeVisible()
   })
 })

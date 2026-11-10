@@ -125,7 +125,7 @@ function detail(over: Partial<RunDetail> = {}): RunDetail {
   }
 }
 
-function renderPage(d: RunDetail) {
+function renderPage(d: RunDetail, view = '') {
   mocks.idea.mockResolvedValue({ status: 'success', idea: IDEA, runs: [RUN] })
   mocks.run.mockResolvedValue({ status: 'success', run: d })
   mocks.trades.mockResolvedValue({
@@ -135,7 +135,7 @@ function renderPage(d: RunDetail) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/backtest-results/IDEA-012']}>
+      <MemoryRouter initialEntries={[`/backtest-results/IDEA-012${view ? `?view=${view}` : ''}`]}>
         <Routes>
           <Route path="/backtest-results/:ideaId" element={<BacktestResultsDetail />} />
         </Routes>
@@ -148,16 +148,18 @@ describe('BacktestResultsDetail evidence blocks', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('renders every evidence block for a captured run', async () => {
-    renderPage(detail())
+    renderPage(detail(), 'validation')
     expect(await screen.findByTestId('integrity-checks')).toBeInTheDocument()
     expect(screen.getByTestId('data-quality')).toBeInTheDocument()
     expect(screen.getByTestId('ledger-summary')).toBeInTheDocument()
     expect(screen.getByTestId('trials-block')).toBeInTheDocument()
-    expect(screen.getByTestId('cost-decomposition')).toBeInTheDocument()
+  })
+
+  it('shows the cost breakdown, gross to net, under Costs and assumptions', async () => {
+    renderPage(detail(), 'assumptions')
+    expect(await screen.findByTestId('cost-decomposition')).toBeInTheDocument()
     expect(screen.getByTestId('cost-before')).toHaveTextContent('8.10')
     expect(screen.getByTestId('cost-after')).toHaveTextContent('-1.30')
-    expect(screen.getByTestId('trades-section')).toBeInTheDocument()
-    expect(screen.queryByTestId('trades-drilldown')).not.toBeInTheDocument()
   })
 
   it('shows the not-captured texts for a legacy run', async () => {
@@ -171,19 +173,27 @@ describe('BacktestResultsDetail evidence blocks', () => {
         cost_components: null,
         has_trades: false,
         has_ledgers: false,
-      })
+      }),
+      'validation'
     )
-    expect(await screen.findByText('Validity checks were not recorded for this run')).toBeVisible()
+    const notRecorded = await screen.findByText('Validity checks were not recorded for this run')
+    // These notes are audit material, inside the Audit section, which is closed by default.
+    const audit = screen.getByTestId('section-audit')
+    expect(audit).not.toHaveAttribute('open')
+    await userEvent.click(within(audit).getByText('Audit'))
+    expect(notRecorded).toBeVisible()
     expect(screen.getByText('Not captured for this run')).toBeInTheDocument()
     expect(screen.getByText('No lineage ledgers for this run')).toBeInTheDocument()
     expect(screen.getByText('Not recorded')).toBeInTheDocument()
-    expect(screen.getByText('Cost components were not recorded')).toBeInTheDocument()
   })
 
-  it('opens the drill-down from the Trades entry point', async () => {
-    const user = userEvent.setup()
+  it('opens the trade table from View all trades, on every trade', async () => {
     renderPage(detail())
-    await user.click(await screen.findByRole('button', { name: 'Open trades' }))
+    // The trade table is not on the page; it loads only when asked for.
+    await screen.findByTestId('report-links')
+    expect(screen.queryByTestId('trades-drilldown')).not.toBeInTheDocument()
+    expect(mocks.trades).not.toHaveBeenCalled()
+    await userEvent.click(await screen.findByRole('button', { name: /^All \d+ trades$/ }))
     expect(await screen.findByTestId('trades-drilldown')).toBeInTheDocument()
     await waitFor(() =>
       expect(mocks.trades).toHaveBeenCalledWith(
@@ -200,7 +210,7 @@ describe('BacktestResultsDetail evidence blocks', () => {
     // is shadowed by that stub and never sees the page's call.
     HTMLElement.prototype.scrollIntoView = scroll
     const user = userEvent.setup()
-    renderPage(detail())
+    renderPage(detail(), 'validation')
     await screen.findByTestId('integrity-checks')
     const gate = await screen.findByTestId('gate-G3.1')
     await user.click(within(gate).getByRole('button', { name: 'Show trades' }))
@@ -211,36 +221,19 @@ describe('BacktestResultsDetail evidence blocks', () => {
   })
 
   it('offers no gate button when the run has no trades', async () => {
-    renderPage(detail({ has_trades: false }))
+    renderPage(detail({ has_trades: false }), 'validation')
     await screen.findByTestId('integrity-checks')
     expect(screen.queryByRole('button', { name: 'Show trades' })).not.toBeInTheDocument()
   })
 
-  it('resets the drill-down when the run changes', async () => {
+  it('starts from every trade again when the trade view is closed and reopened', async () => {
     const user = userEvent.setup()
-    const run2 = makeRun({ run_id: '2026-10-05-x-v2', date: '2026-10-05' })
-    mocks.idea.mockResolvedValue({ status: 'success', idea: IDEA, runs: [RUN, run2] })
-    mocks.run.mockImplementation((_i: string, runId: string) =>
-      Promise.resolve({ status: 'success', run: detail({ run_id: runId }) })
-    )
-    mocks.trades.mockResolvedValue({
-      status: 'success',
-      page: { total: 0, limit: 50, offset: 0, subset: 'all', rows: [] },
-    })
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    render(
-      <QueryClientProvider client={client}>
-        <MemoryRouter initialEntries={['/backtest-results/IDEA-012']}>
-          <Routes>
-            <Route path="/backtest-results/:ideaId" element={<BacktestResultsDetail />} />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>
-    )
-    await user.click(await screen.findByRole('button', { name: 'Open trades' }))
+    renderPage(detail(), 'trades')
     expect(await screen.findByTestId('trades-drilldown')).toBeInTheDocument()
-    const pick = await screen.findAllByRole('button', { name: /2026-09-30/ })
-    await user.click(pick[0])
-    await waitFor(() => expect(screen.queryByTestId('trades-drilldown')).not.toBeInTheDocument())
+    await user.selectOptions(screen.getByLabelText('Subset'), 'oos')
+    expect(screen.getByLabelText('Subset')).toHaveValue('oos')
+    await user.keyboard('{Escape}')
+    await user.click(await screen.findByRole('button', { name: /^All \d+ trades$/ }))
+    await waitFor(() => expect(screen.getByLabelText('Subset')).toHaveValue('all'))
   })
 })

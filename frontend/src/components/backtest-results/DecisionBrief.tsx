@@ -29,7 +29,13 @@ export function DecisionBrief({
   idea,
   run,
   detail,
+  showChart = true,
+  showFigures = true,
 }: {
+  /** The page may draw the equity and drawdown chart under Performance instead. */
+  showChart?: boolean
+  /** The report shows the key figures as cards above, so it leaves the brief's own out. */
+  showFigures?: boolean
   idea: SummaryIdea
   run: RunRecord
   detail: RunDetail
@@ -47,28 +53,35 @@ export function DecisionBrief({
         </div>
       </Question>
 
-      <Question title="How did it perform?">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="brief-figures">
-          {b.figures.map((f) => (
-            <div key={f.label} className="rounded-md border p-2">
-              <div className="text-xs text-muted-foreground">{f.label}</div>
-              <div
-                className={cn(
-                  'font-mono font-semibold',
-                  f.value.length > 12 ? 'text-sm' : 'text-lg'
-                )}
-              >
-                {f.value}
-              </div>
-              {f.hint && <div className="text-xs text-muted-foreground">{f.hint}</div>}
-            </div>
-          ))}
-        </div>
+      {!showFigures && (
         <p className="text-xs text-muted-foreground" data-testid="brief-basis">
           {b.basis}
         </p>
-        <PortfolioChart portfolio={b.portfolio} />
-      </Question>
+      )}
+      {showFigures && (
+        <Question title="How did it perform?">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="brief-figures">
+            {b.figures.map((f) => (
+              <div key={f.label} className="rounded-md border p-2">
+                <div className="text-xs text-muted-foreground">{f.label}</div>
+                <div
+                  className={cn(
+                    'font-mono font-semibold',
+                    f.value.length > 12 ? 'text-sm' : 'text-lg'
+                  )}
+                >
+                  {f.value}
+                </div>
+                {f.hint && <div className="text-xs text-muted-foreground">{f.hint}</div>}
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground" data-testid="brief-basis">
+            {b.basis}
+          </p>
+          {showChart && <PortfolioChart portfolio={b.portfolio} />}
+        </Question>
+      )}
 
       <Question title="Why?">
         {b.findings.length > 0 ? (

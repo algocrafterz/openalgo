@@ -2017,3 +2017,308 @@ class TestLineageIntegrity:
         self._lineage(ev)
         monkeypatch.setattr(svc.pq, "read_table", lambda *a, **k: pytest.fail("re-read"))
         assert self._lineage(ev)[2] == 200
+
+
+_COST_MODEL = {
+    "model": "m",
+    "product": "MIS",
+    "capital": 1000000,
+    "risk_per_trade": 0.01,
+    "leverage": 5,
+    "slippage_bps_per_side": 2,
+    "flat_bps": 1,
+    "mean_statutory_bps": 3,
+    "mean_total_bps": 7,
+    "net_bps": 1.0,
+    "net_bps_slip_2x": 0.5,
+    "total_bps_at": {"1.0": 7},
+}
+
+
+class TestListingReadability:
+    """Fields the catalogue reads: next action, failed gates and the portfolio headline."""
+
+    def test_latest_run_carries_verdict_next_action_and_failed_gates(self, root):
+        folder = root / "research" / "ideas" / "idea-001-sample" / "runs"
+        path = next(p for p in folder.glob("*.json") if "v2" in p.name)
+        rec = json.loads(path.read_text())
+        rec["run_verdict"] = "NO_EDGE"
+        rec["next_action"] = {"action": "Improve net expectancy", "reason": "r", "gate": "G1.2"}
+        rec["evaluation"] = {
+            "dimensions": [
+                {"name": "Economics", "rows": [{"gate": "G1.2", "status": "fail", "hard": True}]}
+            ],
+            "summary": {"counts": {"fail": 3}, "hard_failed": ["G1.2", " G2.2"]},
+        }
+        path.write_text(json.dumps(rec))
+        _ok, body, _ = svc.list_results(root)
+        latest = next(i for i in body["ideas"] if i["id"] == "IDEA-001")["latest_run"]
+        assert latest["run_verdict"] == "NO_EDGE"
+        assert latest["next_action"]["action"] == "Improve net expectancy"
+        assert latest["hard_failed"] == ["G1.2", "G2.2"]
+        assert latest["failed_count"] == 3
+        assert latest["book"] is None
+
+    def test_absent_fields_stay_absent_not_invented(self, root):
+        _ok, body, _ = svc.list_results(root)
+        latest = next(i for i in body["ideas"] if i["id"] == "IDEA-001")["latest_run"]
+        assert latest["hard_failed"] == []
+        assert latest["failed_count"] is None
+        assert latest["next_action"] is None
+        assert latest["book"] is None
+
+    def _rewrite_latest(self, root, edit):
+        folder = root / "research" / "ideas" / "idea-001-sample" / "runs"
+        path = next(p for p in folder.glob("*.json") if "v2" in p.name)
+        rec = json.loads(path.read_text())
+        edit(rec)
+        path.write_text(json.dumps(rec))
+        _ok, body, _ = svc.list_results(root)
+        return next(i for i in body["ideas"] if i["id"] == "IDEA-001")["latest_run"]
+
+    def test_rupee_result_is_passed_through_as_recorded(self, root):
+        def edit(rec):
+            rec["cost_model"] = {
+                **_COST_MODEL,
+                "modelled_net_pnl_rs": -16400.18,
+                "modelled_total_cost_rs": 164978.74,
+                "pnl_basis": "modelled: sized independently",
+            }
+
+        latest = self._rewrite_latest(root, edit)
+        assert latest["rupee_pnl"] == {
+            "net_rs": -16400.18,
+            "total_cost_rs": 164978.74,
+            "basis": "modelled: sized independently",
+        }
+
+    def test_rupee_result_is_absent_when_not_recorded(self, root):
+        latest = self._rewrite_latest(root, lambda rec: rec.pop("cost_model", None))
+        assert latest["rupee_pnl"] is None
+
+    def test_rupee_result_drops_a_non_finite_or_missing_cost(self, root):
+        def edit(rec):
+            rec["cost_model"] = {
+                **_COST_MODEL,
+                "modelled_net_pnl_rs": 120.5,
+                "modelled_total_cost_rs": "x",
+            }
+
+        latest = self._rewrite_latest(root, edit)
+        assert latest["rupee_pnl"] == {"net_rs": 120.5, "total_cost_rs": None, "basis": None}
+
+    def test_portfolio_headline_comes_from_the_sidecar_book(self, root):
+        folder = root / "research" / "ideas" / "idea-001-sample"
+        side = folder / "evaluations" / "2026-10-05-s-v2"
+        side.mkdir(parents=True)
+        (side / "20261014T005227-ist-portfolio.json").write_text(
+            json.dumps(
+                {
+                    "kind": "reconstructed_portfolio",
+                    "run_id": "2026-10-05-s-v2",
+                    "portfolio": {
+                        "stats": {
+                            "total_return_pct": 61.5,
+                            "annual_return_pct": 8.2,
+                            "max_drawdown_pct": -22.9,
+                            "years": 7.0,
+                            "sharpe": 0.9,
+                        },
+                        "series": {"equity_pct": [["2024-01-01", 1.0]]},
+                    },
+                }
+            )
+        )
+        _ok, body, _ = svc.list_results(root)
+        latest = next(i for i in body["ideas"] if i["id"] == "IDEA-001")["latest_run"]
+        assert latest["book"] == {
+            "source": "reconstructed",
+            "total_return_pct": 61.5,
+            "annual_return_pct": 8.2,
+            "max_drawdown_pct": -22.9,
+            "years": 7.0,
+        }
+
+    def test_an_unavailable_book_gives_no_headline(self, root):
+        side = root / "research" / "ideas" / "idea-001-sample" / "evaluations" / "2026-10-05-s-v2"
+        side.mkdir(parents=True)
+        (side / "20261014T005227-ist-portfolio.json").write_text(
+            json.dumps(
+                {
+                    "kind": "reconstructed_portfolio",
+                    "run_id": "2026-10-05-s-v2",
+                    "portfolio": {"unavailable": "no slots"},
+                }
+            )
+        )
+        _ok, body, _ = svc.list_results(root)
+        latest = next(i for i in body["ideas"] if i["id"] == "IDEA-001")["latest_run"]
+        assert latest["book"] is None
+
+
+class TestTradeDiagnostics:
+    """Net result grouped from the stored trades; nothing beyond grouping is derived."""
+
+    def test_groups_by_symbol_side_exit_weekday_and_hour(self, ev):
+        diag = _detail(ev)[1]["run"]["diagnostics"]
+        assert diag["trades"] == 4
+        assert diag["symbols_total"] == 3
+        # AAA: 8 + 28 = 36 total over two trades; CCC: -502; BBB: -52
+        assert diag["symbols_best"][0]["label"] == "AAA"
+        assert diag["symbols_best"][0]["trades"] == 2
+        assert diag["symbols_best"][0]["net_bps_total"] == pytest.approx(36.0)
+        assert diag["symbols_best"][0]["net_bps_mean"] == pytest.approx(18.0)
+        assert diag["symbols_best"][0]["win_rate"] == pytest.approx(1.0)
+        assert diag["symbols_worst"][0]["label"] == "CCC"
+        assert [g["label"] for g in diag["by_side"]] == ["BUY"]
+        assert {g["label"] for g in diag["by_exit_reason"]} == {"TP", "SL", "SL_GAP", "SL_GAP_ENTRY"}
+        # 2026-01-05 Mon, 2026-02-10 Tue, 2026-03-02 Mon, 2026-04-07 Tue
+        weekdays = {g["label"]: g for g in diag["by_weekday"]}
+        assert [g["label"] for g in diag["by_weekday"]] == ["Monday", "Tuesday"]
+        assert weekdays["Monday"]["trades"] == 2
+        assert weekdays["Monday"]["net_bps_total"] == pytest.approx(36.0)
+        hours = {g["label"]: g["trades"] for g in diag["by_entry_hour"]}
+        assert hours == {"09:00": 2, "10:00": 1, "11:00": 1}
+
+    def test_null_without_a_trade_file(self, detail_root):
+        detail_root["runs"] = [_flat()]
+        _make_run_folder(detail_root["runs_dir"])
+        run = _detail(detail_root)[1]["run"]
+        assert run["has_trades"] is False and run["diagnostics"] is None
+
+    def test_null_for_an_uncaptured_run(self, detail_root):
+        detail_root["runs"] = [dict(_flat(), schema=2, artifact_dir=None)]
+        assert _detail(detail_root)[1]["run"]["diagnostics"] is None
+
+    def test_null_when_the_trade_file_has_no_net_column(self, ev):
+        frame = _trade_frame().drop(columns=["net_bps"])
+        _put_parquet(ev["folder"], "evidence/trades.parquet", frame)
+        assert _detail(ev)[1]["run"]["diagnostics"] is None
+
+
+# ---- engine 1.6 blocks: execution warnings, look-ahead guard, session coverage -------------------
+
+_WARNINGS = {
+    "trades": 100,
+    "ambiguous_exit_trades": 6,
+    "ambiguous_exit_share": 0.06,
+    "data_gap_trades": 2,
+    "data_gap_share": 0.02,
+    "entries_skipped_missing_bar": 1,
+    "ambiguous_sensitivity": {
+        "label": "UPPER BOUND, NOT A RESULT",
+        "trades": 6,
+        "actual_mean_net_r": -0.4,
+        "upper_bound_mean_net_r": 0.9,
+        "run_mean_net_r_actual": 0.1,
+        "run_mean_net_r_upper_bound": 0.18,
+        "target_basis": "Trade.tp, the target the signal carried",
+        "exact": True,
+    },
+}
+_GUARD = {
+    "mode": "full",
+    "symbols_checked": 3,
+    "sessions_checked": 700,
+    "violations": 0,
+    "lookahead_check": "run",
+    "truncation": {"status": "run", "ok": True},
+}
+_COVERAGE = {
+    "coverage_class": "MATERIAL_GAPS",
+    "disclosure": (
+        "Some trading sessions are missing from the stored history for part of this basket; "
+        "results may be affected."
+    ),
+    "session_basis": {"used": "common", "source": "rule", "symbols": 3},
+    "effective": {
+        "period": {"start": "2021-01-04", "end": "2026-09-25"},
+        "sessions_kept": 1400,
+        "sessions_excluded_by_basis": {"count": 4, "ranges": ["2021-01-04"]},
+    },
+    "universe": {
+        "symbols": 3,
+        "symbols_minor_gaps": 1,
+        "symbols_material_gaps": 2,
+        "symbols_severe_gaps": 0,
+        "expected_sessions_after_exclusions_total": 4200,
+        "missing_full_sessions_total": 5,
+    },
+    "symbols": [{"symbol": f"S{i}", "ranges": [f"2022-01-{i % 28 + 1:02d}"] * 500} for i in range(300)],
+    "continuity_note": "x" * 5000,
+}
+
+
+def _new_blocks():
+    return {
+        "execution_warnings": _WARNINGS,
+        "lookahead_guard": _GUARD,
+        "session_coverage": _COVERAGE,
+        "costs": {"model": "statutory", "round_trip_bps": 9.4, "cost_model_version": 2},
+        "engine_version": "1.6",
+    }
+
+
+class TestEngineBlocks:
+    def test_listing_summary_carries_the_blocks_capped(self, tmp_path):
+        _add_idea(tmp_path, "001", runs=[_run(**_new_blocks())])
+        _, body, _ = svc.list_results(root=tmp_path)
+        latest = body["ideas"][0]["latest_run"]
+        assert latest["execution_warnings"]["ambiguous_sensitivity"]["exact"] is True
+        assert latest["lookahead_guard"]["mode"] == "full"
+        assert latest["cost_model_version"] == 2 and latest["engine_version"] == "1.6"
+        cov = latest["session_coverage"]
+        assert cov["coverage_class"] == "MATERIAL_GAPS"
+        assert cov["disclosure"].startswith("Some trading sessions are missing")
+        assert cov["universe"]["expected_sessions_after_exclusions_total"] == 4200
+        assert cov["universe"]["symbols_severe_gaps"] == 0
+        assert len(cov["symbols"]) == svc._BLOCK_MAX_LIST
+        assert len(cov["symbols"][0]["ranges"]) == svc._BLOCK_MAX_LIST
+        assert len(cov["continuity_note"]) == svc._BLOCK_MAX_STR
+        json.dumps(latest, allow_nan=False)
+
+    def test_an_old_record_has_none_of_them(self, tmp_path):
+        _add_idea(tmp_path, "001", runs=[_run()])
+        latest = svc.list_results(root=tmp_path)[1]["ideas"][0]["latest_run"]
+        for key in (
+            "execution_warnings",
+            "lookahead_guard",
+            "session_coverage",
+            "cost_model_version",
+            "engine_version",
+        ):
+            assert key in latest and latest[key] is None
+
+    def test_non_finite_numbers_become_null(self):
+        block = svc._run_blocks(
+            {"execution_warnings": {"a": float("nan"), "b": [float("inf"), 1.5]}}
+        )["execution_warnings"]
+        assert block == {"a": None, "b": [None, 1.5]}
+
+    def test_a_block_of_the_wrong_type_is_ignored(self):
+        blocks = svc._run_blocks({"execution_warnings": "text", "lookahead_guard": [1]})
+        assert blocks["execution_warnings"] is None and blocks["lookahead_guard"] is None
+
+    def test_run_detail_carries_the_blocks_and_the_manifest_engine_version(self, detail_root):
+        _make_run_folder(detail_root["runs_dir"])
+        flat = _flat(**{k: v for k, v in _new_blocks().items() if k != "engine_version"})
+        detail_root["runs"] = [flat]
+        run = _detail(detail_root)[1]["run"]
+        assert run["execution_warnings"]["ambiguous_exit_trades"] == 6
+        assert run["lookahead_guard"]["lookahead_check"] == "run"
+        assert run["session_coverage"]["session_basis"]["used"] == "common"
+        assert run["cost_model_version"] == 2
+        assert run["engine_version"] == "1.2"  # the manifest's engine, as the record has none
+
+    def test_run_detail_without_the_blocks_reads_none(self, detail_root):
+        _make_run_folder(detail_root["runs_dir"])
+        detail_root["runs"] = [_flat()]
+        run = _detail(detail_root)[1]["run"]
+        for key in ("execution_warnings", "lookahead_guard", "session_coverage"):
+            assert run[key] is None
+        assert run["cost_model_version"] is None
+
+    def test_an_uncaptured_run_reads_none(self, detail_root):
+        detail_root["runs"] = [dict(_flat(), schema=2, artifact_dir=None)]
+        run = _detail(detail_root)[1]["run"]
+        assert run["session_coverage"] is None and run["engine_version"] is None

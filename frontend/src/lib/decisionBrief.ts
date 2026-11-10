@@ -1,6 +1,6 @@
 import type { PortfolioView, ResearchState, RunDetail, RunRecord } from '@/api/backtestResults'
 import { fmtNum, fmtPercent, fmtSigned } from './backtestResults'
-import { type EffectiveRow, effectiveRows, type SummaryIdea } from './runSummary'
+import { type EffectiveRow, effectiveRows, STOPPED_TEXT, type SummaryIdea } from './runSummary'
 
 /**
  * The trader's reading of one run: should I pursue it, how did it perform, why, and what next.
@@ -43,14 +43,19 @@ const MAX_FINDINGS = 3
 const STOPPED: ResearchState[] = ['rejected', 'shelved', 'evidence_against_edge']
 
 const HEADLINE: Record<ResearchState, { text: string; tone: BriefTone }> = {
-  rejected: { text: 'Do not pursue this version.', tone: 'stop' },
-  shelved: { text: 'Do not pursue this version.', tone: 'stop' },
-  evidence_against_edge: { text: 'Do not pursue this version.', tone: 'stop' },
+  rejected: { text: STOPPED_TEXT, tone: 'stop' },
+  shelved: { text: STOPPED_TEXT, tone: 'stop' },
+  evidence_against_edge: { text: STOPPED_TEXT, tone: 'stop' },
   weak_evidence: { text: 'Not yet: the evidence for an edge is weak.', tone: 'wait' },
   needs_more_evidence: { text: 'Not yet: more evidence is needed.', tone: 'wait' },
   active: { text: 'Not yet: research is still in progress.', tone: 'wait' },
   promising: { text: 'Keep researching: the evidence so far is promising.', tone: 'go' },
   blocked: { text: 'On hold: research is blocked.', tone: 'wait' },
+}
+
+/** The random-entry comparison as one plain sentence, or null when the run recorded none. */
+export function randomEntrySentence(run: RunRecord): string | null {
+  return randomFinding(run)?.text ?? null
 }
 
 /** One plain sentence per failed test. Unlisted gates fall back to their title. */
@@ -257,7 +262,7 @@ function supporting(detail: RunDetail): string | null {
 
 function action(idea: SummaryIdea, detail: RunDetail) {
   if (idea.research_state && STOPPED.includes(idea.research_state)) {
-    return { text: 'Do not continue this version.', why: idea.revisit_when ?? '' }
+    return { text: STOPPED_TEXT, why: idea.revisit_when ?? '' }
   }
   return {
     text: detail.next_action?.action ?? 'No next action was recorded.',

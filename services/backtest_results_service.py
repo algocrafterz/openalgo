@@ -132,8 +132,130 @@ def _net_at_cap(run: dict[str, Any], slots: int) -> float | None:
     return None
 
 
-def _run_summary(run: dict[str, Any], today: date) -> dict[str, Any]:
+def _gate_summary(run: dict[str, Any]) -> dict[str, Any]:
+    """Failed required gates and the failed-gate count, as the engine recorded them."""
+    block = _dict(_dict(run.get("evaluation")).get("summary")) or _dict(
+        run.get("evaluation_summary")
+    )
+    hard = block.get("hard_failed")
+    failed = _dict(block.get("counts")).get("fail")
+    return {
+        "hard_failed": [str(g).strip() for g in hard] if isinstance(hard, list) else [],
+        "failed_count": failed if isinstance(failed, int) and not isinstance(failed, bool) else None,
+    }
+
+
+_BOOK_CACHE: "OrderedDict[tuple, Any]" = OrderedDict()
+_BOOK_CACHE_MAX = 64
+_BOOK_KEYS = ("total_return_pct", "annual_return_pct", "max_drawdown_pct", "years")
+
+
+def _book_headline(
+    idea: dict[str, Any], run: dict[str, Any], root: Path | None
+) -> dict[str, Any] | None:
+    """Whole-portfolio return and worst fall for the listing, read only from the run's daily
+    book (recorded in the run, or the latest reconstructed sidecar). None when it has none."""
+    if root is None or not run.get("run_id"):
+        return None
+    try:
+        folder = _idea_folder(idea, root)
+        sidecars = folder / "evaluations" / str(run["run_id"])
+        stamps = (
+            tuple(sorted((p.name, p.stat().st_mtime_ns) for p in sidecars.glob("*.json")))
+            if sidecars.is_dir()
+            else ()
+        )
+        key = (str(folder), run["run_id"], stamps, isinstance(run.get("portfolio"), dict))
+        cached = _cache_get(_BOOK_CACHE, key)
+        if cached is not None:
+            return cached[0]
+        base = root / "research" / "ideas"
+        portfolio = read_evaluations(folder, run["run_id"], base, run)["portfolio"]
+    except (OSError, ValueError, KeyError, TypeError):
+        logger.exception("Could not read the portfolio headline for a run")
+        return None
+    stats = _dict(portfolio.get("stats")) if portfolio and not portfolio.get("unavailable") else {}
+    result = None
+    if stats.get("total_return_pct") is not None:
+        result = {"source": portfolio["source"], **{k: stats.get(k) for k in _BOOK_KEYS}}
+    _cache_put(_BOOK_CACHE, key, (result,), _BOOK_CACHE_MAX)
+    return result
+
+
+#: Engine 1.6 blocks that an older record does not carry. Passed through read-only and capped.
+_ENGINE_BLOCKS = ("execution_warnings", "lookahead_guard", "session_coverage")
+_BLOCK_MAX_LIST = 100
+_BLOCK_MAX_STR = 1500
+_BLOCK_MAX_DEPTH = 8
+
+
+def _cap_block(value: Any, depth: int = 0) -> Any:
+    """JSON-safe copy: lists cut to a fixed length, long text cut, NaN and inf become None."""
+    if depth > _BLOCK_MAX_DEPTH:
+        return None
+    if isinstance(value, dict):
+        return {str(k): _cap_block(v, depth + 1) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_cap_block(v, depth + 1) for v in list(value)[:_BLOCK_MAX_LIST]]
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, int):
+        return value if abs(value) <= _MAX_SAFE_INT else str(value)
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, str):
+        return value[:_BLOCK_MAX_STR]
+    return str(value)[:_BLOCK_MAX_STR]
+
+
+def _run_blocks(run: dict[str, Any]) -> dict[str, Any]:
+    """The engine 1.6 blocks, cost model version and engine version of a run record.
+
+    A key is None when the record does not carry it: the page then says "not recorded for this
+    run" and never fills in a value.
+    """
+    out: dict[str, Any] = {
+        name: _cap_block(run[name]) if isinstance(run.get(name), dict) else None
+        for name in _ENGINE_BLOCKS
+    }
+    version = (run.get("costs") or {}).get("cost_model_version")
+    if version is None:
+        version = (run.get("cost_model") or {}).get("cost_model_version")
+    out["cost_model_version"] = version if isinstance(version, (int, str)) else None
+    engine = run.get("engine_version")
+    if engine is None and isinstance(run.get("engine"), dict):
+        engine = run["engine"].get("engine_version")
+    out["engine_version"] = engine if isinstance(engine, (int, float, str)) else None
+    return out
+
+
+def _rupee_pnl(run: dict[str, Any]) -> dict[str, Any] | None:
+    """The recorded modelled rupee result of a run, or None when the record has none.
+
+    Passed through as recorded: net is after statutory charges and slippage, the cost is the
+    total of both, and the basis says how the trades were sized. Nothing is computed here.
+    """
+    model = run.get("cost_model")
+    if not isinstance(model, dict):
+        return None
+    net, cost = model.get("modelled_net_pnl_rs"), model.get("modelled_total_cost_rs")
+    if not isinstance(net, (int, float)) or isinstance(net, bool) or not math.isfinite(net):
+        return None
+    if not isinstance(cost, (int, float)) or isinstance(cost, bool) or not math.isfinite(cost):
+        cost = None
+    basis = model.get("pnl_basis")
+    return {
+        "net_rs": net,
+        "total_cost_rs": cost,
+        "basis": basis[:_BLOCK_MAX_STR] if isinstance(basis, str) else None,
+    }
+
+
+def _run_summary(
+    run: dict[str, Any], today: date, book: dict[str, Any] | None = None
+) -> dict[str, Any]:
     oos = run.get("out_of_sample") or {}
+    gates = _gate_summary(run)
     return {
         "run_id": run["run_id"],
         "date": run["date"],
@@ -151,6 +273,14 @@ def _run_summary(run: dict[str, Any], today: date) -> dict[str, Any]:
         "data": dict(run["data"]),
         **_coverage(run, today),
         "sparkline": _sparkline(run),
+        "run_verdict": run.get("run_verdict"),
+        "promotion_decision": run.get("promotion_decision"),
+        "next_action": _jsonable(run.get("next_action")),
+        "hard_failed": gates["hard_failed"],
+        "failed_count": gates["failed_count"],
+        "book": book,
+        "rupee_pnl": _rupee_pnl(run),
+        **_run_blocks(run),
     }
 
 
@@ -175,12 +305,13 @@ _IDEA_FIELDS = (
 )
 
 
-def _idea_card(idea: dict[str, Any], today: date) -> dict[str, Any]:
+def _idea_card(idea: dict[str, Any], today: date, root: Path | None = None) -> dict[str, Any]:
     runs = idea.get("runs") or []
+    book = _book_headline(idea, runs[-1], root) if runs and root is not None else None
     return {
         **{k: idea.get(k) for k in _IDEA_FIELDS},
         "run_count": len(runs),
-        "latest_run": _run_summary(runs[-1], today) if runs else None,
+        "latest_run": _run_summary(runs[-1], today, book) if runs else None,
     }
 
 
@@ -213,7 +344,7 @@ def list_results(
         {
             "status": "success",
             "available": True,
-            "ideas": [_idea_card(i, today) for i in ideas],
+            "ideas": [_idea_card(i, today, root) for i in ideas],
             "summary": {
                 "total_ideas": len(ideas),
                 "total_runs": sum(len(i.get("runs") or []) for i in ideas),
@@ -690,8 +821,14 @@ def _empty_run_detail(run_id: str, schema: Any, captured: bool) -> dict[str, Any
         "trials": None,
         "ledgers": None,
         "cost_components": None,
+        "diagnostics": None,
         "has_trades": False,
         "has_ledgers": False,
+        "execution_warnings": None,
+        "lookahead_guard": None,
+        "session_coverage": None,
+        "cost_model_version": None,
+        "engine_version": None,
         "evaluations": {"corrections": [], "portfolio": None, "diagnostics": []},
     }
 
@@ -829,6 +966,8 @@ def _read_run_folder(
         detail["missing_capabilities"] = _str_list(manifest.get("missing_capabilities"))
         detail["fingerprints"] = _jsonable(manifest.get("fingerprints"))
         detail["created_ist"] = manifest.get("created_ist")
+        engine = _dict(manifest.get("engine")).get("engine_version")
+        detail["engine_version"] = engine if isinstance(engine, (int, float, str)) else None
     return detail
 
 
@@ -859,6 +998,10 @@ def get_run_detail(
     detail = _empty_run_detail(run_id, 3, True)
     detail["manifest_sha256"] = record.get("manifest_sha256")
     _read_run_folder(folder, runs_dir, run_id, detail)
+    blocks = _run_blocks(record)
+    if blocks["engine_version"] is None:
+        blocks["engine_version"] = detail.get("engine_version")
+    detail.update(blocks)
     detail["evaluations"] = read_evaluations(
         _idea_folder(idea, root), run_id, root / "research" / "ideas", record)
     return True, {"status": "success", "run": detail}, 200
@@ -1040,7 +1183,14 @@ _FRAME_CACHE_MAX, _ORDER_CACHE_MAX, _COST_CACHE_MAX, _LOOKUP_CACHE_MAX = 2, 4, 1
 
 def _clear_evidence_caches() -> None:
     with _CACHE_LOCK:
-        for cache in (_FRAME_CACHE, _ORDER_CACHE, _COST_CACHE, _LOOKUP_CACHE):
+        for cache in (
+            _FRAME_CACHE,
+            _ORDER_CACHE,
+            _COST_CACHE,
+            _LOOKUP_CACHE,
+            _BOOK_CACHE,
+            _DIAG_CACHE,
+        ):
             cache.clear()
 
 
@@ -1138,6 +1288,85 @@ def _cost_components(folder: Path) -> dict[str, Any] | None:
     return result
 
 
+_DIAG_CACHE: "OrderedDict[tuple, Any]" = OrderedDict()
+_DIAG_CACHE_MAX = 16
+_DIAG_COLUMNS = ("symbol", "side", "entry_time", "exit_reason", "net_bps")
+_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+_DIAG_SYMBOLS_EACH_WAY = 5
+
+
+def _group_stats(net: pd.Series, key: pd.Series, order: list[str] | None = None) -> list:
+    """Per group: trades, mean net bps, total net bps and the share of trades with a net gain."""
+    rows = []
+    for label, idx in net.groupby(key, sort=False).groups.items():
+        part = net.loc[idx].dropna()
+        if part.empty:
+            continue
+        rows.append(
+            {
+                "label": str(label),
+                "trades": int(len(part)),
+                "net_bps_mean": float(part.mean()),
+                "net_bps_total": float(part.sum()),
+                "win_rate": float((part > 0).mean()),
+            }
+        )
+    if order:
+        rows.sort(key=lambda r: order.index(r["label"]) if r["label"] in order else len(order))
+    else:
+        rows.sort(key=lambda r: r["net_bps_total"], reverse=True)
+    return rows
+
+
+def _compute_diagnostics(path: Path) -> dict[str, Any] | None:
+    handle = _open_guarded(path)
+    present = set(handle.schema_arrow.names)
+    if "net_bps" not in present:
+        return None
+    frame = handle.read(columns=[c for c in _DIAG_COLUMNS if c in present]).to_pandas()
+    net = pd.to_numeric(frame["net_bps"], errors="coerce")
+    out: dict[str, Any] = {"trades": int(len(frame))}
+    if "symbol" in frame.columns:
+        rows = _group_stats(net, frame["symbol"].astype(str))
+        out["symbols_total"] = len(rows)
+        out["symbols_best"] = rows[:_DIAG_SYMBOLS_EACH_WAY]
+        out["symbols_worst"] = list(reversed(rows[-_DIAG_SYMBOLS_EACH_WAY:]))
+    if "side" in frame.columns:
+        out["by_side"] = _group_stats(net, frame["side"].astype(str))
+    if "exit_reason" in frame.columns:
+        out["by_exit_reason"] = _group_stats(net, frame["exit_reason"].astype(str))
+    if "entry_time" in frame.columns:
+        stamps = _entry_stamps(frame)
+        ok = stamps.notna()
+        days = stamps[ok].dt.dayofweek.map(lambda d: _WEEKDAYS[int(d)])
+        out["by_weekday"] = _group_stats(net[ok], days, order=list(_WEEKDAYS))
+        hours = stamps[ok].dt.strftime("%H:00")
+        out["by_entry_hour"] = _group_stats(net[ok], hours, order=sorted(hours.unique().tolist()))
+    return out
+
+
+def _diagnostics(folder: Path) -> dict[str, Any] | None:
+    """Net result split by instrument, side, exit reason, weekday and entry hour, grouped from
+    evidence/trades.parquet. Read-only: nothing is derived beyond grouping the stored trades."""
+    path = _evidence_file(folder, "trades")
+    if path is None:
+        return None
+    try:
+        key = ("diag", *_file_key(path))
+        cached = _cache_get(_DIAG_CACHE, key)
+        if cached is not None:
+            return cached[0]
+        result = _compute_diagnostics(path)
+    except _TooLarge:
+        logger.error("Trades file too large for diagnostics: %s", path.name)
+        return None
+    except _PARQUET_ERRORS:
+        logger.exception("Could not read diagnostics for a run")
+        return None
+    _cache_put(_DIAG_CACHE, key, (result,), _DIAG_CACHE_MAX)
+    return result
+
+
 def _fill_evidence(folder: Path, report: dict[str, Any], detail: dict[str, Any]) -> None:
     detail["validity"] = _optional_block(report.get("validity"))
     detail["trials"] = _optional_block(report.get("trials"))
@@ -1150,6 +1379,7 @@ def _fill_evidence(folder: Path, report: dict[str, Any], detail: dict[str, Any])
     detail["has_trades"] = _evidence_file(folder, "trades") is not None
     detail["has_ledgers"] = all(_evidence_file(folder, n) is not None for n in _LEDGER_NAMES)
     detail["cost_components"] = _cost_components(folder) if detail["has_trades"] else None
+    detail["diagnostics"] = _diagnostics(folder) if detail["has_trades"] else None
 
 
 def _evidence_value(value: Any) -> Any:

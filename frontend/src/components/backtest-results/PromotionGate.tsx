@@ -148,21 +148,28 @@ export function PromotionGate({
   promotion,
   evaluation,
   onShowTrades,
+  stages = ['backtest', 'paper', 'live'],
+  title = 'Promotion gates',
+  testId = 'promotion-gate',
 }: {
   promotion: Promotion | null
   evaluation: EvaluationBlock | null
   onShowTrades?: (subset: TradeSubset) => void
+  /** Which stages to list. The report's audit lists the backtest stage; readiness lists the rest. */
+  stages?: (typeof STAGES)[number]['key'][]
+  title?: string
+  testId?: string
 }) {
   if (!promotion) return null
   return (
-    <Card data-testid="promotion-gate" className="max-w-3xl">
+    <Card data-testid={testId} className="max-w-3xl">
       <CardHeader>
         <CardTitle className="text-base">
-          Promotion gates <InfoTip term="promotion_gate" />
+          {title} <InfoTip term="promotion_gate" />
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {STAGES.map(({ key, label, range }) => {
+        {STAGES.filter((s) => stages.includes(s.key)).map(({ key, label, range }) => {
           const st = promotion.stages?.[key]
           const gates = st?.gates ?? []
           return (

@@ -23,7 +23,16 @@ export function RunEvidence({
   drill,
   onOpenTrades,
   onCloseTrades,
+  omitCosts = false,
+  part = 'all',
+  openByDefault = false,
 }: {
+  /** The cost breakdown is shown under execution diagnostics instead. */
+  omitCosts?: boolean
+  /** The report draws the trade list on its own and the other evidence in the reliability section. */
+  part?: 'all' | 'evidence' | 'trades'
+  /** Show the trade table at once instead of behind the Open trades button. */
+  openByDefault?: boolean
   ideaId: string
   run: RunRecord
   detail: RunDetail
@@ -32,41 +41,52 @@ export function RunEvidence({
   onCloseTrades: () => void
 }) {
   const c = detail.captured
+  const showEvidence = part !== 'trades'
+  const showTrades = part !== 'evidence'
   return (
     <>
-      <IntegrityChecks validity={c ? (detail.validity ?? null) : null} />
-      <DataQualityBlock dataQuality={c ? (detail.data_quality ?? null) : null} />
-      <LedgerSummaryBlock ledgers={c ? (detail.ledgers ?? null) : null} />
-      <TrialsBlock trials={c ? (detail.trials ?? null) : null} />
-      <CostDecomposition
-        costComponents={c ? (detail.cost_components ?? null) : null}
-        grossBps={run.metrics.gross_bps}
-        netBps={run.metrics.net_bps}
-      />
-      <section id="trades" data-testid="trades-section" className="space-y-2">
-        {drill ? (
-          <TradesDrilldown
-            key={`${run.run_id}-${drill.nonce}`}
-            ideaId={ideaId}
-            runId={run.run_id}
-            hasTrades={c && !!detail.has_trades}
-            hasLedgers={c && !!detail.has_ledgers}
-            initialSubset={drill.subset}
-            onClose={onCloseTrades}
-          />
-        ) : (
-          <div className="flex items-center gap-3">
-            <h2 className="text-base font-semibold">Trades</h2>
-            <button
-              type="button"
-              className="rounded border px-2 py-0.5 text-sm"
-              onClick={() => onOpenTrades('all')}
-            >
-              Open trades
-            </button>
-          </div>
-        )}
-      </section>
+      {showEvidence && (
+        <>
+          <IntegrityChecks validity={c ? (detail.validity ?? null) : null} />
+          <DataQualityBlock dataQuality={c ? (detail.data_quality ?? null) : null} />
+          <LedgerSummaryBlock ledgers={c ? (detail.ledgers ?? null) : null} />
+          <TrialsBlock trials={c ? (detail.trials ?? null) : null} />
+          {!omitCosts && (
+            <CostDecomposition
+              costComponents={c ? (detail.cost_components ?? null) : null}
+              grossBps={run.metrics.gross_bps}
+              netBps={run.metrics.net_bps}
+            />
+          )}
+        </>
+      )}
+      {showTrades && (
+        <section id="trades" data-testid="trades-section" className="space-y-2">
+          {drill || openByDefault ? (
+            <TradesDrilldown
+              key={`${run.run_id}-${drill?.nonce ?? 0}`}
+              ideaId={ideaId}
+              runId={run.run_id}
+              hasTrades={c && !!detail.has_trades}
+              hasLedgers={c && !!detail.has_ledgers}
+              initialSubset={drill?.subset ?? 'all'}
+              initialLimit={openByDefault ? 25 : undefined}
+              onClose={drill ? onCloseTrades : undefined}
+            />
+          ) : (
+            <div className="flex items-center gap-3">
+              <h2 className="text-base font-semibold">Trades</h2>
+              <button
+                type="button"
+                className="rounded border px-2 py-0.5 text-sm"
+                onClick={() => onOpenTrades('all')}
+              >
+                Open trades
+              </button>
+            </div>
+          )}
+        </section>
+      )}
     </>
   )
 }

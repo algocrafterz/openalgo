@@ -4,13 +4,12 @@ import userEvent from '@testing-library/user-event'
 import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BacktestIdeaResponse, RunRecord, StrategyVersion } from '@/api/backtestResults'
-import { makeCard, makeRun } from '@/test/backtestResultsFixtures'
+import { makeRun } from '@/test/backtestResultsFixtures'
 import BacktestResultsDetail from './BacktestResultsDetail'
 
 const mocks = vi.hoisted(() => ({
   idea: vi.fn(),
   run: vi.fn(),
-  list: vi.fn(),
   compare: vi.fn(),
 }))
 
@@ -20,7 +19,6 @@ vi.mock('@/api/backtestResults', async (importOriginal) => ({
     idea: mocks.idea,
     compare: mocks.compare,
     run: mocks.run,
-    list: mocks.list,
   },
 }))
 
@@ -33,16 +31,6 @@ vi.mock('lightweight-charts', () => ({
     applyOptions: vi.fn(),
     remove: vi.fn(),
   }),
-}))
-
-vi.mock('@/components/backtest-results/RelatedStrategies', () => ({
-  RelatedStrategies: ({ current, ideas }: { current: { id: string }; ideas: { id: string }[] }) => (
-    <div data-testid="related-strategies">
-      <span data-testid="related-current">{current.id}</span>
-      <span data-testid="related-count">{ideas.length}</span>
-      <Link to="/backtest-results/IDEA-099">go related</Link>
-    </div>
-  ),
 }))
 
 const IDEA = {
@@ -68,10 +56,15 @@ const RUNS: RunRecord[] = [
 ]
 
 function Where() {
-  return <div data-testid="where">{useLocation().pathname}</div>
+  return (
+    <>
+      <div data-testid="where">{useLocation().pathname}</div>
+      <Link to="/backtest-results/IDEA-099">go related</Link>
+    </>
+  )
 }
 
-function renderPage(over: Partial<BacktestIdeaResponse> = {}, listFails = false) {
+function renderPage(over: Partial<BacktestIdeaResponse> = {}, _unused?: undefined, view = '') {
   mocks.idea.mockResolvedValue({
     status: 'success',
     idea: IDEA,
@@ -81,18 +74,10 @@ function renderPage(over: Partial<BacktestIdeaResponse> = {}, listFails = false)
     ...over,
   })
   mocks.run.mockResolvedValue({ status: 'error', message: 'unavailable' })
-  if (listFails) {
-    mocks.list.mockRejectedValue(new Error('boom'))
-  } else {
-    mocks.list.mockResolvedValue({
-      status: 'success',
-      ideas: [makeCard({ id: 'IDEA-012' }), makeCard({ id: 'IDEA-099' })],
-    })
-  }
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/backtest-results/IDEA-012']}>
+      <MemoryRouter initialEntries={[`/backtest-results/IDEA-012${view ? `?view=${view}` : ''}`]}>
         <Routes>
           <Route
             path="/backtest-results/:ideaId"
@@ -115,7 +100,7 @@ describe('BacktestResultsDetail versions', () => {
   })
 
   it('renders the version tree with badges from the pointers', async () => {
-    renderPage()
+    renderPage(undefined, undefined, 'history')
     const tree = await screen.findByTestId('version-tree')
     expect(within(tree).getByText('first cut')).toBeInTheDocument()
     expect(within(tree).getByTestId('badge-current')).toBeInTheDocument()
@@ -123,7 +108,7 @@ describe('BacktestResultsDetail versions', () => {
   })
 
   it('selecting a run in the tree selects it for the page', async () => {
-    renderPage()
+    renderPage(undefined, undefined, 'history')
     const tree = await screen.findByTestId('version-tree')
     await waitFor(() => expect(screen.getByText(/Showing run run-b/)).toBeInTheDocument())
     await userEvent.click(within(tree).getByRole('button', { name: 'run-a' }))
@@ -135,48 +120,38 @@ describe('BacktestResultsDetail versions', () => {
   })
 
   it('groups the run history by version', async () => {
-    renderPage()
+    renderPage(undefined, undefined, 'history')
     await screen.findByTestId('version-tree')
     expect(await screen.findAllByTestId('version-group')).toHaveLength(2)
   })
 
   it('falls back to a flat history and a note when versions is null', async () => {
-    renderPage({ versions: null, version_pointers: undefined })
+    renderPage({ versions: null, version_pointers: undefined }, undefined, 'history')
     expect(await screen.findByText('No version history recorded for this idea')).toBeInTheDocument()
     expect(screen.queryByTestId('version-group')).not.toBeInTheDocument()
     expect(screen.getByText('Run history (2)')).toBeInTheDocument()
   })
 
-  it('renders related strategies from the list query and navigates on select', async () => {
-    renderPage()
-    expect(await screen.findByTestId('related-strategies')).toBeInTheDocument()
-    await waitFor(() => expect(screen.getByTestId('related-count')).toHaveTextContent('2'))
-    expect(screen.getByTestId('related-current')).toHaveTextContent('IDEA-012')
-    await userEvent.click(screen.getByRole('link', { name: 'go related' }))
-    expect(screen.getByTestId('where')).toHaveTextContent('/backtest-results/IDEA-099')
-  })
-
-  it('still renders related strategies if the list query fails', async () => {
-    renderPage({}, true)
-    expect(await screen.findByTestId('related-strategies')).toBeInTheDocument()
-    expect(screen.getByTestId('related-count')).toHaveTextContent('0')
-  })
-
   it('shows the versions_error notice, not the plain no-history note', async () => {
-    renderPage({ versions: null, versions_error: 'versions.yaml could not be read' })
+    renderPage(
+      { versions: null, versions_error: 'versions.yaml could not be read' },
+      undefined,
+      'history'
+    )
     const tree = await screen.findByTestId('version-tree')
     expect(within(tree).getByText('versions.yaml could not be read')).toBeInTheDocument()
     expect(within(tree).queryByText('No version history recorded for this idea')).toBeNull()
   })
 
   it('does not carry the selected run over to the next idea', async () => {
-    renderPage()
+    renderPage(undefined, undefined, 'history')
     const tree = await screen.findByTestId('version-tree')
     await waitFor(() => expect(screen.getByText(/Showing run run-b/)).toBeInTheDocument())
     await userEvent.click(within(tree).getByRole('button', { name: 'run-a' }))
     expect(screen.getByText(/Showing run run-a/)).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('link', { name: 'go related' }))
+    await userEvent.keyboard('{Escape}')
+    await userEvent.click(await screen.findByRole('link', { name: 'go related' }))
     expect(screen.getByTestId('where')).toHaveTextContent('/backtest-results/IDEA-099')
-    await waitFor(() => expect(screen.getByText(/Showing run run-b/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByText(/Showing run run-a/)).toBeNull())
   })
 })

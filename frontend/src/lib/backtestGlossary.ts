@@ -119,6 +119,18 @@ const DEFS = {
     'Largest peak-to-trough decline in equity.',
     'Maximum drawdown is the worst fall from a high point of the equity curve to a later low, before a new high. It tells you the worst pain the tested history would have caused.',
   ],
+  mae: [
+    'MAE (maximum adverse excursion)',
+    'Metrics',
+    'How far a trade moved against you before it closed, in percent of the entry price or in R.',
+    'MAE is the deepest unrealised loss a trade reached while it was open, in percent of the entry price or in R (multiples of the amount risked). It shows how much pain a trade took on the way to its result, and whether stops sit too tight or too loose.',
+  ],
+  mfe: [
+    'MFE (maximum favourable excursion)',
+    'Metrics',
+    'How far a trade moved in your favour before it closed, in percent of the entry price or in R.',
+    'MFE is the largest unrealised profit a trade reached while it was open, in percent of the entry price or in R (multiples of the amount risked). Compared with the final result it shows how much open profit exits gave back.',
+  ],
   sharpe_ratio: [
     'Sharpe Ratio',
     'Metrics',
@@ -394,6 +406,30 @@ const DEFS = {
     'Evidence',
     'Slices of the trade list that back a gate: all, in-sample, out-of-sample, losing trades or gap exits.',
     'A gate result is built from a particular group of trades. Showing the subset lets you inspect the exact trades behind a number instead of trusting the summary.',
+  ],
+  session_coverage: [
+    'Session coverage',
+    'Evidence',
+    'How many of the official trading days each symbol has data for in the tested period.',
+    'Session coverage compares the days the market was open with the days that have bars in the data. A day with no bars at all is a missing session. A day that has some bars but not all is counted separately as missing bars inside a session. The share is the missing sessions divided by the sessions expected for that symbol, after leaving out days that are out of scope (such as the special Muhurat session) and days dropped as probable splits. Up to 1% missing is a minor gap. Over 1% and up to 5% is a material gap: results may be affected. Over 5% is a severe gap: treat the result as indicative only, not as reliable historical validation. The run is still shown when sessions are missing.',
+  ],
+  common_session_basis: [
+    'Common-session basis',
+    'Assumptions',
+    'The test keeps only the days that every symbol has data for.',
+    'On the common-session basis a day is dropped for all symbols when any one symbol has no bars that day, so every symbol is tested over the same days. The alternative, own sessions, lets each symbol use all the days it has. The common basis shortens the tested period when symbols have different history or gaps.',
+  ],
+  ambiguous_exit: [
+    'Ambiguous exit',
+    'Evidence',
+    'A bar that reached both the stop and the target, so the order of the two is not known.',
+    'A 5-minute bar shows only its high and low. When one bar touches both the stop and the target, the bar alone cannot say which came first. The backtest takes the stop, which is the cautious choice, and flags the trade as uncertain. The flag also appears on some bars where the order is actually known.',
+  ],
+  data_gap_in_trade: [
+    'Data gap in trade',
+    'Evidence',
+    'A bar was missing from the data while the trade was open.',
+    'When a bar is missing inside the session while a position is open, the exit is judged on the next bar that exists. The prices inside the missing stretch were never seen, so the stop or target could have been reached there.',
   ],
 } as const satisfies Record<string, Def>
 

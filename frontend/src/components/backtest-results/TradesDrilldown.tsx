@@ -92,6 +92,7 @@ export function TradesDrilldown({
   hasTrades,
   hasLedgers,
   initialSubset = 'all',
+  initialLimit = 50,
   onClose,
 }: {
   ideaId: string
@@ -99,12 +100,14 @@ export function TradesDrilldown({
   hasTrades: boolean
   hasLedgers: boolean
   initialSubset?: TradeSubset
+  /** Rows per page to start with; the report starts short so the page stays readable. */
+  initialLimit?: number
   onClose?: () => void
 }) {
   const [subset, setSubset] = useState<TradeSubset>(initialSubset)
   const [symbolText, setSymbolText] = useState('')
   const [reasonText, setReasonText] = useState('')
-  const [limit, setLimit] = useState(50)
+  const [limit, setLimit] = useState(initialLimit)
   const [offset, setOffset] = useState(0)
   const [sort, setSort] = useState<string | null>(null)
   const [desc, setDesc] = useState(false)
