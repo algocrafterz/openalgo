@@ -58,7 +58,8 @@ Supporting code: `data.py` (Historify loaders), `dataquality.py`, `backfill.py`,
 
 ## Invariants to preserve
 
-- **Only signal_engine changes.** Never modify OpenAlgo core. The Backtests page, its blueprint and its service are core; treat them as read-only consumers of the run-record JSON.
+- **Only signal_engine changes.** Never modify OpenAlgo core. The Backtests page, its blueprint and its service are core; treat them as read-only consumers of the run-record JSON. Edit them only on the owner's explicit approval, naming the files, and keep that work separate from engine work (different files, no `signal_engine/` edits from the UX side).
+- **Engine and cost changes ship under a new `ENGINE_VERSION` / `COST_MODEL_VERSION`** and never rewrite recorded runs: a recorded run reproduces only at its own commit. The execution rules every engine change must keep (missing-bar guard, ambiguity flag, look-ahead guard, per-leg costs) are in `references/execution-contract.md`; read it before touching `engine.py`, `swing_engine.py`, `costs.py` or `causal.py`.
 - **Swing is long-only.** Indian cash equity cannot be shorted overnight; `SwingRunConfig` enforces `allow_longs=True, allow_shorts=False`. Two-sided strategies belong on the intraday engine.
 - **Run records are immutable.** A change is a new version with `parent_run_id` and a change note, never an edit of an old file. Every variant tried counts toward `n_trials`; report the honest count.
 - **Every timestamp is IST**, converted at the boundary where it enters (`signal_engine/timeutils.py`). Bar timestamps are open-time. See repo `CLAUDE.md`.
@@ -77,6 +78,11 @@ Supporting code: `data.py` (Historify loaders), `dataquality.py`, `backfill.py`,
 - **Cost scenarios.** The primary scenario is the profile broker's statutory per-trade model (Flattrade, `research/profiles/flattrade-nse-cash.yaml`) and it decides the verdict and gates. `generic_discount_broker`, `flat_<n>bps` and `legacy_flat` are report-only. A spec may add flat lines with the optional field `costs.reference_round_trip_bps`.
 - **Daily ideas need a dataset version.** Pass `--dataset-version nse-daily-20261005-002` to `record_run` and preflight. The default is the newest published version, which is the intraday one, so a daily idea fails preflight as NOT_READY.
 - **No stop means a fixed notional.** A spec with `stop: none` must set `sizing.basis: fixed_notional` with `capital_per_trade` (or `portfolio.capital_per_position`). Otherwise the run is refused before execution.
+
+## Depth
+
+- `references/execution-contract.md`: the execution rules the engine guarantees, how each is enforced and tested, and the pitfalls found in review.
+- `references/engine-selection-and-poc.md`: why the existing engine was kept over LEAN, NautilusTrader and backtesting.py, and the engine-neutral fixture method for comparing engines or checking a data gap.
 
 ## Commands
 

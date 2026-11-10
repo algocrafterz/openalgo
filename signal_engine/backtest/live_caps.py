@@ -57,7 +57,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from signal_engine.backtest import tickgrid
+from signal_engine.backtest import session_coverage, tickgrid
 from signal_engine.backtest.cost_contribution import seal
 from signal_engine.backtest.costs import recost
 from signal_engine.backtest.engine import EntryRequest, simulate_steps
@@ -454,6 +454,9 @@ def build_contexts(
             prepared = tickgrid.carry_price_factor(
                 own.prepare_for(symbol, frame.copy(), params), factor
             )
+            # the session-coverage flag (first session after a missing one) is carried the same way
+            gap = frame[session_coverage.AFTER_GAP_COLUMN] if session_coverage.AFTER_GAP_COLUMN in frame.columns else None
+            prepared = session_coverage.carry_column(prepared, gap)
             out[symbol] = (own, Ctx(prepared, symbol=symbol))
             frames[symbol] = None
     return out

@@ -57,14 +57,24 @@ class TestNotional:
 
 class TestCostBps:
     def test_intraday_matches_the_schedule_plus_two_slippage_legs(self):
+        # notional 1,00,000; the trade exits at 101, so the legs are buy 1,00,000 / sell 1,01,000,
+        # each priced as its own order
         n = 100_000.0
-        statutory = india_intraday("NSE").charge(buy_value=n, sell_value=n, orders=2) / n * 1e4
+        sched = india_intraday("NSE")
+        statutory = (
+            sched.charge(buy_value=n, sell_value=0.0, orders=1)
+            + sched.charge(buy_value=0.0, sell_value=1.01 * n, orders=1)
+        ) / n * 1e4
         got = _model().trade_cost_bps(_trade(entry=100.0, risk=1.0))
         assert got == pytest.approx(statutory + 8.0, rel=1e-6)
 
     def test_delivery_uses_the_delivery_schedule(self):
         n = 100_000.0
-        statutory = india_delivery("NSE").charge(buy_value=n, sell_value=n, orders=2) / n * 1e4
+        sched = india_delivery("NSE")
+        statutory = (
+            sched.charge(buy_value=n, sell_value=0.0, orders=1)
+            + sched.charge(buy_value=0.0, sell_value=1.01 * n, orders=1)
+        ) / n * 1e4
         m = _model(product="CNC", leverage=1.0)
         assert m.trade_cost_bps(_trade(entry=100.0, risk=1.0)) == pytest.approx(
             statutory + 8.0, rel=1e-6

@@ -187,7 +187,7 @@ def build_data_quality(
     if not daily:
         floor = th["min_session_completeness"]
         short = set(short_sessions)
-        sess, incomplete = {}, {}
+        sess, incomplete, shortfall = {}, {}, {}
         for s in rows:
             counts = frames[s].groupby(frames[s].index.date).size()
             if short:  # half-day and special sessions are short by design, not incomplete
@@ -197,9 +197,23 @@ def build_data_quality(
             else:
                 exp = np.array([expected_bars_for(d) for d in counts.index], dtype=float)
             sess[s] = int(len(counts))
-            incomplete[s] = int((counts.to_numpy() < exp * floor).sum())
+            below = counts.to_numpy() < exp * floor
+            incomplete[s] = int(below.sum())
+            # bars absent inside the sessions the symbol does have (not whole missing sessions)
+            deficit = np.maximum(np.broadcast_to(exp, below.shape) - counts.to_numpy(), 0)
+            shortfall[s] = int(deficit[below].sum())
         n_sess, n_inc = sum(sess.values()), sum(incomplete.values())
         summary["sessions_checked"] = n_sess
+        # Per audited symbol, for the run's session-coverage block (missing BARS in sessions the
+        # symbol has, as opposed to missing full sessions): computed once, here.
+        summary["session_completeness"] = {
+            s: {
+                "sessions": sess[s],
+                "incomplete_sessions": incomplete[s],
+                "missing_bars": shortfall[s],
+            }
+            for s in sorted(sess)
+        }
         if n_sess:
             summary["complete_pct_overall"] = round(100 * (n_sess - n_inc) / n_sess, 1)
         if n_inc:

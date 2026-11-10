@@ -34,7 +34,7 @@ from typing import Any
 
 import numpy as np
 
-from signal_engine.backtest import tickgrid
+from signal_engine.backtest import session_coverage, tickgrid
 from signal_engine.backtest.costs import recost
 from signal_engine.backtest.engine import simulate
 from signal_engine.backtest.types import Ctx
@@ -340,6 +340,9 @@ def _run_symbol(
     # exactly as the harness does for the headline run.
     factor = frame["price_factor"] if "price_factor" in frame.columns else None
     prepared = tickgrid.carry_price_factor(own.prepare_for(symbol, frame.copy(), params), factor)
+    # the session-coverage flag (first session after a missing one) is carried the same way
+    gap = frame[session_coverage.AFTER_GAP_COLUMN] if session_coverage.AFTER_GAP_COLUMN in frame.columns else None
+    prepared = session_coverage.carry_column(prepared, gap)
     return simulate(Ctx(prepared, symbol=symbol), own, params, run, entry_delay_bars=entry_delay_bars)
 
 

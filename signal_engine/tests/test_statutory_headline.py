@@ -44,6 +44,7 @@ def _trade(i: int, r_gross: float, *, risk: float = 1.0, no_stop: bool = False) 
         tp=0.0,
         risk=float("nan") if no_stop else risk,
         exit_time=pd.Timestamp(f"{day} 15:00"),
+        exit=100.0 + r_gross * (1.0 if no_stop else risk),
         reason="tp",
         r_gross=float("nan") if no_stop else r_gross,
         r_net=float("nan") if no_stop else r_gross - 0.16,
@@ -199,7 +200,9 @@ class TestBroker:
         total = costs.decompose_trades(
             [_trade(0, 1.0)], make_model(product="CNC", leverage=1.0, fixed_notional=100_000.0)
         )["modeled_cost_bps"].iloc[0]
-        statutory = india_delivery("NSE", broker="flattrade").charge(100_000.0, 100_000.0, orders=2)
+        # The trade exits at 101: buy 1,00,000 / sell 1,01,000, each leg priced as its own order.
+        sched = india_delivery("NSE", broker="flattrade")
+        statutory = sched.charge(100_000.0, 0.0, orders=1) + sched.charge(0.0, 101_000.0, orders=1)
         assert total == pytest.approx((statutory + 20.0 * 1.18) / 100_000.0 * 1e4 + 8.0)
 
     def test_generic_scenario_charges_default_brokerage_per_trade(self):
@@ -208,7 +211,20 @@ class TestBroker:
         profile = costs.cost_profile(trades, model, flat_bps=16.0)
         by_id = {s["id"]: s for s in profile["scenarios"]}
         generic = by_id["generic_discount_broker"]
-        default_bps = india_intraday("NSE").charge(100_000.0, 100_000.0, orders=2) / 100_000.0 * 1e4
+        # Each trade exits at 100 + its gross R (stop 1.0, entry 100): buy 1,00,000, sell
+        # 1,000 x exit, each leg priced as its own order.
+        sched = india_intraday("NSE")
+        default_bps = np.mean(
+            [
+                (
+                    sched.charge(100_000.0, 0.0, orders=1)
+                    + sched.charge(0.0, 1_000.0 * t.exit, orders=1)
+                )
+                / 100_000.0
+                * 1e4
+                for t in trades
+            ]
+        )
         assert generic["mean_round_trip_bps"] == pytest.approx(default_bps + 8.0, abs=1e-3)
         assert generic["mean_round_trip_bps"] != 16.0
         # It differs from the primary by exactly the brokerage and its GST.
@@ -314,7 +330,8 @@ class TestDpCharge:
 
     def test_a_short_cnc_trade_pays_no_dp_charge(self):
         model = make_model(product="CNC", leverage=1.0, fixed_notional=100_000.0)
-        long_t = _trade(0, 1.0)
+        # Exit at entry, so a long and a short have identical legs and differ only by the DP charge.
+        long_t = dataclasses.replace(_trade(0, 1.0), exit=100.0)
         short_t = dataclasses.replace(long_t, direction=-1)
         gap = model.statutory_bps(long_t) - model.statutory_bps(short_t)
         assert gap == pytest.approx(20.0 * 1.18 / 100_000.0 * 1e4)

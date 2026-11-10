@@ -235,6 +235,9 @@ class TestHeadlineOnly:
                 built.append(self)
                 self.run, self.days = run, [pd.Timestamp("2026-06-04").date()]
 
+            def lookahead_guard(self):
+                return {"mode": "full", "symbols_checked": 1, "sessions_checked": 1, "violations": 0}
+
             def trades(self, p, window="all", run=None, recorder=None):
                 calls.append({"window": window, "recorder": recorder})
                 return simulate(
@@ -273,6 +276,9 @@ class TestHeadlineOnly:
         class FakeBacktest:
             def __init__(self, strategy, frames, run, **kw):
                 self.days = [pd.Timestamp("2026-06-04").date()]
+
+            def lookahead_guard(self):
+                return {"mode": "full", "symbols_checked": 1, "sessions_checked": 1, "violations": 0}
 
             def trades(self, p, window="all", run=None, recorder=None):
                 return simulate(Ctx(df, "AAA"), Script({}), None, RUN, rec=recorder)
@@ -963,6 +969,9 @@ class TestLedgerProblemsCarried:
             def __init__(self, strategy, frames, run, **kw):
                 self.days = [pd.Timestamp("2026-06-04").date()]
 
+            def lookahead_guard(self):
+                return {"mode": "full", "symbols_checked": 1, "sessions_checked": 1, "violations": 0}
+
             def trades(self, p, window="all", run=None, recorder=None):
                 return simulate(
                     Ctx(df, "AAA"), Script({1: (1, 99.0, 101.0)}), None, RUN, rec=recorder
@@ -1017,28 +1026,22 @@ class TestCostComponentResidual:
         monkeypatch.setattr(
             costs, "india_intraday", lambda exchange="NSE", broker=None: _ExtraKeySchedule()
         )
-        costs._component_bps.cache_clear()
-        costs._statutory_bps.cache_clear()
-        try:
-            trade = _trade("TP", 100.0, 99.0, 101.0)
-            comps = MODEL.components(trade)
-            assert comps["modeled_cost_bps"] == pytest.approx(MODEL.trade_cost_bps(trade), abs=1e-9)
-            parts = list(costs.COMPONENT_COLUMNS)
-            assert sum(comps[c] for c in parts) == pytest.approx(
-                comps["modeled_cost_bps"], abs=1e-9
-            )
-            frame = decompose_trades([trade], MODEL)
-            assert frame["modeled_cost_bps"].iloc[0] == pytest.approx(
-                MODEL.trade_cost_bps(trade), abs=1e-9
-            )
-            assert frame[parts].sum(axis=1).iloc[0] == pytest.approx(
-                frame["modeled_cost_bps"].iloc[0], abs=1e-9
-            )
-            # the unlisted lines (7.0 slippage and 2.5 new levy) are folded into slippage
-            assert comps["cost_slippage_bps"] > 2.0 * MODEL.slippage_bps_per_side
-        finally:
-            costs._component_bps.cache_clear()
-            costs._statutory_bps.cache_clear()
+        trade = _trade("TP", 100.0, 99.0, 101.0)
+        comps = MODEL.components(trade)
+        assert comps["modeled_cost_bps"] == pytest.approx(MODEL.trade_cost_bps(trade), abs=1e-9)
+        parts = list(costs.COMPONENT_COLUMNS)
+        assert sum(comps[c] for c in parts) == pytest.approx(
+            comps["modeled_cost_bps"], abs=1e-9
+        )
+        frame = decompose_trades([trade], MODEL)
+        assert frame["modeled_cost_bps"].iloc[0] == pytest.approx(
+            MODEL.trade_cost_bps(trade), abs=1e-9
+        )
+        assert frame[parts].sum(axis=1).iloc[0] == pytest.approx(
+            frame["modeled_cost_bps"].iloc[0], abs=1e-9
+        )
+        # the unlisted lines (7.0 slippage and 2.5 new levy) are folded into slippage
+        assert comps["cost_slippage_bps"] > 2.0 * MODEL.slippage_bps_per_side
 
 
 class TestReproduceColumns:

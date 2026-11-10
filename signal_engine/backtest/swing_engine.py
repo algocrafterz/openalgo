@@ -35,6 +35,7 @@ import numpy as np
 import pandas as pd
 
 from signal_engine.backtest import tickgrid
+from signal_engine.backtest.causal import GuardedCtx
 from signal_engine.backtest.ledgers import CODE_INDEX
 from signal_engine.backtest.types import Ctx, Position, Trade
 
@@ -44,6 +45,7 @@ _K_WRONG_SIDE = CODE_INDEX["STOP_WRONG_SIDE"]
 _K_TIGHT = CODE_INDEX["STOP_TOO_TIGHT"]
 _K_POS_OPEN = CODE_INDEX["POSITION_OPEN"]
 _K_WARMUP = CODE_INDEX["WARMUP"]
+_K_AFTER_GAP = CODE_INDEX["SESSION_AFTER_GAP"]
 
 
 @dataclass(frozen=True)
@@ -101,8 +103,17 @@ class SwingRunConfig:
 def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[Trade]:
     """Run one symbol. With a `ledgers.LedgerRecorder` as `rec`, signal, order and entry fill
     are three ledger rows stamped at the same bar (the open that triggers the setup)."""
+    # A GuardedCtx (backtest.causal) goes to the strategy hooks; the engine reads the plain Ctx.
+    hc = c
+    guard = None
+    if isinstance(c, GuardedCtx):
+        guard = c.state
+        c = c.raw
     o, h, low, close = c["Open"], c["High"], c["Low"], c["Close"]
     days, times, n = c["day"], c.index, c.n
+    # Session-coverage safeguard: True on a bar whose previous loaded bar is not the previous
+    # official session. Absent on hand-built frames, and then nothing changes.
+    after_gap = c.a.get("session_after_gap")
     snap_ticks = run.tick_grid == tickgrid.SAFE_TICK
     pf_col = c.a.get("price_factor") if snap_ticks else None
 
@@ -128,7 +139,9 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
 
     strategy.reset_symbol(p)
 
-    def close_out(reason: str, price: float, i: int, at_open: bool = False) -> None:
+    def close_out(
+        reason: str, price: float, i: int, at_open: bool = False, ambiguous: bool = False
+    ) -> None:
         nonlocal pos, entry_day
         move = (price - pos.entry) if pos.direction == 1 else (pos.entry - price)
         if np.isnan(pos.risk):
@@ -157,6 +170,7 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
             r_gross=r_gross,
             r_net=r_net,
             exit_at_open=at_open,
+            exit_ambiguous=ambiguous,
             **returns,
         )
         if rec is not None:
@@ -172,7 +186,9 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
         #    The same symbol is not bought again on that bar.
         sold_at_open = False
         if pos is not None and exit_at_open is not None:
-            reason = exit_at_open(c, i, p, pos)
+            if guard is not None:
+                guard.set("exit_at_open", i - 1, 1, 1)
+            reason = exit_at_open(hc, i, p, pos)
             if reason:
                 close_out(reason, float(o[i]), i, at_open=True)
                 sold_at_open = True
@@ -192,10 +208,22 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
                     if rec is not None:
                         skip(i, _K_DIR_OFF)
                     continue
-                sig = strategy.entry_at_open(c, i, p, d)
+                if guard is not None:
+                    guard.set("entry_at_open", i - 1, 1, 1)
+                sig = strategy.entry_at_open(hc, i, p, d)
                 if sig is None:
                     continue
                 fill = float(o[i])
+                if after_gap is not None and after_gap[i]:
+                    # a missing official session sits before this bar: the setup read stale
+                    # previous-session data, so no new position is opened on it
+                    if rec is not None:
+                        no_stop = sig.sl is None
+                        b_sig((
+                            i, d, sig.tag, fill, float("nan") if no_stop else sig.sl, sig.tp,
+                            float("nan") if no_stop else abs(fill - float(sig.sl)), _K_AFTER_GAP,
+                        ))
+                    continue
                 if sig.sl is None:
                     # No stop: nothing to validate, and no risk distance is invented.
                     if rec is not None:
@@ -214,7 +242,9 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
                         entry_bar=i,
                     )
                     entry_day = days[i]
-                    strategy.on_entry(c, i, p, sig)
+                    if guard is not None:
+                        guard.set("on_entry", i - 1, 1, 1)
+                    strategy.on_entry(hc, i, p, sig)
                     break
                 risk = abs(fill - float(sig.sl))
                 if risk <= 0 or np.isnan(risk):
@@ -248,7 +278,9 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
                     entry_bar=i,
                 )
                 entry_day = days[i]
-                strategy.on_entry(c, i, p, sig)
+                if guard is not None:
+                    guard.set("on_entry", i - 1, 1, 1)
+                strategy.on_entry(hc, i, p, sig)
                 break
 
         elif rec is not None:
@@ -258,7 +290,9 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
         if pos is not None:
             d = pos.direction
             # a resting stop placed before bar i trades: bars up to i - 1 only
-            new_stop = strategy.trail(c, i - 1, p, pos) if i > 0 else None
+            if guard is not None:
+                guard.set("trail", i - 1)
+            new_stop = strategy.trail(hc, i - 1, p, pos) if i > 0 else None
             if new_stop is not None and not np.isnan(new_stop):
                 new_stop = snapped(float(new_stop), d, i)
                 pos.sl_eff = max(pos.sl_eff, new_stop) if d == 1 else min(pos.sl_eff, new_stop)
@@ -273,7 +307,9 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
             if gapped:
                 close_out("SL_GAP", o[i], i)
             elif hit_sl:
-                close_out("SL", pos.sl_eff, i)
+                # stop taken when the bar also reached the target; flagged, never resolved to
+                # the target (engine 1.6)
+                close_out("SL", pos.sl_eff, i, ambiguous=bool(hit_tp))
             elif hit_tp:
                 close_out("TP", pos.tp, i)
             elif run.max_hold_bars is not None and i - pos.entry_bar >= run.max_hold_bars:
@@ -281,11 +317,15 @@ def simulate_swing(c: Ctx, strategy, p, run: SwingRunConfig, rec=None) -> list[T
             elif i + 1 >= n:
                 close_out("EOD_DATA", close[i], i)
             else:
-                reason = strategy.custom_exit(c, i, p, pos)
+                if guard is not None:
+                    guard.set("custom_exit", i)
+                reason = strategy.custom_exit(hc, i, p, pos)
                 if reason:
                     close_out(reason, close[i], i)
 
-        strategy.on_bar(c, i, p)
+        if guard is not None:
+            guard.set("on_bar", i)
+        strategy.on_bar(hc, i, p)
 
     if rec is not None:
         b.finish()
@@ -297,3 +337,6 @@ def _as_day(value) -> date:
     if isinstance(value, date) and not isinstance(value, datetime):
         return value
     return pd.Timestamp(value).date()
+
+
+simulate_swing.guard_aware = True

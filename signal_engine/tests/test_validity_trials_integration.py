@@ -213,7 +213,12 @@ class TestTruncationFlag:
 
 class TestExecuteBacktestTruncation:
     def test_real_run_carries_a_truncation_result(self, store):  # noqa: F811
-        exe = rr.execute_backtest("k", settings=SETTINGS, dataset=store["res"])
+        # The fixture's symbols list on different dates; the default session basis (common)
+        # would keep only the 3 sessions all of them share, below the check's 4-session
+        # minimum. This test is about truncation, so it trades each symbol's own sessions.
+        exe = rr.execute_backtest(
+            "k", settings={**SETTINGS, "session_basis": "own"}, dataset=store["res"]
+        )
         assert exe.truncation is not None
         assert exe.truncation["ok"] is True, exe.truncation["mismatches"]
         assert exe.truncation["checked"]

@@ -211,6 +211,7 @@ def _trades():
             tp=0.0,
             risk=1.0,
             exit_time=f"2026-01-{d:02d} 15:00",
+            exit=100.5,
             reason="tp",
             r_gross=0.5,
             r_net=0.3,

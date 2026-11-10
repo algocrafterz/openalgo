@@ -148,6 +148,14 @@ class Trade:
     net_ret: float | None = None
     #: The exit filled at the open of the exit bar (a strategy's exit-at-open), not at a close.
     exit_at_open: bool = False
+    #: Engine 1.6. The exit bar reached both the stop and the target and did not open through the
+    #: stop, so the intrabar order is unknowable at this resolution. The engine keeps the
+    #: conservative resolution (the stop) and sets this so the exposure is visible. A gap through
+    #: the stop is not ambiguous.
+    exit_ambiguous: bool = False
+    #: Engine 1.6. A bar was missing inside the session while this position was open. Exits are
+    #: judged on the next available bar as before, but prices in the hole were never observed.
+    data_gap: bool = False
 
     @property
     def r_defined(self) -> bool:

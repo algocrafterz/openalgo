@@ -22,8 +22,11 @@ ledger is written right after the backtest executes and before any artifact is b
 crashed counts as no trial, a run that executed but failed to write its artifacts does count (it
 was evaluated), and a re-run of the same configuration adds nothing.
 
-Every run also gets the validity checks (data quality, config, lineage) and, unless
-`--no-truncation` is given, a look-ahead check that re-runs three symbols on truncated data.
+Every run also gets the validity checks (data quality, config, lineage), runs every strategy hook
+under the look-ahead guard (`backtest.causal`, engine 1.6, not optional) and, unless
+`--no-truncation` is given, a look-ahead check that re-runs three symbols on truncated data at
+session and mid-session cuts. With `--no-truncation` the record says `lookahead_check: not_run`,
+gate G0.2 is not evaluated, and the run cannot be promoted.
 """
 
 from __future__ import annotations
@@ -62,6 +65,7 @@ from signal_engine.backtest import (
     regime_data,
     run_artifact,
     run_diagnostics,
+    session_coverage,
     tickgrid,
 )
 from signal_engine.backtest import tuning as tuning_mod
@@ -86,6 +90,7 @@ from signal_engine.backtest.costs import (
 )
 from signal_engine.backtest.data_collect import CLEAN_KEYS, DataCollector
 from signal_engine.backtest.data_readiness import intraday_access as ia_reasons
+from signal_engine.backtest.data_readiness import policy as data_policy
 from signal_engine.backtest.data_readiness import preflight as preflight_mod
 from signal_engine.backtest.data_readiness import snapshot
 from signal_engine.backtest.dq_run import build_data_quality
@@ -234,6 +239,18 @@ class Execution:
     portfolio: dict[str, Any] | None = None
     #: The book's daily returns, the session series of G2.3, G2.6 and G2.7; None without a book.
     portfolio_returns: list[float] | None = None
+    #: Engine 1.6: what the guarded pass and the truncation check covered (`lookahead_guard`
+    #: record block). `lookahead_check` in it is "not_run" when the truncation check was skipped.
+    lookahead_guard: dict[str, Any] | None = None
+    #: Engine 1.6: pending entries dropped because their due bar was missing, from the ledgers.
+    entries_skipped_missing_bar: int | None = None
+    #: The strategy moves its target bar by bar, so the ambiguity bound is not exact.
+    dynamic_target: bool = False
+    #: Session coverage (`session_coverage` record block), or None when the run did not compute it.
+    session_coverage: dict[str, Any] | None = None
+    #: The session basis the run used ("common" or "own"), or None; part of the execution
+    #: fingerprint when it is "common" (see `fingerprints.execution_fingerprint`).
+    session_basis: str | None = None
 
 
 #: Symbols the look-ahead check re-runs on truncated data.
@@ -671,6 +688,12 @@ class _DataLayer:
     #: With an official calendar: out-of-scope sessions, official sessions with no usable symbol
     #: (date -> reason) and loaded dates that are not official sessions. Empty when derived.
     calendar_check: dict[str, Any] = field(default_factory=dict)
+    #: The `session_coverage` record block, or None when the layer did not compute coverage.
+    session_coverage: dict[str, Any] | None = None
+    #: The session basis in force ("common"/"own"), or None without coverage.
+    session_basis: str | None = None
+    #: With basis common: the sessions that stay (every other session's bars are removed).
+    common_keep: frozenset | None = None
 
 
 def _build_data_layer(
@@ -684,6 +707,8 @@ def _build_data_layer(
     expected_bars_for: Callable[[date], int] | None = None,
     official: Any = None,
     out_of_scope: Sequence[date] = (),
+    coverage_policy: Any = None,
+    session_basis: str | None = None,
 ) -> _DataLayer:
     """Calendar, data quality, eligibility and the frames the engine will run on.
 
@@ -700,6 +725,12 @@ def _build_data_layer(
     trading days: a date is never dropped because its data is poor. `out_of_scope` are the
     dataset's declared out-of-scope sessions (Muhurat). Without it the calendar is derived from
     the bars.
+
+    `coverage_policy` (the data policy, `data_readiness.policy.load_policy()`) turns on the
+    session-coverage safeguard, which needs the official calendar: per-symbol missing full
+    sessions, the session basis (`session_basis`, else the policy's basket-size rule), the
+    `session_after_gap` bar column and the `session_coverage` block. Without it the frames are
+    returned exactly as before.
     """
     cut = as_of if as_of is not None else _last_session(frames)
     check: dict[str, Any] = {}
@@ -730,7 +761,10 @@ def _build_data_layer(
         }
     policy = _eligibility_policy(cfg)
     if policy is None:
-        return _DataLayer(calendar, report, None, None, {}, frames, calendar_check=check)
+        return _with_coverage(
+            _DataLayer(calendar, report, None, None, {}, frames, calendar_check=check),
+            frames, collector, coverage_policy, session_basis,
+        )
     result = compute_eligibility(
         frames, policy, calendar, adjusted_prices=adjusted_prices, price_factors=price_factors
     )
@@ -757,8 +791,61 @@ def _build_data_layer(
             "min_price": policy.min_price,
         },
     }
-    return _DataLayer(calendar, report, result.universe_frame, membership, dropped, kept, result,
-                      calendar_check=check)
+    return _with_coverage(
+        _DataLayer(calendar, report, result.universe_frame, membership, dropped, kept, result,
+                   calendar_check=check),
+        frames, collector, coverage_policy, session_basis,
+    )
+
+
+def _with_coverage(
+    layer: _DataLayer,
+    loaded_frames: dict[str, pd.DataFrame],
+    collector: DataCollector,
+    policy: Any,
+    requested_basis: str | None,
+) -> _DataLayer:
+    """The layer with the session-coverage safeguard applied to the frames the engine will see.
+
+    `loaded_frames` are the frames as loaded (before any eligibility drop): coverage and the
+    common-session intersection describe the data. The engine frames (`layer.frames`) then lose
+    the sessions outside the common set (basis common) and gain the `session_after_gap` column,
+    which is computed last so that a session removed by the basis or by eligibility counts as a
+    gap too. A no-op without a policy or without the official calendar.
+    """
+    if policy is None or not layer.calendar_check or not layer.calendar.trading_days:
+        return layer
+    loaded = session_coverage.loaded_dates(loaded_frames)
+    basis, source = session_coverage.resolve_basis(
+        requested_basis, len(loaded), policy.common_basis_max_symbols
+    )
+    keep = session_coverage.common_sessions(loaded) if basis == session_coverage.COMMON else None
+    frames = layer.frames
+    if keep is not None:
+        frames = session_coverage.apply_common(frames, keep)
+    frames, flagged = session_coverage.attach_after_gap(frames, layer.calendar.trading_days)
+    kept_sessions = keep if keep is not None else set().union(*loaded.values())
+    summary = (layer.data_report or {}).get("summary") or {}
+    block = session_coverage.build_block(
+        loaded=loaded,
+        calendar=layer.calendar,
+        out_of_scope=layer.calendar_check.get("out_of_scope_sessions", []),
+        split_excluded=collector.split_days_dropped,
+        partial=summary.get("session_completeness"),
+        policy=policy,
+        basis=basis,
+        basis_source=source,
+        kept_sessions=kept_sessions,
+        after_gap=flagged,
+        requested_basis=requested_basis,
+    )
+    return dataclasses.replace(
+        layer,
+        frames=frames,
+        session_coverage=block,
+        session_basis=basis,
+        common_keep=None if keep is None else frozenset(keep),
+    )
 
 
 def _calendar_check(calendar: Calendar, loaded: set, collector: DataCollector,
@@ -988,6 +1075,8 @@ def _execute_on(
         official=dataset.calendar,
         out_of_scope=[date.fromisoformat(d)
                       for d in dataset.manifest.get("out_of_scope_sessions") or []],
+        coverage_policy=data_policy.load_policy(),
+        session_basis=cfg.get("session_basis"),
     )
     # Raw month-end closes fix each month's exact tick tier; read before the engine frames are
     # released. The engine snaps stops on RAW prices, so each bar carries its session's factor.
@@ -1016,6 +1105,14 @@ def _execute_on(
         if prepare_panel is None
         else prepare_panel(layer.frames, params, layer.calendar)
     )
+    if prepare_panel is not None and layer.session_coverage is not None:
+        # a panel step that rebuilds its frames drops the gap flag; put it back by bar time
+        engine_frames = {
+            sym: session_coverage.carry_column(
+                f, layer.frames[sym].get(session_coverage.AFTER_GAP_COLUMN)
+            )
+            for sym, f in engine_frames.items()
+        }
     if grid_mode == tickgrid.SAFE_TICK and any(
         "price_factor" not in f.columns for f in engine_frames.values()
     ):
@@ -1046,12 +1143,23 @@ def _execute_on(
     _record_data_exclusions(recorder, collector, layer.dropped)
     ledgers = recorder.to_frames()
     ledger_problems = recorder.reconcile(ledgers, trades)
+    excl = ledgers["exclusions"]
+    skipped_missing_bar = int(
+        excl.loc[excl["reason_code"] == "ENTRY_SKIPPED_MISSING_BAR", "count"].sum()
+    )
+    skipped_after_gap = int(
+        excl.loc[excl["reason_code"] == "SESSION_AFTER_GAP", "count"].sum()
+    )
+    coverage = layer.session_coverage
+    if coverage is not None:
+        coverage = {**coverage, "entries_skipped_session_after_gap": skipped_after_gap}
     truncation = None
     if run_truncation:
         truncation = truncation_check(
-            strategy, params, kept, run, engine=engine_used, panel=panel_runner
+            strategy, params, kept, run, engine=engine_used, panel=panel_runner, mid_session=True
         ).to_dict()
         del kept
+    lookahead = _lookahead_block(bt.lookahead_guard(), truncation)
     # Every metric, split, gate and baseline reads the trades, so they are restated once here.
     trades, costs = statutory_execution(
         trades, cost_model, run.cost_bps, cfg.get("reference_round_trip_bps", ())
@@ -1202,6 +1310,11 @@ def _execute_on(
         data_report=layer.data_report,
         membership=layer.membership,
         truncation=truncation,
+        lookahead_guard=lookahead,
+        entries_skipped_missing_bar=skipped_missing_bar,
+        dynamic_target=bool(getattr(strategy, "dynamic_target", False)),
+        session_coverage=coverage,
+        session_basis=layer.session_basis,
         tick_grid=tick_grid,
         perturbation=perturbation_evidence,
         live_caps=live_caps_evidence,
@@ -1212,6 +1325,31 @@ def _execute_on(
         portfolio=portfolio,
         portfolio_returns=portfolio_returns,
     )
+
+
+def _lookahead_block(guard: Mapping[str, Any], truncation: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The `lookahead_guard` record block: the guarded pass plus the truncation check.
+
+    `lookahead_check` is "run" only when the truncation check ran. "not_run" is a plain label on
+    the record, and gate G0.2 then reads not evaluated, which holds the verdict below EDGE and
+    the promotion decision at NOT_READY (`evaluation._g02`, `promotion.evaluate_promotion`).
+    """
+    block = dict(guard)
+    if truncation is None:
+        block["lookahead_check"] = "not_run"
+        block["truncation"] = {"status": "not_run"}
+        return block
+    cuts = list(truncation.get("checked") or [])
+    block["lookahead_check"] = "run"
+    block["truncation"] = {
+        "status": "run",
+        "ok": bool(truncation.get("ok")),
+        "symbols": sorted({c.get("symbol") for c in cuts}),
+        "session_cuts": sum(1 for c in cuts if c.get("cut_kind") == "session"),
+        "mid_session_cuts": sum(1 for c in cuts if c.get("cut_kind") == "mid_session"),
+        "mismatches": len(truncation.get("mismatches") or []),
+    }
+    return block
 
 
 def _portfolio_stage(
@@ -1262,6 +1400,11 @@ def _baseline_frames(
     skipped, so a random entry can never land where the strategy could not trade."""
     if layer.eligibility is not None:
         frames, _ = apply_eligibility(frames, layer.eligibility)
+    if layer.session_coverage is not None:
+        # the same session basis and gap flag as the headline frames
+        if layer.common_keep is not None:
+            frames = session_coverage.apply_common(frames, layer.common_keep)
+        frames, _ = session_coverage.attach_after_gap(frames, layer.calendar.trading_days)
     if warmup > 0:
         frames = {s: df.iloc[warmup:] for s, df in frames.items()}
         frames = {s: df for s, df in frames.items() if len(df)}
@@ -1508,10 +1651,14 @@ def _execute_frozen(
     run_monte_carlo: bool = False,
     run_latency: bool = False,
     run_capacity: bool = False,
+    session_basis: str | None = None,
 ) -> Execution:
     """Run `execute`, passing the frozen settings, `end` and `run_truncation` when it accepts
-    them, then verify the cost."""
+    them, then verify the cost. `session_basis` (common or own) is a run setting outside the
+    frozen spec; None lets the data layer choose by basket size."""
     settings = frozen_settings(frozen)
+    if session_basis is not None:
+        settings["session_basis"] = session_basis
     try:
         accepted = inspect.signature(execute).parameters
     except (TypeError, ValueError):
@@ -1619,6 +1766,7 @@ def record_idea(
     run_monte_carlo: bool = False,
     run_latency: bool = False,
     run_capacity: bool = False,
+    session_basis: str | None = None,
 ) -> Path:
     """Run one idea, write its immutable run folder and then the flat record. Returns the
     flat record's path.
@@ -1702,6 +1850,7 @@ def record_idea(
                                     run_monte_carlo=run_monte_carlo,
                                     run_latency=run_latency,
                                     run_capacity=run_capacity,
+                                    session_basis=session_basis,
                                     dataset=resolution)
     except LoadRejected as exc:
         report = dataclasses.replace(resolution.report, stage="load",
@@ -1812,6 +1961,10 @@ def record_idea(
         n_trials=n_trials,
         trials=trials_block,
         truncation=execution.truncation,
+        lookahead_guard=execution.lookahead_guard,
+        entries_skipped_missing_bar=execution.entries_skipped_missing_bar,
+        dynamic_target=execution.dynamic_target,
+        session_coverage=execution.session_coverage,
         tick_grid=execution.tick_grid,
         perturbation=execution.perturbation,
         live_caps=execution.live_caps,
@@ -2035,7 +2188,8 @@ def main(
     parser.add_argument(
         "--no-truncation",
         action="store_true",
-        help="skip the look-ahead (truncation) check; validity then lists it as not run",
+        help="skip the look-ahead (truncation) check; the record is labelled lookahead_check=not_run, "
+        "gate G0.2 is not evaluated and the run cannot be promoted",
     )
     parser.add_argument(
         "--perturbation",
@@ -2047,6 +2201,14 @@ def main(
         action="store_true",
         help="run the G5.2 stage: the strategy again with the live entry limits applied "
         "(long, about 8 GB of memory; without it G5.2 is not evaluated)",
+    )
+    parser.add_argument(
+        "--session-basis",
+        choices=session_coverage.BASES,
+        default=None,
+        help="common keeps only the sessions every symbol of the run has; own keeps each symbol's "
+        "sessions as loaded. Default: common for a basket of at most the data policy's "
+        "session_coverage.common_basis_max_symbols symbols, own above",
     )
     parser.add_argument(
         "--capacity",
@@ -2155,6 +2317,7 @@ def main(
                 "run_monte_carlo": args.monte_carlo,
                 "run_latency": args.latency,
                 "run_capacity": args.capacity,
+                "session_basis": args.session_basis,
                 "oos_start": args.oos_start,
                 "position_caps": position_caps,
                 "validation": args.validation,

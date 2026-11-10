@@ -189,7 +189,8 @@ def cost_by_direction(model: Any) -> dict[int, float]:
             risk=np.nan,
         )
 
-    return {d: float(model.trade_cost_bps(probe(d))) for d in (1, -1)}
+    # The probe has no exit: price it with the explicit symmetric-leg path (exit == entry).
+    return {d: float(model.trade_cost_bps(probe(d), symmetric_legs=True)) for d in (1, -1)}
 
 
 class Collector:

@@ -17,9 +17,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import numpy as np
 import pandas as pd
 
-from signal_engine.backtest import metrics, tickgrid
+from signal_engine.backtest import metrics, session_coverage, tickgrid
+from signal_engine.backtest.causal import GuardedCtx
 from signal_engine.backtest.data import sessions
 from signal_engine.backtest.engine import simulate
 from signal_engine.backtest.types import HOLDOUT_OOS_FRACTION, Ctx, RunConfig
@@ -65,6 +67,9 @@ class Backtest:
         self.single_pass = single_pass
         self._spent = False
         self._prep: dict = {}
+        # Look-ahead guard bookkeeping: symbol -> sessions simulated under a GuardedCtx.
+        self._guarded: dict[str, int] = {}
+        self._unguarded: set[str] = set()
 
     # ---- windows --------------------------------------------------------
 
@@ -88,8 +93,54 @@ class Backtest:
     def _ctx(self, sym, df, p) -> Ctx:
         """The prepared symbol, with the frame's `price_factor` carried through `prepare`."""
         factor = df["price_factor"] if "price_factor" in df.columns else None
+        # `session_after_gap` (session_coverage) marks the first session after a missing official
+        # session; a strategy's `prepare` may rebuild the frame, so it is put back by bar time.
+        gap = df[session_coverage.AFTER_GAP_COLUMN] if session_coverage.AFTER_GAP_COLUMN in df.columns else None
         prepared = self.strategy.prepare_for(sym, df, p)
+        prepared = session_coverage.carry_column(prepared, gap)
         return Ctx(tickgrid.carry_price_factor(prepared, factor), symbol=sym)
+
+    def _engine_ctx(self, ctx: Ctx):
+        """The Ctx the engine is given: always a GuardedCtx for the two engines that unwrap it.
+
+        This is the funnel every backtest, sweep, ablation and recorded run passes through, so a
+        strategy hook cannot read a bar after the one it may know (`backtest.causal`) without
+        raising LookAheadError. There is no switch to turn it off. An engine that does not declare
+        `guard_aware` (a test double) runs on the plain Ctx and is listed as unguarded.
+        """
+        if not getattr(self.engine, "guard_aware", False):
+            self._unguarded.add(ctx.symbol)
+            return ctx
+        if "new_session" in ctx.a:
+            sessions_n = int(np.count_nonzero(ctx.a["new_session"]))
+        else:
+            sessions_n = int(ctx.n)  # a daily bar is its own session
+        self._guarded[ctx.symbol] = sessions_n
+        return GuardedCtx(ctx)
+
+    def lookahead_guard(self) -> dict:
+        """What the guarded run covered: for the run record's `lookahead_guard` block.
+
+        `sessions_checked` counts (symbol, session) pairs. The guard runs inside the one
+        simulation, over every bar of every symbol; a violation aborts the run with
+        LookAheadError, so a record that exists has `violations` 0.
+        """
+        if self._unguarded and not self._guarded:
+            mode = "not_run"
+        elif self._unguarded:
+            mode = "partial"
+        elif self._guarded:
+            mode = "full"
+        else:
+            mode = "not_run"
+        return {
+            "mode": mode,
+            "scope": "every bar of every symbol, in the headline simulation",
+            "symbols_checked": len(self._guarded),
+            "sessions_checked": int(sum(self._guarded.values())),
+            "symbols_unguarded": sorted(self._unguarded),
+            "violations": 0,
+        }
 
     def trades(self, p, window: str = "all", run: RunConfig | None = None, recorder=None):
         """Simulate every symbol. `recorder` (a `ledgers.LedgerRecorder`) is handed to the engine
@@ -108,7 +159,7 @@ class Backtest:
             self._spent = True
             for sym in list(self.frames):
                 df = self.frames[sym]
-                ctx = self._ctx(sym, df, p)
+                ctx = self._engine_ctx(self._ctx(sym, df, p))
                 self.frames[sym] = None
                 del df
                 out += [t for t in self.engine(ctx, self.strategy, p, run, **extra) if keep(t.day)]
@@ -125,7 +176,7 @@ class Backtest:
                         f"cached prepare() exists for this parameter set; construct "
                         f"Backtest with release_raw=False to vary strategy params"
                     )
-                self._prep[key] = self._ctx(sym, df, p)
+                self._prep[key] = self._engine_ctx(self._ctx(sym, df, p))
                 if self.release_raw:
                     self.frames[sym] = None
             out += [

@@ -35,6 +35,7 @@ def _book(n=80, hold=3):
                 tp=0.0,
                 risk=1.0,
                 exit_time=pd.Timestamp(f"{days[min(i + hold, n - 1)]} 15:30"),
+                exit=100.4 if i % 2 else 99.8,
                 reason="tp",
                 r_gross=0.4 if i % 2 else -0.2,
                 r_net=0.3 if i % 2 else -0.3,

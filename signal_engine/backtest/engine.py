@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from signal_engine.backtest import tickgrid
+from signal_engine.backtest.causal import GuardedCtx
 from signal_engine.backtest.ledgers import _COUNT_BITS, CODE_INDEX
 from signal_engine.backtest.ledgers import N_CODES as _N_CODES
 from signal_engine.backtest.strategies.base import Strategy
@@ -57,6 +58,27 @@ _K_DROP_SESSION = CODE_INDEX["ORDER_DROPPED_SESSION_END"]
 _K_DROP_POS = CODE_INDEX["ORDER_DROPPED_POSITION_OPEN"]
 _K_WARMUP = CODE_INDEX["WARMUP"]
 _K_SKIP_FILL = CODE_INDEX["ENTRY_SKIPPED_BEYOND_LEVEL"]
+_K_MISSING_BAR = CODE_INDEX["ENTRY_SKIPPED_MISSING_BAR"]
+_K_AFTER_GAP = CODE_INDEX["SESSION_AFTER_GAP"]
+
+
+def _session_step_ns(t_ns: np.ndarray, new_sess, fallback_min: int) -> int:
+    """The bar interval in nanoseconds that the missing-bar guard expects between bars.
+
+    It is the shortest step seen between two bars of the same session that occurs more than a
+    few times, so a symbol with many missing bars (whose median step is longer than its real
+    interval) and an interval above 60 minutes are both read correctly. The median step that
+    sets the time exit (`bar_min`) is not used here. With no step to read, `fallback_min` is
+    used."""
+    if len(t_ns) < 2:
+        return fallback_min * 60_000_000_000
+    steps = np.diff(t_ns)[~np.asarray(new_sess[1:], dtype=bool)]
+    steps = steps[steps > 0]
+    if steps.size == 0:
+        return fallback_min * 60_000_000_000
+    values, counts = np.unique(steps, return_counts=True)
+    common = values[counts >= max(2, int(steps.size * 0.001))]
+    return int(common[0] if common.size else values[0])
 
 
 @dataclass(frozen=True)
@@ -120,16 +142,28 @@ def simulate_steps(
     if not isinstance(entry_delay_bars, int) or isinstance(entry_delay_bars, bool) or entry_delay_bars < 0:
         raise ValueError(f"entry_delay_bars must be an integer >= 0, got {entry_delay_bars!r}")
     delay = entry_delay_bars
+    # A GuardedCtx (backtest.causal) goes to the strategy hooks; the engine reads the plain Ctx.
+    # `guard` is None for a plain Ctx, so an unguarded run pays one `is not None` test per hook.
+    hc = c
+    guard = None
+    if isinstance(c, GuardedCtx):
+        guard = c.state
+        c = c.raw
     o, h, low, close = c["Open"], c["High"], c["Low"], c["Close"]
     mins, from_open = c["mins"], c["from_open"]
     days, new_sess = c["day"], c["new_session"]
     times, n = c.index, c.n
+    # Session-coverage safeguard: True on every bar of the first loaded session after a missing
+    # official session of this symbol. Absent on hand-built frames, and then nothing changes.
+    after_gap = c.a.get("session_after_gap")
 
     trades: list[Trade] = []
     pos: Position | None = None
     pending = None  # (EntrySignal, signal_price) armed for i+1
     pend_i = -1  # signal bar of `pending` (recorder only)
     pend_due = -1  # bar whose open fills `pending`: signal bar + 1 + delay
+    pend_sig = -1  # signal bar of `pending`; its stamp fixes when the order is due
+    in_gap = False  # a bar was missing inside the session while the open position was held
     cur_sig = -1  # signal bar of the open position (recorder only)
     legs_logged = 0  # ladder legs already written to the ledger
     b = rec.begin(c) if rec is not None else None
@@ -174,6 +208,14 @@ def simulate_steps(
     time_exit_min = min(
         run.time_exit_min, run.mis_squareoff_min - run.squareoff_margin_min - bar_min
     )
+    # Missing-bar guard (engine 1.6). `due_ns` is the stamp a bar must carry to be the one the
+    # order was meant for; `gap_before[i]` marks a bar that does not follow its predecessor by one
+    # bar step inside the same session.
+    t_ns = times.values.astype("datetime64[ns]").astype(np.int64)
+    step_ns = _session_step_ns(t_ns, new_sess, bar_min)
+    gap_before = np.zeros(n, dtype=bool)
+    if n > 1:
+        gap_before[1:] = (np.diff(t_ns) != step_ns) & ~np.asarray(new_sess[1:], dtype=bool)
 
     def log_legs(i: int) -> None:
         # ladder legs not yet in the ledger, stamped with the bar they filled on
@@ -183,7 +225,9 @@ def simulate_steps(
             b_fill((cur_sig, pos.direction, 1, i, fills[k].price, fills[k].reason, k + 1))
         legs_logged = len(fills)
 
-    def close_out(reason: str, price: float, i: int, at_open: bool = False) -> None:
+    def close_out(
+        reason: str, price: float, i: int, at_open: bool = False, ambiguous: bool = False
+    ) -> None:
         nonlocal pos
         legs = 1
         exit_px, exit_reason = price, reason
@@ -201,6 +245,7 @@ def simulate_steps(
             price = sum(f.frac * f.price for f in fills) / weight
             reason = "TP" if fills[-1].reason.startswith("TP") else fills[-1].reason
             legs = len(fills)
+            ambiguous = pos.ladder.ambiguous
             if rec is not None:
                 log_legs(i)
         else:
@@ -232,6 +277,8 @@ def simulate_steps(
             r_net=r_net,
             legs=legs,
             exit_at_open=at_open,
+            exit_ambiguous=bool(ambiguous),
+            data_gap=in_gap,
             **returns,
         )
         if rec is not None:
@@ -240,7 +287,9 @@ def simulate_steps(
             b_stamp((trade, cur_sig, pos.direction, legs))
         trades.append(trade)
         pos = None
-        strategy.on_exit(c, i, p, trade)
+        if guard is not None:
+            guard.set("on_exit", i)
+        strategy.on_exit(hc, i, p, trade)
 
     for i in range(n):
         if new_sess[i]:
@@ -255,7 +304,16 @@ def simulate_steps(
             sig, sig_px = pending
             pending = None
             fill = float(o[i])
-            if (
+            if t_ns[i] != t_ns[pend_sig] + (1 + delay) * step_ns:
+                # Missing-bar guard (engine 1.6): the bar at the due index is not the bar the
+                # order was meant for, so a hole sits between the signal and this open. A fill
+                # here would be a price from a later time. The order is dropped, not a trade.
+                if rec is not None:
+                    b_ord((pend_i, sig.direction, -1, _K_MISSING_BAR))
+                if guard is not None:
+                    guard.set("on_fill_skipped", i - 1, 1)
+                strategy.on_fill_skipped(hc, i, p, sig)
+            elif (
                 pos is None
                 and skip_fill
                 and sig.sl is not None
@@ -269,7 +327,9 @@ def simulate_steps(
                 # order is not taken. Not a trade, so it uses no daily slot or direction.
                 if rec is not None:
                     b_ord((pend_i, sig.direction, -1, _K_SKIP_FILL))
-                strategy.on_fill_skipped(c, i, p, sig)
+                if guard is not None:
+                    guard.set("on_fill_skipped", i - 1, 1)
+                strategy.on_fill_skipped(hc, i, p, sig)
             elif pos is None:
                 stop_px = float("nan")
                 if sig.sl is not None:
@@ -297,7 +357,10 @@ def simulate_steps(
                         sig.direction, fill, float(sig.sl), pos.targets, run.exit_plan
                     )
                 trades_today += 1
-                strategy.on_fill(c, i, p, pos)
+                in_gap = False
+                if guard is not None:
+                    guard.set("on_fill", i - 1, 1)
+                strategy.on_fill(hc, i, p, pos)
                 if rec is not None:
                     cur_sig, legs_logged = pend_i, 0
                     b_ord((pend_i, sig.direction, i, -1))
@@ -331,6 +394,8 @@ def simulate_steps(
                 b_ord((pend_i, sig.direction, -1, _K_DROP_POS))
 
         # 2. manage an open position on this bar
+        if pos is not None and gap_before[i] and i > pos.entry_bar:
+            in_gap = True  # engine 1.6: prices in the hole were never observed
         if pos is not None and pending_exit:
             # The order was placed at the previous close, so it fills at this open, ahead of
             # this bar's stop, target and clock checks.
@@ -358,7 +423,9 @@ def simulate_steps(
                 elif i + 1 >= n or days[i + 1] != days[i]:
                     reason = "DATA_GAP" if run.time_exit_at_open else "EOD"
                 else:
-                    reason = strategy.custom_exit(c, i, p, pos) or ""
+                    if guard is not None:
+                        guard.set("custom_exit", i)
+                    reason = strategy.custom_exit(hc, i, p, pos) or ""
                     if reason and exit_next_open:
                         pending_exit, reason = reason, ""
                 if reason:
@@ -367,7 +434,9 @@ def simulate_steps(
             d = pos.direction
             # the stop is a resting order placed before bar i trades, so it may use bars
             # up to i - 1 only (the same contract as `target`)
-            new_stop = strategy.trail(c, i - 1, p, pos) if i > 0 else None
+            if guard is not None:
+                guard.set("trail", i - 1)
+            new_stop = strategy.trail(hc, i - 1, p, pos) if i > 0 else None
             if new_stop is not None and not np.isnan(new_stop):
                 if snap_ticks:
                     new_stop = snapped(float(new_stop), d, i)
@@ -376,13 +445,20 @@ def simulate_steps(
 
             gapped = (o[i] <= pos.sl_eff) if d == 1 else (o[i] >= pos.sl_eff)
             hit_sl = (low[i] <= pos.sl_eff) if d == 1 else (h[i] >= pos.sl_eff)
-            tp = strategy.target(c, i, p, pos) if dyn_target else pos.tp
+            if dyn_target:
+                if guard is not None:
+                    guard.set("target", i - 1)
+                tp = strategy.target(hc, i, p, pos)
+            else:
+                tp = pos.tp
             hit_tp = (h[i] >= tp) if d == 1 else (low[i] <= tp)
 
             if gapped:
                 close_out("SL_GAP", o[i], i)
             elif hit_sl:
-                close_out("SL", pos.sl_eff, i)
+                # a bar that also reached the target is resolved against the trade (stop taken);
+                # the flag records that the order inside the bar is unknowable (engine 1.6)
+                close_out("SL", pos.sl_eff, i, ambiguous=bool(hit_tp))
             elif hit_tp:
                 if dyn_target:
                     # a resting limit: a bar that opens through it fills at the open
@@ -395,14 +471,18 @@ def simulate_steps(
                 elif i + 1 >= n or days[i + 1] != days[i]:
                     reason = "DATA_GAP" if run.time_exit_at_open else "EOD"
                 else:
-                    reason = strategy.custom_exit(c, i, p, pos) or ""
+                    if guard is not None:
+                        guard.set("custom_exit", i)
+                    reason = strategy.custom_exit(hc, i, p, pos) or ""
                     if reason and exit_next_open:
                         pending_exit, reason = reason, ""
                 if reason:
                     close_out(reason, close[i], i)
 
         # 3. strategy state machine
-        strategy.on_bar(c, i, p)
+        if guard is not None:
+            guard.set("on_bar", i)
+        strategy.on_bar(hc, i, p)
 
         # 4. evaluate a signal on this closed bar
         if i < warmup:
@@ -450,8 +530,21 @@ def simulate_steps(
                 if rec is not None:
                     skip(i, (_K_DIR_OFF if verdict == DIRECTION_DISABLED else _K_DIR_TAKEN))
                 continue
-            sig = strategy.entry(c, i, p, d)
+            if guard is not None:
+                guard.set("entry", i)
+            sig = strategy.entry(hc, i, p, d)
             if sig is None:
+                continue
+            if after_gap is not None and after_gap[i]:
+                # The previous loaded session is not the previous official session, so prior-day
+                # context is stale. The signal is not taken: no order, no on_entry, and the
+                # symbol keeps evaluating later bars. Recorded with its symbol and date.
+                if rec is not None:
+                    no_stop = sig.sl is None
+                    b_sig((
+                        i, d, sig.tag, close[i], float("nan") if no_stop else sig.sl, sig.tp,
+                        float("nan") if no_stop else abs(close[i] - sig.sl), _K_AFTER_GAP,
+                    ))
                 continue
             if sig.sl is None:
                 # No stop: nothing to validate, and no risk distance is invented.
@@ -466,7 +559,10 @@ def simulate_steps(
                     pend_i = i
                 pending = (sig, close[i])
                 pend_due = i + 1 + delay
-                strategy.on_entry(c, i, p, sig)
+                pend_sig = i
+                if guard is not None:
+                    guard.set("on_entry", i)
+                strategy.on_entry(hc, i, p, sig)
                 break
             risk = abs(close[i] - sig.sl)
             if risk <= 0 or np.isnan(risk):
@@ -494,9 +590,16 @@ def simulate_steps(
                 pend_i = i
             pending = (sig, close[i])
             pend_due = i + 1 + delay
-            strategy.on_entry(c, i, p, sig)
+            pend_sig = i
+            if guard is not None:
+                guard.set("on_entry", i)
+            strategy.on_entry(hc, i, p, sig)
             break
 
     if rec is not None:
         b.finish()
     return trades
+
+
+#: The Backtest funnel hands a GuardedCtx (backtest.causal) only to an engine that unwraps it.
+simulate.guard_aware = True

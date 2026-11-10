@@ -139,6 +139,7 @@ import hashlib  # noqa: E402
 from signal_engine.backtest.trades_io import TRADE_COLUMNS_EXTENDED  # noqa: E402
 
 LINEAGE = ["signal_id", "order_id", "entry_fill_id", "exit_fill_id", "position_id"]
+FLAG_COLS = ["exit_ambiguous", "data_gap"]
 COST_COLS = [
     "cost_brokerage_bps",
     "cost_stt_bps",
@@ -179,7 +180,7 @@ def _components(n: int) -> pd.DataFrame:
 
 def test_trade_columns_unchanged_and_extended_is_superset() -> None:
     assert len(TRADE_COLUMNS) == 14
-    assert TRADE_COLUMNS_EXTENDED == TRADE_COLUMNS + LINEAGE + COST_COLS
+    assert TRADE_COLUMNS_EXTENDED == TRADE_COLUMNS + LINEAGE + COST_COLS + FLAG_COLS
 
 
 def test_backward_compatible_bytes_pinned() -> None:
@@ -218,7 +219,7 @@ def test_partial_lineage_keeps_none_rows() -> None:
 
 def test_cost_columns_present_after_base() -> None:
     df = trades_to_frame(_pinned_fixture(), components=_components(2))
-    assert list(df.columns) == TRADE_COLUMNS + COST_COLS
+    assert list(df.columns) == TRADE_COLUMNS + COST_COLS + FLAG_COLS
     assert all(df[c].dtype == "float64" for c in COST_COLS)
     assert df["cost_stt_bps"].iloc[0] == 2.0
 
@@ -253,3 +254,26 @@ def test_read_base_file_returns_base_columns(tmp_path: Path) -> None:
     path = tmp_path / "t.parquet"
     write_trades_parquet(_pinned_fixture(), path)
     assert list(read_trades_parquet(path).columns) == TRADE_COLUMNS
+
+
+def test_execution_flags_round_trip_as_boolean_columns() -> None:
+    import io
+
+    import pyarrow.parquet as pq
+
+    trades = _pinned_fixture()
+    object.__setattr__(trades[0], "exit_ambiguous", True)
+    object.__setattr__(trades[1], "data_gap", True)
+    df = trades_to_frame(trades)
+    assert list(df.columns) == TRADE_COLUMNS + FLAG_COLS
+    assert df["exit_ambiguous"].tolist() == [True, False]
+    assert df["data_gap"].tolist() == [False, True]
+    table = pq.read_table(io.BytesIO(trades_parquet_bytes(trades)))
+    assert [str(table.schema.field(c).type) for c in FLAG_COLS] == ["bool", "bool"]
+    assert table.column("exit_ambiguous").to_pylist() == [True, False]
+
+
+def test_flags_are_written_for_a_costed_run_even_when_all_false() -> None:
+    df = trades_to_frame(_pinned_fixture(), components=_components(2))
+    assert df["exit_ambiguous"].tolist() == [False, False]
+    assert df["data_gap"].dtype == bool

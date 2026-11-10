@@ -20,20 +20,28 @@ never drive a gate.
 
 Deployed capital and sizing come from the caller (record_run reads `config.yaml`), never
 from a default here.
+
+Cost model version 2 prices each trade from its two real execution legs. The entry leg is the
+sized notional; the exit leg is notional x exit / entry. A long buys at entry and sells at exit; a
+short sells at entry and buys at exit. Each leg is priced as its own order, so the per-order
+brokerage cap applies to each leg's own value, and STT (intraday: sell leg) and stamp duty (buy
+leg) follow the real leg values. Every figure is in bps of the ENTRY notional. Slippage is
+unchanged: two sides of `slippage_bps_per_side` on the entry notional. A trade with no usable exit
+price is refused (`CostModelUnavailable`); only an explicit `symmetric_legs=True` call prices both
+legs at the entry value.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
-from functools import lru_cache
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from portfolio.broker_fees import fees_for
-from portfolio.costs import india_delivery, india_intraday
+from portfolio.costs import CostSchedule, india_delivery, india_intraday
 from signal_engine.backtest.metrics import clustered_t
 from signal_engine.backtest.types import Trade
 from signal_engine.research.intake.fingerprints import canonical_json, sha256_hex
@@ -42,11 +50,10 @@ PRODUCTS = ("MIS", "CNC")
 EXCHANGES = ("NSE", "BSE")
 MODEL_NAME = "statutory-per-trade"
 #: Bump when the pricing logic changes in a way the rate table does not show.
-COST_MODEL_VERSION = 1
+#: 2: each trade is priced from its real entry and exit legs (was: both legs at the entry notional).
+COST_MODEL_VERSION = 2
 #: G1.3 asks for total cost at these multiples of slippage.
 STRESS_LEVELS = (1.0, 1.5, 2.0)
-#: Positions are priced to the nearest rupee bucket; brokerage is the only lumpy line.
-_NOTIONAL_BUCKET = 100.0
 
 
 class CostModelUnavailable(ValueError):
@@ -87,16 +94,6 @@ def broker_identity(broker: str | None) -> dict[str, Any]:
     }
 
 
-@lru_cache(maxsize=8192)
-def _statutory_bps(
-    product: str, exchange: str, broker: str | None, bucket: float, long: bool = True
-) -> float:
-    schedule = _schedule(product, exchange, broker)
-    notional = bucket * _NOTIONAL_BUCKET
-    charge = schedule.charge(buy_value=notional, sell_value=notional, orders=2)
-    return (float(charge) + _dp_rupees(product, schedule, broker, long)) / notional * 1e4
-
-
 #: Statutory components, in column order, with the `portfolio.costs` breakdown key each reads.
 _STATUTORY_KEYS = (
     ("brokerage", "brokerage"),
@@ -112,26 +109,160 @@ COMPONENT_COLUMNS = tuple(f"cost_{name}_bps" for name, _ in _STATUTORY_KEYS) + (
 DECOMPOSITION_COLUMNS = (*COMPONENT_COLUMNS, "modeled_cost_bps")
 
 
-@lru_cache(maxsize=8192)
-def _component_bps(
-    product: str, exchange: str, broker: str | None, bucket: float, long: bool = True
-) -> tuple[float, ...]:
-    """Statutory components in bps of entry notional, in `_STATUTORY_KEYS` order, then a residual.
+def legwise_breakdown(schedule, buy_value: float, sell_value: float) -> dict[str, float]:
+    """The schedule's lines for one round trip, each leg priced as its own single order.
 
-    Same schedule, DP charge, orders and notional as `_statutory_bps`, but read from `breakdown()`
-    so the lines stay separate. The last value is the residual: the schedule's own `slippage` line plus
-    any charge key not named in `_STATUTORY_KEYS`. It is folded into the slippage column by
-    the callers, so the components always sum to `_statutory_bps` even when a schedule gains a
-    line.
+    `portfolio.costs.Charge.amount` applies a per-order brokerage cap to the AVERAGE of the two
+    legs when given `orders=2`. Pricing the buy leg and the sell leg separately (`orders=1` each)
+    makes the cap bind on each leg's own value. Every other line is linear in the leg values, so
+    the legwise sum is exact for them. This is the scalar reference the vectorised path matches.
+    """
+    bought = schedule.breakdown(buy_value, 0.0, orders=1)
+    sold = schedule.breakdown(0.0, sell_value, orders=1)
+    return {key: float(bought[key]) + float(sold[key]) for key in bought if key != "orders"}
+
+
+def _vector_lines(
+    schedule: CostSchedule, buy: np.ndarray, sell: np.ndarray
+) -> dict[str, np.ndarray]:
+    """`legwise_breakdown` for arrays of buy and sell leg values (rupees), line by line.
+
+    Mirrors `Charge.amount` / `CostSchedule.breakdown`: a `turnover`, `buy` or `sell` rate on the
+    leg values; an `order` charge is a flat amount per order (one order per leg, so twice) or a
+    rate on each leg's own value capped per order (cap 0 disables the cap). GST is charged on the
+    taxed lines. The equality with `legwise_breakdown` is pinned by test.
+    """
+    lines: dict[str, np.ndarray] = {}
+    taxable = np.zeros_like(buy)
+    for charge in schedule.charges:
+        if charge.basis == "turnover":
+            value = (buy + sell) * charge.rate
+        elif charge.basis == "buy":
+            value = buy * charge.rate
+        elif charge.basis == "sell":
+            value = sell * charge.rate
+        elif charge.basis == "order":
+            if charge.flat > 0:
+                value = np.full_like(buy, 2.0 * charge.flat)
+            else:
+                buy_leg, sell_leg = buy * charge.rate, sell * charge.rate
+                if charge.cap > 0:
+                    buy_leg = np.minimum(buy_leg, charge.cap)
+                    sell_leg = np.minimum(sell_leg, charge.cap)
+                value = buy_leg + sell_leg
+        else:
+            raise CostModelUnavailable(f"unknown charge basis {charge.basis!r}")
+        lines[charge.key] = value
+        if charge.taxed:
+            taxable = taxable + value
+    lines["tax"] = taxable * schedule.tax_rate
+    lines["slippage"] = (buy + sell) * schedule.slippage
+    return lines
+
+
+def _statutory_rupees(
+    product: str,
+    exchange: str,
+    broker: str | None,
+    buy: np.ndarray,
+    sell: np.ndarray,
+    long: np.ndarray,
+) -> np.ndarray:
+    """Statutory components in rupees per trade, columns in `_STATUTORY_KEYS` order, then a residual.
+
+    The residual is the schedule's own `slippage` line plus any charge key not named in
+    `_STATUTORY_KEYS`; the callers fold it into the slippage column, so the components always sum
+    to the schedule's total even when a schedule gains a line. The broker's DP charge (CNC long
+    only) sits in the brokerage column.
     """
     schedule = _schedule(product, exchange, broker)
-    notional = bucket * _NOTIONAL_BUCKET
-    parts = schedule.breakdown(buy_value=notional, sell_value=notional, orders=2)
-    named = tuple(float(parts[key]) for _, key in _STATUTORY_KEYS)
-    residual = float(parts["total"]) - sum(named)
-    # The DP charge is the broker's own, so it sits in the brokerage column.
-    named = (named[0] + _dp_rupees(product, schedule, broker, long), *named[1:])
-    return tuple(v / notional * 1e4 for v in (*named, residual))
+    n = len(buy)
+    if isinstance(schedule, CostSchedule):
+        lines = _vector_lines(schedule, buy, sell)
+        total = np.zeros(n)
+        for value in lines.values():
+            total = total + value
+        named = (
+            np.column_stack([lines[key] for _, key in _STATUTORY_KEYS]) if n else np.empty((0, 6))
+        )
+    else:
+        # A schedule that is not a `CostSchedule` (a test double, a future market) is priced
+        # trade by trade through its own `breakdown`, legwise.
+        rows = [
+            legwise_breakdown(schedule, float(b), float(s)) for b, s in zip(buy, sell, strict=True)
+        ]
+        named = np.array([[r[key] for _, key in _STATUTORY_KEYS] for r in rows]).reshape(n, 6)
+        total = np.array([r["total"] for r in rows], dtype=np.float64)
+    residual = total - named.sum(axis=1)
+    dp = _dp_rupees(product, schedule, broker, True)
+    named[:, 0] = named[:, 0] + np.where(long, dp, 0.0)
+    return np.column_stack([named, residual])
+
+
+def _positive_finite(values: np.ndarray) -> np.ndarray:
+    return np.isfinite(values) & (values > 0)
+
+
+def _notionals(rows: Sequence[Trade], model: CostModel, entry: np.ndarray) -> np.ndarray:
+    """Rupees of stock the live sizer would have bought for each trade."""
+    if model.fixed_notional is not None:
+        return np.full(len(rows), float(model.fixed_notional))
+    risk = np.array([t.risk for t in rows], dtype=np.float64)
+    unsized = ~np.isfinite(risk)
+    if unsized.any():
+        first = rows[int(np.argmax(unsized))]
+        raise CostModelUnavailable(
+            f"{first.symbol} has no stop, so it cannot be sized by risk; "
+            "give the cost model a fixed_notional"
+        )
+    sized = model.capital * model.risk_per_trade / (risk / entry)
+    return np.minimum(sized, model.capital * model.leverage)
+
+
+def _cost_matrix(
+    rows: Sequence[Trade], model: CostModel, slippage_mult: float, symmetric_legs: bool
+) -> np.ndarray:
+    """Per-trade cost lines in bps of entry notional: shape (n, 8).
+
+    Columns are `DECOMPOSITION_COLUMNS`: the six statutory lines, slippage (the schedule residual
+    plus two sides of slippage), and their sum. The one place a trade is priced; every public
+    cost figure reads from it, so they cannot disagree.
+    """
+    n = len(rows)
+    if n == 0:
+        return np.empty((0, len(DECOMPOSITION_COLUMNS)), dtype=np.float64)
+    entry = np.array([t.entry for t in rows], dtype=np.float64)
+    bad = ~_positive_finite(entry)
+    if bad.any():
+        first = rows[int(np.argmax(bad))]
+        raise CostModelUnavailable(
+            f"{first.symbol} has no usable entry price ({first.entry!r}); it cannot be costed"
+        )
+    notional = _notionals(rows, model, entry)
+    if symmetric_legs:
+        exit_value = notional
+    else:
+        exit_ = np.array([t.exit for t in rows], dtype=np.float64)
+        bad = ~_positive_finite(exit_)
+        if bad.any():
+            first = rows[int(np.argmax(bad))]
+            raise CostModelUnavailable(
+                f"{first.symbol} has no usable exit price ({first.exit!r}); the cost model prices "
+                "each leg from the real exit, so it will not guess one"
+            )
+        exit_value = notional * exit_ / entry
+    long = np.array([t.direction != -1 for t in rows], dtype=bool)
+    buy = np.where(long, notional, exit_value)
+    sell = np.where(long, exit_value, notional)
+    rupees = _statutory_rupees(model.product, model.exchange, model.broker, buy, sell, long)
+    bps = rupees / notional[:, None] * 1e4
+    statutory, residual = bps[:, :-1], bps[:, -1]
+    slippage = residual + 2.0 * model.slippage_bps_per_side * slippage_mult
+    out = np.empty((n, len(DECOMPOSITION_COLUMNS)), dtype=np.float64)
+    out[:, :6] = statutory
+    out[:, 6] = slippage
+    out[:, 7] = out[:, :7].sum(axis=1)
+    return out
 
 
 @dataclass(frozen=True)
@@ -180,92 +311,79 @@ class CostModel:
         sized = self.capital * self.risk_per_trade / stop_fraction
         return float(min(sized, self.capital * self.leverage))
 
-    def statutory_bps(self, trade: Trade) -> float:
-        bucket = max(1.0, round(self.notional(trade) / _NOTIONAL_BUCKET))
-        return _statutory_bps(
-            self.product, self.exchange, self.broker, bucket, trade.direction != -1
-        )
+    def _row(self, trade: Trade, slippage_mult: float, symmetric_legs: bool) -> np.ndarray:
+        return _cost_matrix([trade], self, slippage_mult, symmetric_legs)[0]
 
-    def trade_cost_bps(self, trade: Trade, slippage_mult: float = 1.0) -> float:
-        """Round-trip cost in bps of the entry notional: statutory plus two slippage legs."""
-        return self.statutory_bps(trade) + 2.0 * self.slippage_bps_per_side * slippage_mult
+    def statutory_bps(self, trade: Trade, symmetric_legs: bool = False) -> float:
+        """Statutory charges in bps of the entry notional, priced from the trade's real legs.
 
-    def components(self, trade: Trade, slippage_mult: float = 1.0) -> dict[str, float]:
+        `symmetric_legs=True` prices both legs at the entry value instead (see `trade_cost_bps`).
+        """
+        return float(self._row(trade, 0.0, symmetric_legs)[7])
+
+    def trade_cost_bps(
+        self, trade: Trade, slippage_mult: float = 1.0, symmetric_legs: bool = False
+    ) -> float:
+        """Round-trip cost in bps of the entry notional: statutory plus two slippage legs.
+
+        The legs are the trade's real entry and exit (`trade.exit`); a missing or non-positive
+        exit raises `CostModelUnavailable`. `symmetric_legs=True` is the explicit exception for a
+        probe that has no exit: both legs are priced at the entry value (exit == entry). It is
+        never a default and a recorded run never uses it. Slippage is two sides of
+        `slippage_bps_per_side` on the entry notional either way.
+        """
+        return float(self._row(trade, slippage_mult, symmetric_legs)[7])
+
+    def components(
+        self, trade: Trade, slippage_mult: float = 1.0, symmetric_legs: bool = False
+    ) -> dict[str, float]:
         """Modelled round-trip cost split into lines, in bps of the entry notional.
 
         Keys are `cost_<line>_bps` for brokerage, stt, exchange, gst, sebi, stamp and slippage,
         plus `modeled_cost_bps` (their sum, equal to `trade_cost_bps` for the same arguments).
         """
-        bucket = max(1.0, round(self.notional(trade) / _NOTIONAL_BUCKET))
-        *statutory, residual = _component_bps(
-            self.product, self.exchange, self.broker, bucket, trade.direction != -1
-        )
-        slippage = residual + 2.0 * self.slippage_bps_per_side * slippage_mult
-        values = (*statutory, slippage)
-        out = dict(zip(COMPONENT_COLUMNS, values, strict=True))
-        out["modeled_cost_bps"] = float(sum(values))
-        return out
+        row = self._row(trade, slippage_mult, symmetric_legs)
+        return dict(zip(DECOMPOSITION_COLUMNS, (float(v) for v in row), strict=True))
 
 
-def decompose_trades(trades, model: CostModel, slippage_mult: float = 1.0) -> pd.DataFrame:
-    """One row per trade, in input order, with `DECOMPOSITION_COLUMNS` (float64)."""
-    rows = list(trades)
-    if not rows:
-        return pd.DataFrame({c: np.empty(0, dtype=np.float64) for c in DECOMPOSITION_COLUMNS})
-    entry = np.array([t.entry for t in rows], dtype=np.float64)
-    risk = np.array([t.risk for t in rows], dtype=np.float64)
-    if model.fixed_notional is not None:
-        notional = np.full(len(rows), float(model.fixed_notional))
-    else:
-        unsized = ~np.isfinite(risk)
-        if unsized.any():
-            first = rows[int(np.argmax(unsized))]
-            raise CostModelUnavailable(
-                f"{first.symbol} has no stop, so it cannot be sized by risk; "
-                "give the cost model a fixed_notional"
-            )
-        sized = model.capital * model.risk_per_trade / (risk / entry)
-        notional = np.minimum(sized, model.capital * model.leverage)
-    buckets = np.maximum(1.0, np.round(notional / _NOTIONAL_BUCKET))
-    longs = np.array([t.direction != -1 for t in rows], dtype=float)
-    keys = np.column_stack([buckets, longs])
-    uniq, inverse = np.unique(keys, axis=0, return_inverse=True)
-    table = np.array(
-        [
-            _component_bps(model.product, model.exchange, model.broker, float(b), bool(lg))
-            for b, lg in uniq
-        ],
-        dtype=np.float64,
-    )
-    picked = table[inverse.reshape(-1)]
-    statutory, residual = picked[:, :-1], picked[:, -1]
-    slippage = residual + 2.0 * model.slippage_bps_per_side * slippage_mult
-    data = {c: statutory[:, i] for i, c in enumerate(COMPONENT_COLUMNS[:-1])}
-    data["cost_slippage_bps"] = slippage
-    frame = pd.DataFrame(data, columns=list(COMPONENT_COLUMNS))
-    frame["modeled_cost_bps"] = frame.sum(axis=1)
-    return frame
+def decompose_trades(
+    trades, model: CostModel, slippage_mult: float = 1.0, symmetric_legs: bool = False
+) -> pd.DataFrame:
+    """One row per trade, in input order, with `DECOMPOSITION_COLUMNS` (float64).
+
+    Each trade is priced from its own entry and exit legs (see the module docstring), vectorised
+    over all trades. A trade with no usable exit raises `CostModelUnavailable` unless
+    `symmetric_legs=True`.
+    """
+    matrix = _cost_matrix(list(trades), model, slippage_mult, symmetric_legs)
+    return pd.DataFrame(matrix, columns=list(DECOMPOSITION_COLUMNS))
 
 
-def _restate(trades, bps_of) -> list[Trade]:
+def _restate(trades, bps) -> list[Trade]:
     """Copies of `trades` with the net result restated from each trade's own gross result.
 
-    `bps_of(trade)` is that trade's round-trip cost in bps of the entry notional.
+    `bps[i]` is trade i's round-trip cost in bps of the entry notional.
     """
     out = []
-    for t in trades:
-        bps = bps_of(t)
+    for t, cost in zip(trades, bps, strict=True):
+        cost = float(cost)
         if t.gross_ret is not None:
             # No stop: the result is a return on the entry price, restated directly.
-            out.append(replace(t, net_ret=t.gross_ret - bps / 1e4))
+            out.append(replace(t, net_ret=t.gross_ret - cost / 1e4))
         else:
-            out.append(replace(t, r_net=t.r_gross - bps / 1e4 * t.entry / t.risk))
+            out.append(replace(t, r_net=t.r_gross - cost / 1e4 * t.entry / t.risk))
     return out
+
+
+def _model_bps(trades, model: CostModel, slippage_mult: float = 1.0) -> np.ndarray:
+    """Per-trade round-trip cost in bps (statutory plus slippage), from the real legs."""
+    return _cost_matrix(list(trades), model, slippage_mult, False)[:, 7]
 
 
 def recost(trades, model: CostModel, slippage_mult: float = 1.0) -> list[Trade]:
     """Copies of `trades` with `r_net` restated under `model`. Inputs are not modified."""
-    return _restate(trades, lambda t: model.trade_cost_bps(t, slippage_mult))
+    trades = list(trades)
+    return _restate(trades, _model_bps(trades, model, slippage_mult))
 
 
 def mean_total_bps(trades, model: CostModel) -> float:
@@ -276,7 +394,7 @@ def mean_total_bps(trades, model: CostModel) -> float:
     trades = list(trades)
     if not trades:
         return 0.0
-    statutory = np.array([model.statutory_bps(t) for t in trades])
+    statutory = _model_bps(trades, model, 0.0)
     return round(float(statutory.mean()) + 2.0 * model.slippage_bps_per_side, 3)
 
 
@@ -316,7 +434,7 @@ def rate_table(product: str, exchange: str, broker: str | None = None) -> dict[s
     """The statutory rate lines the model prices trades with, as plain data.
 
     Read from the same `portfolio.costs` schedule (with `broker`'s own brokerage) as
-    `_statutory_bps`, so the table cannot drift from the numbers: schedule name, tax rate (GST)
+    the pricing code, so the table cannot drift from the numbers: schedule name, tax rate (GST)
     and, per charge, its basis, rate, flat amount, per-order cap and whether the tax applies.
     """
     schedule = _schedule(product, exchange, broker)
@@ -410,7 +528,7 @@ def cost_scenarios(
     generic = replace(model, broker=None)
     scenarios: list[dict[str, Any]] = []
     for scenario_id, priced in (("primary", model), ("generic_discount_broker", generic)):
-        bps = np.array([priced.trade_cost_bps(t) for t in trades])
+        bps = _model_bps(trades, priced)
         row = {
             "id": scenario_id,
             "definition": {
@@ -428,7 +546,7 @@ def cost_scenarios(
                     trades,
                     recost(trades, priced, m),
                     priced,
-                    np.array([priced.trade_cost_bps(t, m) for t in trades]),
+                    _model_bps(trades, priced, m),
                 ).items()
                 if k in ("mean_round_trip_bps", "net_bps", "net_r")
             }
@@ -439,7 +557,7 @@ def cost_scenarios(
     levels.append(("legacy_flat", float(flat_bps)))
     for scenario_id, bps_value in levels:
         bps = np.full(len(trades), bps_value)
-        restated = _restate(trades, lambda _t, b=bps_value: b)
+        restated = _restate(trades, bps)
         scenarios.append(
             {
                 "id": scenario_id,
@@ -467,7 +585,7 @@ def cost_profile(
     trades = list(trades)
     if not trades:
         return None
-    statutory = np.array([model.statutory_bps(t) for t in trades])
+    statutory = _model_bps(trades, model, 0.0)
     table = rate_table(model.product, model.exchange, model.broker)
     slippage = 2.0 * model.slippage_bps_per_side
     scenarios = cost_scenarios(trades, model, flat_bps, reference_bps)

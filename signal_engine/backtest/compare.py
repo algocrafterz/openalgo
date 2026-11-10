@@ -564,6 +564,58 @@ def _incremental_run(
     return "a" if pa[1] > pb[1] else "b"
 
 
+# ---- session coverage -----------------------------------------------------------------------
+
+
+def _coverage_facts(run: _Run) -> dict[str, Any] | None:
+    """The session basis, effective period and session set of a run, or None for an older run."""
+    block = _dict(run.report.get("session_coverage"))
+    basis = _dict(block.get("session_basis")).get("used")
+    effective = _dict(block.get("effective"))
+    if basis is None or not effective:
+        return None
+    return {
+        "session_basis": basis,
+        "coverage_class": block.get("coverage_class"),
+        "period": effective.get("period"),
+        "sessions_kept": effective.get("sessions_kept"),
+        "sessions_sha256": effective.get("sessions_sha256"),
+    }
+
+
+def _session_comparability(a: _Run, b: _Run) -> dict[str, Any]:
+    """Whether two runs traded comparable session sets (recorded `session_coverage` blocks).
+
+    Not comparable when the session bases differ (one run dropped sessions the other traded), or
+    when the periods are equal but the effective session sets are not (the same window with
+    different sessions kept). A run without the block (recorded before it existed) leaves the
+    answer unknown (`comparable` None): nothing is claimed either way. A different period is
+    already reported by `overlap.warning`.
+    """
+    fa, fb = _coverage_facts(a), _coverage_facts(b)
+    out: dict[str, Any] = {"comparable": None, "reason": None, "a": fa, "b": fb}
+    if fa is None or fb is None:
+        out["reason"] = "one or both runs predate session coverage recording"
+        return out
+    out["comparable"] = True
+    if fa["session_basis"] != fb["session_basis"]:
+        out["comparable"] = False
+        out["reason"] = (
+            f"The runs used different session bases (run A {fa['session_basis']}, run B "
+            f"{fb['session_basis']}), so each traded a different set of sessions "
+            f"({fa['sessions_kept']} and {fb['sessions_kept']} sessions). This is not a "
+            "like-for-like comparison."
+        )
+    elif a.period == b.period and fa["sessions_sha256"] != fb["sessions_sha256"]:
+        out["comparable"] = False
+        out["reason"] = (
+            f"The runs cover the same period but traded different session sets (run A "
+            f"{fa['sessions_kept']} sessions, run B {fb['sessions_kept']}), so missing data "
+            "differs between them. This is not a like-for-like comparison."
+        )
+    return out
+
+
 # ---- curves ---------------------------------------------------------------------------------
 
 
@@ -788,6 +840,9 @@ def compare_run_folders(folder_a: Path, folder_b: Path) -> dict[str, Any]:
     ca, cb = (_bps_view(a), _bps_view(b)) if no_r else (a, b)
     curves, curves_common, curves_incremental = _curve_sets(ca, cb, common, inc_run, inc_ranges)
     warning = _with_unit_note(_warning(pa, pb, common, extra), no_r)
+    sessions = _session_comparability(a, b)
+    if sessions["comparable"] is False:
+        warning = f"{warning} {sessions['reason']}" if warning else sessions["reason"]
 
     return {
         "schema": SCHEMA,
@@ -797,6 +852,7 @@ def compare_run_folders(folder_a: Path, folder_b: Path) -> dict[str, Any]:
         "dataset": _dataset_diff(a.manifest, b.manifest),
         "execution": _execution_diff(a, b),
         "cost": _cost_diff(a, b),
+        "session_coverage": sessions,
         "performance": _deltas(full["a"], full["b"]),
         "performance_common": (
             _deltas(common_view["a"], common_view["b"]) if common_view is not None else None

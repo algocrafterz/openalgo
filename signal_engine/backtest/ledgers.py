@@ -55,6 +55,17 @@ WARMUP = "WARMUP"
 # codes so every existing code keeps its number.
 ENTRY_SKIPPED_BEYOND_LEVEL = "ENTRY_SKIPPED_BEYOND_LEVEL"
 
+# Engine 1.6: always on. A pending order whose due bar is not the bar stamped signal time plus the
+# bar step (a missing or late bar between signal and fill) is dropped, never filled across the
+# hole. Appended after the opt-in code so every earlier code keeps its number.
+ENTRY_SKIPPED_MISSING_BAR = "ENTRY_SKIPPED_MISSING_BAR"
+
+# Session-coverage safeguard (engine 1.6): a NEW entry on the first loaded session after one or
+# more missing official sessions of the symbol is skipped, because previous-session context (prior
+# day high, low, close, gap) then refers to a stale day. Appended last so every earlier code keeps
+# its number. Raised only when the frame carries the `session_after_gap` column.
+SESSION_AFTER_GAP = "SESSION_AFTER_GAP"
+
 LIVE_CODES: tuple[str, ...] = (
     MAX_TRADES_DAY,
     OPEN_WINDOW,
@@ -78,7 +89,8 @@ RESERVED_CODES: tuple[str, ...] = (
     WARMUP,
 )
 OPT_IN_CODES: tuple[str, ...] = (ENTRY_SKIPPED_BEYOND_LEVEL,)
-REASON_CODES: tuple[str, ...] = LIVE_CODES + RESERVED_CODES + OPT_IN_CODES
+ENGINE_CODES: tuple[str, ...] = (ENTRY_SKIPPED_MISSING_BAR, SESSION_AFTER_GAP)
+REASON_CODES: tuple[str, ...] = LIVE_CODES + RESERVED_CODES + OPT_IN_CODES + ENGINE_CODES
 
 #: code -> small int, used by the engines in the hot loop. Order is part of the contract.
 CODE_INDEX: dict[str, int] = {c: k for k, c in enumerate(REASON_CODES)}

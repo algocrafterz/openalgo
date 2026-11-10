@@ -133,9 +133,12 @@ class TestCodesAndIds:
     def test_taxonomy_complete_and_unique(self):
         assert len(ledgers.LIVE_CODES) == 12
         # 12 live + 6 reserved + 1 opt-in (ENTRY_SKIPPED_BEYOND_LEVEL, skip-at-fill rule)
+        # + 2 engine-1.6 codes (ENTRY_SKIPPED_MISSING_BAR always on, SESSION_AFTER_GAP when the
+        # frame carries the session_after_gap column)
         assert ledgers.OPT_IN_CODES == ("ENTRY_SKIPPED_BEYOND_LEVEL",)
-        assert len(ledgers.REASON_CODES) == 19
-        assert len(set(ledgers.REASON_CODES)) == 19
+        assert ledgers.ENGINE_CODES == ("ENTRY_SKIPPED_MISSING_BAR", "SESSION_AFTER_GAP")
+        assert len(ledgers.REASON_CODES) == 21
+        assert len(set(ledgers.REASON_CODES)) == 21
         for code in (
             "POSITION_CAP",
             "SYMBOL_MIN_SESSIONS",

@@ -78,8 +78,9 @@ def test_intraday_stt_is_sell_side_only_and_stamp_buy_side_only():
     t = _trade(entry=100.0, risk=1.0)
     comps = model.components(t)
     notional = model.notional(t)
-    # sell leg only: 0.025% of notional -> 2.5 bps of entry notional
-    assert comps["cost_stt_bps"] == pytest.approx(2.5)
+    # sell leg only. The trade exits at 101 (entry 100 + 1 x r_gross 1), so the sell leg is 1.01 x
+    # notional: 0.025% x 1.01 = 2.525 bps of entry notional (2.5 when both legs were the entry)
+    assert comps["cost_stt_bps"] == pytest.approx(2.525)
     # buy leg only: 0.003% -> 0.3 bps
     assert comps["cost_stamp_bps"] == pytest.approx(0.3)
     assert notional > 0
@@ -89,7 +90,8 @@ def test_delivery_differs_from_intraday():
     t = _trade(entry=100.0, risk=1.0)
     mis = _model(product="MIS").components(t)
     cnc = _model(product="CNC").components(t)
-    assert cnc["cost_stt_bps"] == pytest.approx(20.0)  # 0.1% on both legs
+    # 0.1% on both legs: buy 1.00 + sell 1.01 of notional = 20.1 bps of entry notional
+    assert cnc["cost_stt_bps"] == pytest.approx(20.1)
     assert cnc["cost_stamp_bps"] == pytest.approx(1.5)  # 0.015% buy leg
     assert cnc["cost_brokerage_bps"] == 0.0  # delivery brokerage is free
     assert cnc["cost_gst_bps"] < mis["cost_gst_bps"]
@@ -99,9 +101,9 @@ def test_delivery_differs_from_intraday():
 def test_exchange_sebi_gst_values():
     t = _trade(entry=100.0, risk=1.0)
     c = _model().components(t)
-    # turnover is 2x notional: 0.00307% x 2 = 0.614 bps of entry notional
-    assert c["cost_exchange_bps"] == pytest.approx(0.614)
-    assert c["cost_sebi_bps"] == pytest.approx(0.02)
+    # turnover is (1.00 + 1.01) x notional: 0.00307% x 2.01 = 0.61707 bps of entry notional
+    assert c["cost_exchange_bps"] == pytest.approx(0.61707)
+    assert c["cost_sebi_bps"] == pytest.approx(0.0201)
     taxed = c["cost_brokerage_bps"] + c["cost_exchange_bps"] + c["cost_sebi_bps"]
     assert c["cost_gst_bps"] == pytest.approx(0.18 * taxed)
 
@@ -169,22 +171,13 @@ class TestDecomposeTrades:
         )
 
 
-def test_cache_is_bounded():
-    info = costs._component_bps.cache_info()
-    assert info.maxsize is not None and info.maxsize <= 8192
+def test_many_distinct_notionals_are_priced_exactly_per_trade():
+    # There is no notional bucket any more: exit value differs per trade, so each trade is priced
+    # on its own legs. 3000 distinct notionals must each equal the scalar figure.
     model = _model(leverage=1_000.0)
-    # many distinct notionals map into rupee buckets; cache must not exceed maxsize
     trades = [_trade(100.0, 0.001 + i * 0.0003) for i in range(3000)]
-    costs.decompose_trades(trades, model)
-    assert costs._component_bps.cache_info().currsize <= info.maxsize
-
-
-def test_shares_bucket_cache_with_trade_cost():
-    costs._component_bps.cache_clear()
-    costs._statutory_bps.cache_clear()
-    model = _model()
-    t = _trade()
-    model.components(t)
-    model.trade_cost_bps(t)
-    # same notional bucket: a single entry each, nothing recomputed per trade
-    assert costs._component_bps.cache_info().currsize == 1
+    df = costs.decompose_trades(trades, model)
+    for i in (0, 1, 1499, 2999):
+        assert df["modeled_cost_bps"].iloc[i] == pytest.approx(
+            model.trade_cost_bps(trades[i]), abs=1e-9
+        )

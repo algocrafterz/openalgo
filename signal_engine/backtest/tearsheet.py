@@ -39,6 +39,7 @@ import pandas as pd
 
 from signal_engine.backtest.concurrency import apply_position_cap, concurrency_profile
 from signal_engine.backtest.costs import MODEL_NAME, CostModel, cost_profile
+from signal_engine.backtest.execution_warnings import execution_warnings
 from signal_engine.backtest.exit_views import exit_views, split_data_gap
 from signal_engine.backtest.metrics import clustered_t, hurdle_t
 from signal_engine.backtest.regime import regime_block
@@ -384,8 +385,19 @@ def build_run_record(
     membership: dict[str, Any] | None = None,
     portfolio: dict[str, Any] | None = None,
     portfolio_returns: Sequence[float] | None = None,
+    entries_skipped_missing_bar: int | None = None,
+    dynamic_target: bool = False,
+    lookahead_guard: dict[str, Any] | None = None,
+    session_coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a schema-v2 run record from `Trade` objects. Inputs are not modified.
+
+    `entries_skipped_missing_bar` (from the ledgers), `dynamic_target` and `lookahead_guard` (the
+    guarded pass and the truncation check, `Backtest.lookahead_guard()`) feed the engine 1.6
+    blocks `execution_warnings` and `lookahead_guard`. A record built without them has neither.
+    `session_coverage` (`backtest.session_coverage.build_block`) adds the optional block of the same
+    name: per-symbol missing sessions, the session basis and the coverage class. A record built
+    without it has none.
 
     `position_caps` (slot counts, e.g. `(3, 5, 10)`) adds the concurrency profile and the
     result with only that many positions open at once. Every trade then needs an
@@ -472,6 +484,16 @@ def build_run_record(
     }
     if (trades or data_gap) and not no_r:
         record["exit_views"] = exit_views(trades, data_gap)
+    if trades or entries_skipped_missing_bar:
+        record["execution_warnings"] = execution_warnings(
+            trades, entries_skipped_missing_bar or 0, dynamic_target=dynamic_target
+        )
+        if entries_skipped_missing_bar is None:
+            record["execution_warnings"]["entries_skipped_missing_bar"] = None
+    if lookahead_guard is not None:
+        record["lookahead_guard"] = dict(lookahead_guard)
+    if session_coverage is not None:
+        record["session_coverage"] = dict(session_coverage)
     if oos_start is not None:
         in_sample, out_of_sample = _split(trades, oos_start)
         record["split"] = {"type": "oos", "oos_start": oos_start}

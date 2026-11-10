@@ -5,6 +5,7 @@ import math
 import re
 import shutil
 import stat
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -44,7 +45,11 @@ def _execution_of(rows, start, end):
     # net R. Every row costs 0.2R at its 1 percent stop (20 bps): the model is given the
     # slippage that makes its total exactly that, and each trade's gross is its net plus 0.2R,
     # so the statutory restatement returns the stated net.
-    trades = [_trade(date.fromisoformat(d), n + 0.2, n) for d, _, n in rows]
+    # The exit is pinned to the entry price so every row has the same legs and so the same cost;
+    # cost model 2 prices the real exit, which would otherwise vary the cost with each row's gross.
+    trades = [
+        replace(_trade(date.fromisoformat(d), n + 0.2, n), exit=100.0) for d, _, n in rows
+    ]
     template = _execution()
     stat = make_model().statutory_bps(trades[0]) if trades else 0.0
     return rr.Execution(

@@ -88,7 +88,8 @@ def _trade(risk, entry=100.0, direction=1):
 
     return Trade(symbol="X", day=dt.date(2025, 1, 1), direction=direction, tag="t",
                  entry_time=pd.Timestamp("2025-01-01 10:00", tz=IST), entry=entry,
-                 signal_price=entry, sl=float("nan"), tp=float("nan"), risk=risk)
+                 signal_price=entry, sl=float("nan"), tp=float("nan"), risk=risk,
+                 exit=entry * 1.01)
 
 
 def _model(**kw):

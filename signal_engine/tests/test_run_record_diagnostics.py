@@ -36,6 +36,9 @@ def _execute_with(monkeypatch, strategy_cls):
         def __init__(self, strategy, frames, run, **kw):
             self.days = [pd.Timestamp("2026-06-04").date()]
 
+        def lookahead_guard(self):
+            return {"mode": "full", "symbols_checked": 1, "sessions_checked": 1, "violations": 0}
+
         def trades(self, p, window="all", run=None, recorder=None):
             return simulate(Ctx(df, "AAA"), Script({}), None, RUN, rec=recorder)
 

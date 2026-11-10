@@ -54,6 +54,7 @@ def _trade(day, r_gross, r_net):
         tp=0.0,
         risk=1.0,
         exit_time=f"{day} 15:00",
+        exit=100.0 + r_gross,
         reason="tp",
         r_gross=r_gross,
         r_net=r_net,

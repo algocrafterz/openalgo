@@ -52,8 +52,16 @@ COST_COMPONENT_COLUMNS: list[str] = [
     "cost_slippage_bps",
     "modeled_cost_bps",
 ]
-#: Base columns, then lineage ids, then the modelled cost lines. The extras are optional.
-TRADE_COLUMNS_EXTENDED: list[str] = TRADE_COLUMNS + LINEAGE_COLUMNS + COST_COMPONENT_COLUMNS
+#: Engine 1.6 execution flags (Trade.exit_ambiguous, Trade.data_gap).
+EXECUTION_FLAG_COLUMNS: list[str] = [
+    "exit_ambiguous",
+    "data_gap",
+]
+#: Base columns, then lineage ids, the modelled cost lines, then the execution flags. The extras
+#: are optional: the flags are written for a costed (recorded) run, or when any trade carries one.
+TRADE_COLUMNS_EXTENDED: list[str] = (
+    TRADE_COLUMNS + LINEAGE_COLUMNS + COST_COMPONENT_COLUMNS + EXECUTION_FLAG_COLUMNS
+)
 
 #: Named zone (not a fixed offset) so the parquet tz and the pandas dtype read "Asia/Kolkata".
 IST_NAME = "Asia/Kolkata"
@@ -136,6 +144,11 @@ def trades_to_frame(
         for name in COST_COMPONENT_COLUMNS:
             data[name] = pd.Series(components[name].to_numpy(dtype="float64"), dtype="float64")
             columns.append(name)
+    flagged = any(getattr(t, name, False) for t in rows for name in EXECUTION_FLAG_COLUMNS)
+    if components is not None or flagged:
+        for name in EXECUTION_FLAG_COLUMNS:
+            data[name] = pd.Series([bool(getattr(t, name, False)) for t in rows], dtype="bool")
+            columns.append(name)
     return pd.DataFrame(data, columns=columns)
 
 
@@ -146,6 +159,8 @@ def _schema_for(columns: Sequence[str]) -> pa.Schema:
             extra.append((name, pa.string()))
         elif name in COST_COMPONENT_COLUMNS:
             extra.append((name, pa.float64()))
+        elif name in EXECUTION_FLAG_COLUMNS:
+            extra.append((name, pa.bool_()))
     return pa.schema([*_SCHEMA, *extra]) if extra else _SCHEMA
 
 
@@ -155,7 +170,7 @@ def _to_table(trades: Sequence[Trade], components: pd.DataFrame | None = None) -
     arrays = []
     for field in schema:
         col = df[field.name]
-        if pa.types.is_floating(field.type):
+        if pa.types.is_floating(field.type) or pa.types.is_boolean(field.type):
             arrays.append(pa.array(col.to_numpy(), type=field.type, from_pandas=True))
         elif pa.types.is_timestamp(field.type):
             arrays.append(pa.array(col, type=field.type, from_pandas=True))

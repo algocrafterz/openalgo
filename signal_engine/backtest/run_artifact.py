@@ -42,7 +42,7 @@ from signal_engine.research.intake import profiles as profiles_mod
 from signal_engine.research.intake.versions import require_aware
 from signal_engine.timeutils import IST
 
-ENGINE_VERSION = "1.5"
+ENGINE_VERSION = "1.6"
 SCHEMA = 4
 #: Packages whose versions are pinned into the manifest (names as in uv.lock).
 ENVIRONMENT_PACKAGES = ("pandas", "numpy", "pyarrow", "duckdb", "pyyaml")
@@ -72,6 +72,9 @@ _REPORT_BLOCKS = (
     "cost_sensitivity",
     "trials",
     "exit_views",
+    "execution_warnings",
+    "lookahead_guard",
+    "session_coverage",
 )
 
 
@@ -470,6 +473,7 @@ def material_fingerprints(frozen: Any, execution: Any, cost_model_json: Any) -> 
         universe_definition=execution.data["universe"],
         profile_content=frozen.profile,
         dataset_fingerprint="",
+        session_basis=getattr(execution, "session_basis", None),
     )
     return {k: full[k] for k in ("rules", "params", "execution", "cost")}
 
@@ -504,6 +508,7 @@ def build_manifest(
         universe_definition=execution.data["universe"],
         profile_content=frozen.profile,
         dataset_fingerprint=dataset_fp,
+        session_basis=getattr(execution, "session_basis", None),
     )
     fingerprints["profile"] = frozen.profile_sha256
     window = frozen.intent.get("session_window")
@@ -764,7 +769,18 @@ def prepare_run_artifact(
         "assumptions.json": _encode(_assumptions(frozen, idea_folder, created)),
         "strategy/spec.yaml": _encode(yaml.safe_dump(frozen.intent, sort_keys=True)),
         "strategy/strategy.json": _encode(_strategy_json(idea_id, frozen)),
-        "execution/config.json": _encode({"resolved": frozen.resolved, "profile": frozen.profile}),
+        "execution/config.json": _encode(
+            {
+                "resolved": frozen.resolved,
+                "profile": frozen.profile,
+                # the data-layer setting that is outside the frozen spec; absent before it existed
+                **(
+                    {"session_basis": execution.session_basis}
+                    if getattr(execution, "session_basis", None)
+                    else {}
+                ),
+            }
+        ),
         "evidence/trades.parquet": _encode(_trades_bytes(execution)),
         "report/report.json": _encode(
             _report(

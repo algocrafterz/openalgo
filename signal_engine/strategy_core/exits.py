@@ -84,6 +84,10 @@ class Ladder:
         self.fills: list[Fill] = []
         self.remaining = 1.0
         self._next = 0
+        #: True once a bar reached the stop and a not-yet-taken target together without opening
+        #: through the stop: the order inside the bar is unknowable. Read-only for the backtest
+        #: engine; it changes no fill.
+        self.ambiguous = False
 
     @property
     def done(self) -> bool:
@@ -117,6 +121,9 @@ class Ladder:
             self._exit_rest(o, "SL_GAP")
             return
         if (low <= self.sl_eff) if d == 1 else (h >= self.sl_eff):
+            if self._next < len(self.targets):
+                nxt = self.targets[self._next]
+                self.ambiguous = (h >= nxt) if d == 1 else (low <= nxt)
             self._exit_rest(self.sl_eff, "SL")
             return
 
@@ -136,6 +143,7 @@ class Ladder:
 
         if self.plan.same_bar_stop and self._next > 0 and not self.done:
             if (low <= self.sl_eff) if d == 1 else (h >= self.sl_eff):
+                self.ambiguous = True
                 self._exit_rest(self.sl_eff, "SL")
 
     def close_all(self, price: float, reason: str) -> None:

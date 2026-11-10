@@ -409,7 +409,12 @@ class TestCollectorWiring:
         ]
 
     def test_dropped_sessions_are_absent_from_what_the_engine_sees(self, store):
-        exe = rr.execute_backtest("k", dataset=store["res"], settings=SETTINGS)
+        # This fixture's symbols list on different dates, so the default session basis (common,
+        # for a small basket) would also drop PENNY's last session and every non-shared one. The
+        # test is about the eligibility drop, so each symbol keeps its own sessions.
+        exe = rr.execute_backtest(
+            "k", dataset=store["res"], settings={**SETTINGS, "session_basis": "own"}
+        )
         seen = store["frames"]
         assert sorted(seen) == ["AAA", "BBB", "CCC", "DDD", "LATE", "PENNY"]  # PENNY keeps one
         gone = {dt.date(2025, 1, 9), dt.date(2025, 1, 10)}
@@ -457,7 +462,12 @@ class TestCollectorWiring:
         assert len(_by_code(exe, "WARMUP")) == 0
 
     def test_warmup_from_settings_reaches_the_engine(self, store):
-        exe = rr.execute_backtest("k", dataset=store["res"], settings={**SETTINGS, "warmup_bars": 100})
+        # session_basis own: the fixture's symbols list on different dates (see above)
+        exe = rr.execute_backtest(
+            "k",
+            dataset=store["res"],
+            settings={**SETTINGS, "warmup_bars": 100, "session_basis": "own"},
+        )
         assert store["run"].warmup_bars == 100
         assert exe.params["run"]["warmup_bars"] == 100
         rows = _by_code(exe, "WARMUP")

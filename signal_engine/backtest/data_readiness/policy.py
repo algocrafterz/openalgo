@@ -26,12 +26,14 @@ _SHARES = {
                    "latest_session_min_bar_share"),
     "exclusions": ("max_defect_excluded_symbol_share",),
     "adjustment": ("cross_basis_tolerance", "jump_ratio_tolerance"),
+    "session_coverage": ("incomplete_session_share", "severe_session_share"),
 }
 _COUNTS = {
     "thresholds": ("placeholder_lookback_sessions",),
     "exclusions": ("max_defect_excluded_symbols",),
     "diagnostics": ("stale_repeat_sessions",),
     "adjustment": ("cross_basis_min_sessions",),
+    "session_coverage": ("common_basis_max_symbols", "listed_symbols"),
 }
 _POSITIVE = {
     "diagnostics": ("spike_return", "cross_volume_ratio_low", "cross_volume_ratio_high"),
@@ -42,7 +44,8 @@ _RATIO_LISTS = {"adjustment": ("jump_ratios",)}
 _TIMES = {"thresholds": ("daily_close_time",)}
 #: Counts that must be at least 1 (a zero lookback is an invalid window frame).
 _AT_LEAST_ONE = {"thresholds": ("placeholder_lookback_sessions",),
-                 "adjustment": ("cross_basis_min_sessions",)}
+                 "adjustment": ("cross_basis_min_sessions",),
+                 "session_coverage": ("common_basis_max_symbols", "listed_symbols")}
 _HHMM = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
 
 
@@ -73,6 +76,10 @@ class Policy:
     jump_min_move: float
     jump_ratio_tolerance: float
     jump_ratios: tuple[float, ...]
+    incomplete_session_share: float
+    severe_session_share: float
+    common_basis_max_symbols: int
+    listed_symbols: int
     version: str
     source: str
 
@@ -138,6 +145,11 @@ def _check_values(doc: dict) -> None:
     d = doc["diagnostics"]
     if d["cross_volume_ratio_low"] >= d["cross_volume_ratio_high"]:
         raise PolicyError("diagnostics.cross_volume_ratio_low must be below the high bound")
+    c = doc["session_coverage"]
+    if c["incomplete_session_share"] > c["severe_session_share"]:
+        raise PolicyError(
+            "session_coverage.incomplete_session_share must not exceed severe_session_share"
+        )
 
 
 def load_policy(path: Path | str = DEFAULT_PATH) -> Policy:

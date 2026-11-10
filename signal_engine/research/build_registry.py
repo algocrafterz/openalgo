@@ -161,6 +161,87 @@ _XS_OPTIONAL_NUMBERS = (
 )
 
 
+def _is_count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _validate_execution_warnings(block: Any) -> list[str]:
+    """Optional engine-1.6 block; a record written before it has none and stays valid."""
+    ok = (
+        isinstance(block, dict)
+        and all(
+            _is_count(block.get(k))
+            for k in ("trades", "ambiguous_exit_trades", "data_gap_trades")
+        )
+        and all(_is_num(block.get(k)) and 0 <= block[k] <= 1
+                for k in ("ambiguous_exit_share", "data_gap_share"))
+        and (
+            block.get("entries_skipped_missing_bar") is None
+            or _is_count(block.get("entries_skipped_missing_bar"))
+        )
+        and isinstance(block.get("ambiguous_sensitivity"), dict)
+        and isinstance(block["ambiguous_sensitivity"].get("label"), str)
+        and all(
+            block["ambiguous_sensitivity"].get(k) is None
+            or _is_num(block["ambiguous_sensitivity"].get(k))
+            for k in ("actual_mean_net_r", "upper_bound_mean_net_r")
+        )
+    )
+    if ok:
+        return []
+    return [
+        "'execution_warnings' must be an object with integer trades, ambiguous_exit_trades and "
+        "data_gap_trades, shares between 0 and 1, entries_skipped_missing_bar (integer or null) "
+        "and an ambiguous_sensitivity object with a string label"
+    ]
+
+
+def _validate_lookahead_guard(block: Any) -> list[str]:
+    """Optional engine-1.6 block: what the guarded pass and the truncation check covered."""
+    ok = (
+        isinstance(block, dict)
+        and block.get("mode") in ("full", "partial", "not_run")
+        and block.get("lookahead_check") in ("run", "not_run")
+        and all(_is_count(block.get(k)) for k in ("symbols_checked", "sessions_checked", "violations"))
+    )
+    if ok:
+        return []
+    return [
+        "'lookahead_guard' must be an object with mode (full, partial or not_run), "
+        "lookahead_check (run or not_run) and integer symbols_checked, sessions_checked "
+        "and violations"
+    ]
+
+
+def _validate_session_coverage(block: Any) -> list[str]:
+    """Optional session-coverage block; a record written before it has none and stays valid."""
+    uni = block.get("universe") if isinstance(block, dict) else None
+    basis = block.get("session_basis") if isinstance(block, dict) else None
+    eff = block.get("effective") if isinstance(block, dict) else None
+    ok = (
+        isinstance(block, dict)
+        and block.get("coverage_class") in ("COMPLETE", "MINOR_GAPS", "MATERIAL_GAPS", "SEVERE_GAPS")
+        and isinstance(basis, dict)
+        and basis.get("used") in ("common", "own")
+        and isinstance(eff, dict)
+        and _is_count(eff.get("sessions_kept"))
+        and isinstance(eff.get("sessions_excluded_by_basis"), dict)
+        and isinstance(uni, dict)
+        and all(_is_count(uni.get(k)) for k in ("symbols", "missing_full_sessions_total"))
+        and isinstance(block.get("symbols"), list)
+        and all(isinstance(r, dict) and isinstance(r.get("symbol"), str) for r in block["symbols"])
+        and isinstance(block.get("continuity_note"), str)
+    )
+    if ok:
+        return []
+    return [
+        "'session_coverage' must be an object with coverage_class (COMPLETE, MINOR_GAPS, "
+        "MATERIAL_GAPS or SEVERE_GAPS), session_basis.used (common or own), effective.sessions_kept and "
+        "sessions_excluded_by_basis, universe counts, a symbols list of rows with a symbol name "
+        "and a string continuity_note"
+    ]
+
+
 def _valid_position_cap(row: Any) -> bool:
     slots = row.get("max_positions") if isinstance(row, dict) else None
     return (
@@ -369,6 +450,12 @@ def _validate_run_v2(run: dict[str, Any]) -> list[str]:
             )
     if "cost_model" in run:
         problems.extend(_validate_cost_model(run["cost_model"]))
+    if "execution_warnings" in run:
+        problems.extend(_validate_execution_warnings(run["execution_warnings"]))
+    if "lookahead_guard" in run:
+        problems.extend(_validate_lookahead_guard(run["lookahead_guard"]))
+    if "session_coverage" in run:
+        problems.extend(_validate_session_coverage(run["session_coverage"]))
     problems.extend(_validate_costs(run))
     split = run.get("split")
     if isinstance(split, dict) and "embargo_sessions" in split:

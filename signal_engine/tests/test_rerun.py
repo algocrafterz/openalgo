@@ -244,12 +244,15 @@ class TestExecuteBacktestEnd:
             def __init__(self, *a, **k):
                 self.days = [pd.Timestamp("2026-01-05")]
 
+            def lookahead_guard(self):
+                return {"mode": "full", "symbols_checked": 1, "sessions_checked": 1, "violations": 0}
+
             def trades(self, *a, **k):
                 return [
                     Trade(
                         symbol="AAA", day=idx[0].date(), direction=1, tag="t", entry_time=idx[0],
                         entry=100.0, signal_price=100.0, sl=99.0, tp=0.0, risk=1.0,
-                        exit_time=idx[1], r_gross=0.5, r_net=0.3,
+                        exit_time=idx[1], exit=100.5, r_gross=0.5, r_net=0.3,
                     )
                 ]
 

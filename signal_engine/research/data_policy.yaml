@@ -78,3 +78,27 @@ adjustment:
   # 2026-10-04 Angel rebuild all 9 hits at 0.8 were real crashes (2020-03-23, Paytm 2024-02-01,
   # YESBANK 2020-07-23). A 1:4 bonus left unadjusted is therefore not detected by this rule.
   jump_ratios: [0.5, 0.2, 0.1, 0.4, 0.3333, 0.6667, 0.75, 0.25]
+
+session_coverage:
+  # Session-coverage safeguard of a backtest run (backtest/session_coverage.py). A WARNING only:
+  # a run is never rejected because sessions are missing. A "missing full session" is an official
+  # NSE trading day on which the symbol has no bar at all (split-excluded and out-of-scope
+  # sessions are subtracted first); it is not a missing bar inside a loaded session.
+  # Four reporting classes by the share of missing full sessions over the expected sessions after
+  # exclusions (calendar sessions in the symbol's own first-to-last loaded window, minus the
+  # out-of-scope sessions, minus the split-excluded sessions). Both limits are inclusive:
+  #   COMPLETE       no missing full session and no partial session
+  #   MINOR_GAPS     share > 0 and <= incomplete_session_share (exactly 1% is MINOR)
+  #   MATERIAL_GAPS  share > incomplete_session_share and <= severe_session_share (exactly 5% is
+  #                  MATERIAL)
+  #   SEVERE_GAPS    share > severe_session_share
+  # The run class is the worst class among its symbols. Classes are reporting only: no verdict or
+  # promotion gate reads them. Owner decision 2026-11-07.
+  incomplete_session_share: 0.01
+  severe_session_share: 0.05
+  # Session basis default: "common" (only sessions present in every symbol) for a basket of at
+  # most this many symbols, "own" above it. One missing session in one of 200 symbols would
+  # otherwise remove that day for all of them.
+  common_basis_max_symbols: 50
+  # Symbols listed in full detail in the run record (the worst ones); aggregates cover all.
+  listed_symbols: 25
