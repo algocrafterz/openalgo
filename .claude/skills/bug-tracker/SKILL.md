@@ -1,6 +1,7 @@
 ---
 name: bug-tracker
-description: The register of OpenAlgo/signal_engine defects: how to record them in the single bug tracker (signal_engine/bugs/bugs.json, shown at http://localhost:5000/logs/bugs). Use whenever a review (eod, paper-review, execution-health, a weekly report) finds a defect, an execution problem, a data error or a tuning idea; when asked to "log this bug" or "what bugs are open"; and in the unattended close-day review. Reviews find problems, this skill keeps them, and the resolve skill works them to closed.
+description: >-
+  The register of OpenAlgo/signal_engine defects: how to record them in the single bug tracker (signal_engine/bugs/bugs.json, shown at http://localhost:5000/logs/bugs). Use whenever a review (eod, paper-review, execution-health, a weekly report) finds a defect, an execution problem, a data error or a tuning idea; when asked to "log this bug" or "what bugs are open"; and in the unattended close-day review. Reviews find problems, this skill keeps them, and the resolve skill works them to closed.
 ---
 
 # Bug tracker
@@ -9,8 +10,20 @@ One defect is one entry, however many days it recurs. Reviews describe a day; th
 describes a problem's whole life: first seen, every day seen again, cause, fix, proof.
 
 - **Data**: `signal_engine/bugs/bugs.json`, git-tracked. Never edit it by hand or with a script;
-  write only through the CLI (it validates, locks and keeps history).
-- **Page**: http://localhost:5000/logs/bugs (read-only, `blueprints/bug_tracker.py`).
+  write only through the CLI or `signal_engine/bugs/store.py` (they validate, lock across
+  processes and keep history). A bug reported from a Daily Workflow finding carries a
+  `workflow-finding:<key>` entry in `sources`; leave it in place, it is the duplicate key.
+- **Page**: http://localhost:5000/logs/bugs (read-only, `blueprints/bug_tracker.py`; UI in
+  `frontend/src/pages/monitoring/BugTracker.tsx`, search/filter/sort logic in
+  `frontend/src/lib/bugFilters.ts` with its vitest file; tab, filters and sort live in the URL
+  query). The sibling `/logs/workflow` page is `monitoring/DailyWorkflow.tsx` over
+  `blueprints/ops_workflow.py`. When changing either page: import router hooks from
+  `react-router` (`react-router-dom` is not installed), put pure logic in `lib/` with a test, and
+  verify with `npm run build` (runs `tsc -b`; a bare `tsc -p tsconfig.json` checks nothing) plus
+  biome and vitest on Node 22. For a rendered check use a throwaway preview with a mock server
+  (see the `openalgo-frontend-ops-pages` skill); the real app may stop at the broker page.
+  The page's "Report as bug" action writes through the store, not the CLI binary; any new writer
+  must follow that skill's `references/tracker-write-path.md`.
 - **CLI**: `uv run python -m signal_engine.bugs <list|show|add|seen|update|note|apply>`; `--help`
   on each.
 
