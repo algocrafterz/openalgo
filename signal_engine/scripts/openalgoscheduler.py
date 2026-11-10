@@ -8,6 +8,7 @@ Usage:
     uv run python -m signal_engine.scripts.openalgoscheduler startup
     uv run python -m signal_engine.scripts.openalgoscheduler shutdown [reason]
     uv run python -m signal_engine.scripts.openalgoscheduler squareoff
+    uv run python -m signal_engine.scripts.openalgoscheduler tradingday
 """
 
 import asyncio
@@ -1025,6 +1026,35 @@ def _routine_notice_enabled() -> bool:
         return True
 
 
+# Exit code of the `tradingday` command when the exchange is closed.
+EXIT_NOT_TRADING_DAY = 10
+
+
+def tradingday_exit_code(today=None) -> int:
+    """0 when the exchange trades on `today` (IST), EXIT_NOT_TRADING_DAY when closed.
+
+    Fails open: if the calendar cannot be read, return 0 so a calendar fault
+    never stops a real trading day from starting.
+    """
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+
+    from utils.logging import get_logger
+
+    logger = get_logger(__name__)
+    try:
+        from utils import trading_calendar
+
+        day = today or _dt.now(ZoneInfo("Asia/Kolkata")).date()
+        if trading_calendar.is_trading_day(day):
+            return 0
+        logger.info("%s is not an exchange trading day", day.isoformat())
+        return EXIT_NOT_TRADING_DAY
+    except Exception:
+        logger.exception("Trading-day check failed; treating the day as a trading day")
+        return 0
+
+
 def _run_startup():
     """Full startup flow: login, verify, summarise, notify."""
     from utils.logging import get_logger
@@ -1349,6 +1379,8 @@ if __name__ == "__main__":
         _run_shutdown(reason=reason)
     elif command == "squareoff":
         _run_squareoff()
+    elif command == "tradingday":
+        sys.exit(tradingday_exit_code())
     elif command == "healthcheck":
         _run_healthcheck()
     elif command == "notify":
@@ -1359,5 +1391,5 @@ if __name__ == "__main__":
         sys.exit(0 if notify_failure(stage, detail) else 1)
     else:
         print("Usage: python -m signal_engine.scripts.openalgoscheduler "
-              "[startup|shutdown|squareoff|healthcheck|notify] [reason|stage] [detail...]")
+              "[startup|shutdown|squareoff|tradingday|healthcheck|notify] [reason|stage] [detail...]")
         sys.exit(1)

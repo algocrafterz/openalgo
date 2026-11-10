@@ -378,6 +378,14 @@ try {
             # fresh and starts app.py plus the signal engine. When nothing is running the
             # stop is a logged no-op. Plain 'run' is left alone: it refuses to start over a
             # live instance, which is right for the watchdog and for manual use.
+            # Skip weekends and exchange holidays: no login, no restart. The check fails
+            # open (exit 0) when the calendar cannot be read. Manual 'start'/'run' are
+            # never gated.
+            & $wsl -d $distro -- bash -lc "cd $workdir && uv run python -m signal_engine.scripts.openalgoscheduler tradingday" 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 10) {
+                Write-Log "dailystart skipped: today is not an exchange trading day"
+                exit 0
+            }
             Invoke-Ctl "stop daily_restart"
             Stop-ServiceWindow
             Start-Sleep -Seconds 3

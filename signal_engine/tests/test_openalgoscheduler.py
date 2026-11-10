@@ -1337,3 +1337,44 @@ class TestAuthRetryOnNetworkError:
         (_, _, err), seen = self._run(sched, [dns], monkeypatch, attempts=3)
         assert "name resolution" in err
         assert len(seen) == 3
+
+
+class TestTradingDayGate:
+    """The scheduled 08:50 start skips weekends and exchange holidays."""
+
+    def test_trading_day_returns_zero(self, monkeypatch):
+        from datetime import date
+
+        import utils.trading_calendar as cal
+        from signal_engine.scripts.openalgoscheduler import (
+            EXIT_NOT_TRADING_DAY,
+            tradingday_exit_code,
+        )
+
+        monkeypatch.setattr(cal, "is_trading_day", lambda d: True)
+        assert tradingday_exit_code(date(2026, 11, 10)) == 0
+        assert EXIT_NOT_TRADING_DAY != 0
+
+    def test_holiday_returns_skip_code(self, monkeypatch):
+        from datetime import date
+
+        import utils.trading_calendar as cal
+        from signal_engine.scripts.openalgoscheduler import (
+            EXIT_NOT_TRADING_DAY,
+            tradingday_exit_code,
+        )
+
+        monkeypatch.setattr(cal, "is_trading_day", lambda d: False)
+        assert tradingday_exit_code(date(2026, 11, 8)) == EXIT_NOT_TRADING_DAY
+
+    def test_calendar_error_fails_open(self, monkeypatch):
+        from datetime import date
+
+        import utils.trading_calendar as cal
+        from signal_engine.scripts.openalgoscheduler import tradingday_exit_code
+
+        def boom(d):
+            raise RuntimeError("calendar down")
+
+        monkeypatch.setattr(cal, "is_trading_day", boom)
+        assert tradingday_exit_code(date(2026, 11, 10)) == 0
