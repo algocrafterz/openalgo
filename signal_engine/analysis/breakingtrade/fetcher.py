@@ -24,6 +24,7 @@ LoginRequired is raised rather than silently returning an empty table.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from datetime import datetime, time, timedelta
@@ -36,6 +37,7 @@ from signal_engine.analysis.breakingtrade.extractor import (
     MARKET_PROFILE_COLUMNS,
     VOLUME_COLUMNS,
     Snapshot,
+    SnapshotFormatError,
     normalize_table,
     parse_captured_at,
 )
@@ -288,6 +290,46 @@ def _attempt_login(page, email: str, password: str) -> None:
     page.wait_for_timeout(6000)
 
 
+FORMAT_DUMP_DIR = os.path.join(os.path.dirname(PROFILE_DIR), "breakingtrade_debug")
+COOKIE_PATH = os.path.join(os.path.dirname(PROFILE_DIR), "breakingtrade_cookies.json")
+
+
+def _dump_raw_frame(frame, scanner: str) -> None:
+    """Keep the latest unrecognised table, so a vendor re-labelling can be mapped from real
+    rows instead of guessed. One file per scanner, overwritten; market data only."""
+    try:
+        os.makedirs(FORMAT_DUMP_DIR, exist_ok=True)
+        path = os.path.join(FORMAT_DUMP_DIR, f"format_{scanner}.json")
+        frame.head(40).to_json(path, orient="records", force_ascii=False, indent=1)
+    except Exception:
+        pass
+
+
+def _load_cookies(context) -> None:
+    """Re-use today's vendor session in a new browser, so a restart does not need a sign-in."""
+    try:
+        with open(COOKIE_PATH) as fh:
+            saved = json.load(fh)
+        if saved.get("day") == _ist_now().date().isoformat():
+            context.add_cookies(saved["cookies"])
+    except (OSError, ValueError, KeyError):
+        pass
+    except Exception:
+        pass
+
+
+def _save_cookies(context) -> None:
+    """Store the signed-in session (owner-only file: these cookies are a credential)."""
+    try:
+        cookies = [c for c in context.cookies() if "breakingtrade" in c.get("domain", "")]
+        payload = json.dumps({"day": _ist_now().date().isoformat(), "cookies": cookies})
+        fd = os.open(COOKIE_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(payload)
+    except Exception:
+        pass
+
+
 def _dump_debug(page, scanner: str, debug_dir: str) -> str:
     os.makedirs(debug_dir, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -333,6 +375,7 @@ class ScannerSession:
         self._context = self._playwright.chromium.launch_persistent_context(
             PROFILE_DIR, headless=self.headless
         )
+        _load_cookies(self._context)
         self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
         return self
 
@@ -347,6 +390,7 @@ class ScannerSession:
 
     def _ensure_signed_in(self, url: str) -> None:
         if not _is_signed_out(self._page):
+            _save_cookies(self._context)
             return
 
         email, password = _credentials()
@@ -373,6 +417,7 @@ class ScannerSession:
                 "BREAKINGTRADE_EMAIL / BREAKINGTRADE_PASSWORD, or whether the account needs "
                 "an OTP or captcha (run with headless=False to watch it happen)."
             )
+        _save_cookies(self._context)
 
     def _date_display(self) -> str:
         """Whatever the scanner's own date label currently reads - "Live", or a past date."""
@@ -512,7 +557,11 @@ class ScannerSession:
                 )
         else:
             captured_at = parse_captured_at(frame) or session_stamp(_ist_now())
-        return normalize_table(frame, captured_at=captured_at)
+        try:
+            return normalize_table(frame, captured_at=captured_at)
+        except SnapshotFormatError:
+            _dump_raw_frame(frame, scanner)
+            raise
 
 
 def fetch_snapshot(

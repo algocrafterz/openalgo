@@ -43,6 +43,32 @@ MARKET_PROFILE_COLUMNS = {
 VOLUME_COLUMNS = {"Today (M)", "7D Avg (M)", "Surge x", "Del%"}
 
 
+#: The vendor has re-labelled these four Market Profile columns (2026-11-10 and again
+#: 2026-11-11). Values are unchanged in form, so each label maps back to the canonical name the
+#: rest of this module and its stored history use. Keys are compared after normalising
+#: apostrophes and case.
+COLUMN_ALIASES = {
+    "first-hour range %": "IB %",
+    "1st-hour range % (ib)": "IB %",
+    "unfinished high / low": "Poor H/L",
+    "unfinished hi / lo": "Poor H/L",
+    "price vs today's profile": "TPO Pos",
+    "price vs previous-session levels": "TPO Pos (Prev)",
+    "price vs prev. day": "TPO Pos (Prev)",
+}
+
+
+def canonicalize_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Rename vendor column aliases to their canonical names; other columns are untouched."""
+    renames = {}
+    for column in frame.columns:
+        key = str(column).replace("\u2019", "'").strip().lower()
+        canonical = COLUMN_ALIASES.get(key)
+        if canonical and canonical not in frame.columns:
+            renames[column] = canonical
+    return frame.rename(columns=renames) if renames else frame
+
+
 class SnapshotFormatError(ValueError):
     """Raised when a .xlsx file does not match a known breakingtrade.com export shape."""
 
@@ -444,6 +470,7 @@ def normalize_table(frame: pd.DataFrame, captured_at=None) -> Snapshot:
     Snapshot. Shared by the .xlsx readers and by the live fetcher, so a scraped table and a
     saved export go through exactly one normalization path and cannot drift apart.
     """
+    frame = canonicalize_columns(frame)
     kind = _detect_kind(set(frame.columns))
     normalized = (
         _normalize_market_profile(frame) if kind == "market_profile" else _normalize_volume(frame)
@@ -464,7 +491,9 @@ def load_snapshot(path: str) -> Snapshot:
         raw = workbook.parse(sheet_name, header=None)
         try:
             header_row = _find_header_row(raw)
-            frame = workbook.parse(sheet_name, header=header_row).dropna(how="all")
+            frame = canonicalize_columns(
+                workbook.parse(sheet_name, header=header_row).dropna(how="all")
+            )
             kind = _detect_kind(set(frame.columns))
         except SnapshotFormatError as exc:
             errors.append(f"{sheet_name}: {exc}")

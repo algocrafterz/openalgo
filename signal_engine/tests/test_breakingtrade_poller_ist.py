@@ -58,6 +58,7 @@ class _Scenario:
         self.stopped_alert = False
 
         monkeypatch.setattr(datetime_module, "datetime", _host_clock(instant, host_tz))
+        monkeypatch.setattr(poller, "_INSTANCE_LOCK_PATH", "/dev/null")
         monkeypatch.setattr(poller.signal, "signal", lambda *a, **k: None)
         monkeypatch.setattr(poller, "_setup_logging", lambda: MagicMock())
         monkeypatch.setattr(poller, "_stored_polls", lambda day: set())

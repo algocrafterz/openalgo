@@ -119,3 +119,35 @@ class TestStaleSnapshotGate:
         monkeypatch.setattr(poller, "_fetch_and_report", stale)
         run.run()
         assert run.fetches == 2
+
+
+class TestFormatFailureKeepsBrowser:
+    def test_format_error_does_not_close_the_session(self, monkeypatch, tmp_path):
+        from signal_engine.analysis.breakingtrade import __main__ as poller
+        from signal_engine.analysis.breakingtrade.extractor import SnapshotFormatError
+
+        closed = []
+
+        class Session:
+            def __init__(self, debug_dir=None):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                closed.append(1)
+                return False
+
+        monkeypatch.setattr(poller, "_INSTANCE_LOCK_PATH", str(tmp_path / "p.lock"))
+        run = _Run(monkeypatch, _every_20s(_at(12, 16, 10), 13))
+        monkeypatch.setattr(fetcher, "ScannerSession", Session)
+
+        def bad(*args, **kwargs):
+            run.fetches += 1
+            raise SnapshotFormatError("columns renamed")
+
+        monkeypatch.setattr(poller, "_fetch_and_report", bad)
+        run.run()
+        # Only the shutdown close; no mid-day teardown that would force another sign-in.
+        assert closed == [1]

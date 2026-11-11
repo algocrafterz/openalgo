@@ -632,7 +632,9 @@ def _emit_trade_signals(new_by_scan: dict, snapshot, captured_at) -> int:
                 )
                 if ri_plan is not None:
                     alerts.alert_trade_signal(
-                        ri_plan, strategy="BREAKINGTRADE-RI", scan_name=scan_name,
+                        ri_plan,
+                        strategy="BREAKINGTRADE-RI",
+                        scan_name=scan_name,
                         kind="trade_signal_ri",
                     )
                     ri_emitted += 1
@@ -758,7 +760,9 @@ def _watch(args) -> int:
             current = now.time()
 
             if current >= AUTO_STOP_TIME:
-                logger.info(f"auto-stop: {AUTO_STOP_TIME:%H:%M} reached, nothing left on today's schedule")
+                logger.info(
+                    f"auto-stop: {AUTO_STOP_TIME:%H:%M} reached, nothing left on today's schedule"
+                )
                 raise KeyboardInterrupt
 
             # Staged TP + runner-SL trailing for open BREAKINGTRADE positions, checked on THIS
@@ -827,8 +831,8 @@ def _watch(args) -> int:
                     if not login_alerted:
                         login_alerted = True
                         alerts.alert_health(
-                            "breakingtrade.com sign-in is not available. Polls are paused "
-                            "until you sign in by hand. No automatic retries will be made."
+                            f"breakingtrade.com sign-in is not available right now. {exc} "
+                            "Polls are skipped until a sign-in is allowed."
                         )
                 except Exception as exc:
                     logger.exception(f"poll {pending:%H:%M} FAILED: {type(exc).__name__}: {exc}")
@@ -840,12 +844,16 @@ def _watch(args) -> int:
                     else:
                         retry_not_before[pending] = now + timedelta(seconds=RETRY_GAP_SECONDS)
                     # A dead browser poisons every later poll, so drop it and rebuild next time.
+                    # A readable page with the wrong columns is not a dead browser, and a rebuilt
+                    # one would have to sign in again.
+                    keep_browser = isinstance(exc, SnapshotFormatError)
                     try:
-                        if session is not None:
+                        if session is not None and not keep_browser:
                             session.__exit__(None, None, None)
+                            session = None
                     except Exception:
                         logger.warning("could not close the browser session cleanly")
-                    session = None
+                        session = None
 
             # Heartbeat: silence during a SCHEDULED poll window is the failure mode that cost
             # 04-Sep - silence during the 13:00-14:50 gap between windows is just the schedule.
@@ -984,10 +992,12 @@ def main() -> int:
     if args.prune:
         from signal_engine.analysis.breakingtrade import maintenance
 
-        print(maintenance.run(
-            retention_days=args.prune_days or maintenance.DEFAULT_RETENTION_DAYS,
-            dry_run=args.dry_run,
-        ))
+        print(
+            maintenance.run(
+                retention_days=args.prune_days or maintenance.DEFAULT_RETENTION_DAYS,
+                dry_run=args.dry_run,
+            )
+        )
         return 0
 
     if args.set_analyze is not None:
