@@ -1320,20 +1320,69 @@ def _run_healthcheck():
         sys.exit(EXIT_APP_STATE_STALE if session_confirmed else 1)
 
 
-def _run_squareoff():
-    """3:02 PM failsafe: cancel all pending orders and close all MIS positions.
+# Extra attempts at a refused close, and the pause before each. Three attempts at a few seconds
+# apart stay well inside the 5-minute task limit even with a slow position book read after them.
+_SQUAREOFF_CLOSE_RETRIES = 2
+#: Wait before a retry. A close request that timed out here may still be placing orders on the
+#: server, and the close is account-wide: a second one sent too soon can close a position twice,
+#: which opens the opposite position.
+_SQUAREOFF_RETRY_DELAY_S = 15.0
+#: No retry starts after this many seconds, so the alert always goes out inside the task's
+#: 5-minute limit.
+_SQUAREOFF_RETRY_DEADLINE_S = 180.0
 
-    Called by Windows Task Scheduler at 3:02 PM, independent of the signal engine process.
-    Fires 2 minutes after the engine's own 3:00 PM time exit, so it's a no-op when the
-    engine already closed positions. Acts as the safety net when the engine is crashed,
-    frozen, or the system woke from sleep after 3:00 PM.
+
+def _open_mis_symbols(positions) -> list[str]:
+    """Symbols of MIS rows in a position book that still hold a non-zero quantity."""
+    still_open = []
+    for row in positions:
+        if str(row.get("product", "")).upper() != "MIS":
+            continue
+        try:
+            quantity = float(row.get("quantity", 0) or 0)
+        except (TypeError, ValueError):
+            quantity = 1.0  # an unreadable quantity is not proof of a flat position
+        if quantity != 0:
+            still_open.append(str(row.get("symbol", "unknown")))
+    return still_open
+
+
+def _alert_squareoff_failed(detail: str, logger) -> None:
+    """Tell the trader the failsafe could not confirm a flat book. Never raises.
+
+    Sent whatever _routine_notice_enabled() says: that switch silences success banners only.
     """
-    from signal_engine.api_client import cancel_all_orders, close_all_positions
+    message = (
+        "14:55 safety square-off could not confirm that all intraday positions are closed "
+        f"({detail}). Check the position book now; the broker's own square-off is the only "
+        "remaining close."
+    )
+    try:
+        asyncio.run(send_telegram_notification(message))
+    except Exception:
+        logger.exception("Could not send the square-off failure alert")
+
+
+def _run_squareoff():
+    """Afternoon failsafe: cancel all pending orders and close all MIS positions.
+
+    Called by the Windows Task Scheduler at 2:55 PM, independent of the signal engine process.
+    Fires after the engine's own time exit, so it is a no-op when the engine already closed
+    positions. Acts as the safety net when the engine is crashed, frozen, or the system woke
+    from sleep after the time exit.
+
+    The outcome is verified, not assumed: every cancel and close result is collected (a raised
+    exception counts as a failure for that strategy and does not stop the others), a refused
+    close is retried, and the position book is read once at the end. If any call still failed,
+    the book cannot be read, or an MIS position is still open, an alert is sent and the process
+    exits non-zero.
+    """
+    from signal_engine.api_client import cancel_all_orders, close_all_positions, fetch_positionbook
     from signal_engine.config import settings
     from utils.logging import get_logger
 
     logger = get_logger(__name__)
-    logger.info("Squareoff 15:02: failsafe close of all MIS positions")
+    logger.info("Squareoff 14:55: failsafe close of all MIS positions")
 
     mis_strategies = [
         name for name, profile in settings.strategy_profiles.items()
@@ -1346,20 +1395,84 @@ def _run_squareoff():
 
     logger.info(f"Squareoff: strategies={mis_strategies}")
 
+    async def _attempt(call, strategy, what) -> bool:
+        try:
+            return bool(await call(strategy))
+        except Exception:
+            logger.exception(f"Squareoff: {what} raised for {strategy}")
+            return False
+
+    async def _read_book():
+        try:
+            return await fetch_positionbook()
+        except Exception:
+            logger.exception("Squareoff: position book read raised")
+            return None
+
     async def _do():
+        failed_cancels, failed_closes = [], []
+        started = time.monotonic()
         for strategy in mis_strategies:
             logger.info(f"Squareoff: cancelling orders for {strategy}")
-            await cancel_all_orders(strategy)
+            if not await _attempt(cancel_all_orders, strategy, "cancel all orders"):
+                logger.error(f"Squareoff: cancel all orders failed for {strategy}")
+                failed_cancels.append(strategy)
             logger.info(f"Squareoff: closing positions for {strategy}")
-            await close_all_positions(strategy)
+            closed = await _attempt(close_all_positions, strategy, "close all positions")
+            for retry in range(1, _SQUAREOFF_CLOSE_RETRIES + 1):
+                if closed or time.monotonic() - started > _SQUAREOFF_RETRY_DEADLINE_S:
+                    break
+                # A failed or unanswered close is not proof that nothing was closed. Wait, then
+                # let the position book decide: flat means the request did its work, unreadable
+                # means a second close would be blind, and only an open MIS position is retried.
+                await asyncio.sleep(_SQUAREOFF_RETRY_DELAY_S)
+                book = await _read_book()
+                if book is None:
+                    logger.error(
+                        f"Squareoff: close not confirmed for {strategy} and the position book "
+                        "cannot be read; not sending a second close"
+                    )
+                    break
+                if not _open_mis_symbols(book):
+                    logger.info(f"Squareoff: position book is flat after the close for {strategy}")
+                    closed = True
+                    break
+                logger.warning(
+                    f"Squareoff: close refused for {strategy}, retry "
+                    f"{retry}/{_SQUAREOFF_CLOSE_RETRIES}"
+                )
+                closed = await _attempt(close_all_positions, strategy, "close all positions")
+            if not closed:
+                logger.error(f"Squareoff: close all positions failed for {strategy}")
+                failed_closes.append(strategy)
+        return failed_cancels, failed_closes, await _read_book()
 
-    asyncio.run(_do())
-    logger.info("Squareoff: done")
+    failed_cancels, failed_closes, positions = asyncio.run(_do())
+
+    problems = []
+    if positions is None:
+        problems.append("position book unavailable")
+    else:
+        still_open = _open_mis_symbols(positions)
+        if still_open:
+            problems.append("still open: " + ", ".join(still_open))
+    if failed_closes:
+        problems.append("close request failed for " + ", ".join(failed_closes))
+    if failed_cancels:
+        problems.append("order cancel failed for " + ", ".join(failed_cancels))
+
+    if problems:
+        detail = "; ".join(problems)
+        logger.critical(f"Squareoff: FAILED, flat position not confirmed ({detail})")
+        _alert_squareoff_failed(detail, logger)
+        sys.exit(1)
+
+    logger.info("Squareoff: confirmed flat")
 
     if not _routine_notice_enabled():
         return  # the failsafe ran as scheduled; anything left open shows in the close-day report
     try:
-        msg = f"Squareoff 15:02 (failsafe): {', '.join(mis_strategies)} processed"
+        msg = f"Squareoff 14:55 (failsafe): {', '.join(mis_strategies)} processed, book is flat"
         asyncio.run(send_telegram_notification(msg))
     except Exception:
         pass
