@@ -29,10 +29,11 @@ import os
 import re
 from datetime import datetime, time, timedelta
 
+import httpx
 import pandas as pd
 from dotenv import dotenv_values
 
-from signal_engine.analysis.breakingtrade import login_guard
+from signal_engine.analysis.breakingtrade import api_scan, login_guard
 from signal_engine.analysis.breakingtrade.extractor import (
     MARKET_PROFILE_COLUMNS,
     VOLUME_COLUMNS,
@@ -330,6 +331,43 @@ def _save_cookies(context) -> None:
         pass
 
 
+def saved_jsessionid() -> str | None:
+    """Today's vendor session id from the cookie file the browser path writes, if any."""
+    try:
+        with open(COOKIE_PATH) as fh:
+            saved = json.load(fh)
+        if saved.get("day") != _ist_now().date().isoformat():
+            return None
+        for cookie in saved.get("cookies", []):
+            if cookie.get("name") == "JSESSIONID":
+                return cookie.get("value")
+    except (OSError, ValueError, AttributeError):
+        pass
+    return None
+
+
+def keepalive_session() -> tuple:
+    """Touch the saved session so it does not idle out between polls.
+
+    Returns (state, script_version): state is "ok", "signed_out" or "no_session"; the version
+    is the vendor's script build id, which changes when the page is redeployed.
+    """
+    jsessionid = saved_jsessionid()
+    if not jsessionid:
+        return "no_session", None
+    try:
+        with api_scan.ApiSession(jsessionid, timeout=20.0) as api:
+            api.keepalive()
+            # A cheap authenticated call: the home page loads without a session, the data
+            # endpoint does not, so only the endpoint says whether the session is still good.
+            api.market_profile_rows()
+            return "ok", api.script_version
+    except api_scan.ApiSignedOut:
+        return "signed_out", None
+    except (api_scan.ApiError, httpx.HTTPError):
+        return "error", None
+
+
 def _dump_debug(page, scanner: str, debug_dir: str) -> str:
     os.makedirs(debug_dir, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -364,8 +402,18 @@ class ScannerSession:
         self._playwright = None
         self._context = None
         self._page = None
+        self.last_source: str | None = None
+        self.api_note: str | None = None
+        self.script_version: str | None = None
 
     def __enter__(self):
+        # No browser yet: the Market Profile poll reads the vendor's JSON over HTTP and only
+        # needs one when that path is signed out or broken (or for history and volume).
+        return self
+
+    def _ensure_browser(self) -> None:
+        if self._context is not None:
+            return
         # Imported here, not at module import time, so the rest of the package (and its tests)
         # stay usable on a machine where playwright's browser binary was never installed.
         from playwright.sync_api import sync_playwright
@@ -377,7 +425,6 @@ class ScannerSession:
         )
         _load_cookies(self._context)
         self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
-        return self
 
     def __exit__(self, *_exc):
         try:
@@ -470,6 +517,7 @@ class ScannerSession:
         Sample size is the binding constraint on answering whether any of this has an edge,
         so deep history has to be cheap.
         """
+        self._ensure_browser()
         url = BASE_URL + SCANNER_ROUTES[scanner]
         self._page.goto(url, timeout=60000, wait_until="domcontentloaded")
         self._page.wait_for_timeout(self.settle_ms)
@@ -486,6 +534,41 @@ class ScannerSession:
             frame = _pick_scanner_table(self._page.evaluate(_EXTRACT_TABLES_JS))
             yield normalize_table(frame, captured_at=captured_at)
 
+    def _fetch_via_api(self) -> Snapshot | None:
+        """The Market Profile table from the vendor's JSON, or None to use the browser.
+
+        None means "this path is not usable right now" and is explained in self.api_note; it
+        never means "no data". The browser path signs in when needed, and the cookie it saves
+        is what lets the next poll come back here.
+        """
+        self.api_note = None
+        jsessionid = saved_jsessionid()
+        if not jsessionid:
+            self.api_note = "no saved session for today"
+            return None
+        try:
+            with api_scan.ApiSession(jsessionid) as api:
+                rows = api.market_profile_rows()
+                sectors = api.symbol_sectors()
+                self.script_version = api.script_version
+        except api_scan.ApiSignedOut:
+            self.api_note = "session signed out"
+            return None
+        except (api_scan.ApiError, httpx.HTTPError) as exc:
+            self.api_note = f"scanner endpoint unusable: {exc}"
+            return None
+        if not rows:
+            self.api_note = "scanner endpoint returned no rows"
+            return None
+        frame = api_scan.build_market_profile_frame(rows, sectors)
+        try:
+            captured_at = parse_captured_at(frame) or session_stamp(_ist_now())
+            return normalize_table(frame, captured_at=captured_at)
+        except SnapshotFormatError as exc:
+            _dump_raw_frame(frame, "market_profile_api")
+            self.api_note = f"scanner JSON no longer matches the expected shape: {exc}"
+            return None
+
     def fetch(
         self, scanner: str = "market_profile", days_back: int = 0, attempts: int = 3
     ) -> Snapshot:
@@ -499,6 +582,11 @@ class ScannerSession:
         gets an account rate-limited or blocked. Three tries spaced 5s and 15s costs at most 20
         extra seconds against a 15-minute poll interval.
         """
+        if scanner == "market_profile" and not days_back:
+            snapshot = self._fetch_via_api()
+            self.last_source = "api" if snapshot is not None else "browser"
+            if snapshot is not None:
+                return snapshot
         last_error = None
         for attempt in range(attempts):
             try:
@@ -520,6 +608,7 @@ class ScannerSession:
         if scanner not in SCANNER_ROUTES:
             raise ValueError(f"scanner must be one of {sorted(SCANNER_ROUTES)}, got {scanner!r}")
 
+        self._ensure_browser()
         url = BASE_URL + SCANNER_ROUTES[scanner]
         page = self._page
         # A goto() to a URL differing only in its hash does NOT reload a single-page app, so a

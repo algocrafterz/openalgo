@@ -453,6 +453,8 @@ LOG_PATH = os.path.join(
     "breakingtrade_poller.log",
 )
 # How long a gap during market hours counts as "something is wrong" rather than "between polls".
+# Seconds between session touches when no poll has run.
+KEEPALIVE_SECONDS = 600
 HEARTBEAT_STALE_MINUTES = 35
 # A poll may still be taken this many minutes after its scheduled mark - covers a restart that
 # lands just after a due time, so a bounced process does not silently skip the slot.
@@ -754,7 +756,10 @@ def _watch(args) -> int:
     retry_not_before: dict = {}
     login_alerted = False
     format_alerted: set = set()
+    api_alerted: set = set()
     started_at = _ist_now()
+    last_keepalive = started_at
+    script_version = None
 
     try:
         while True:
@@ -810,7 +815,23 @@ def _watch(args) -> int:
                     took = (_ist_now() - started).total_seconds()
                     last_success = _ist_now()
                     done_marks.add(pending)
-                    logger.info(f"poll {pending:%H:%M} ok in {took:.0f}s (volume={want_volume})")
+                    logger.info(
+                        f"poll {pending:%H:%M} ok in {took:.0f}s (volume={want_volume}, "
+                        f"source={session.last_source})"
+                    )
+                    last_keepalive = _ist_now()
+                    if session.last_source == "browser" and session.api_note:
+                        # The JSON path was skipped. A signed-out session is routine (the browser
+                        # signs in and the next poll is back on JSON); anything else means the
+                        # vendor changed something and the cheap path is gone.
+                        logger.warning(f"JSON path not used: {session.api_note}")
+                        if not session.api_note.startswith(("session signed out", "no saved")):
+                            if session.api_note not in api_alerted:
+                                api_alerted.add(session.api_note)
+                                alerts.alert_health(
+                                    f"poll {pending:%H:%M} used the slow browser path because "
+                                    f"{session.api_note}"[:600]
+                                )
                 except StaleSnapshot as exc:
                     # Not a browser fault: keep the session (a new one would sign in again) and
                     # retry on the same bounded schedule as any failed mark.
@@ -864,6 +885,31 @@ def _watch(args) -> int:
                     except Exception:
                         logger.warning("could not close the browser session cleanly")
                         session = None
+
+            # Keep the vendor session alive between polls (the 13:00-14:50 gap is long enough to
+            # idle it out) and notice a redeployed page: its script build id changes with every
+            # vendor release, which is the earliest warning that the next poll may differ.
+            if (
+                time(9, 15) <= current <= time(15, 30)
+                and (_ist_now() - last_keepalive).total_seconds() >= KEEPALIVE_SECONDS
+            ):
+                last_keepalive = _ist_now()
+                try:
+                    state, version = fetcher.keepalive_session()
+                    if state != "ok":
+                        logger.warning(f"keepalive: session state is {state}")
+                    elif version and version != script_version:
+                        if script_version is not None:
+                            logger.warning(
+                                f"vendor page build changed {script_version} -> {version}"
+                            )
+                            alerts.alert_health(
+                                "breakingtrade.com published a new page build. Polls continue; "
+                                "check that the next snapshots still look complete."
+                            )
+                        script_version = version
+                except Exception as exc:
+                    logger.warning(f"keepalive failed: {type(exc).__name__}: {exc}")
 
             # Heartbeat: silence during a SCHEDULED poll window is the failure mode that cost
             # 04-Sep - silence during the 13:00-14:50 gap between windows is just the schedule.
