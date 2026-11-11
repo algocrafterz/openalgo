@@ -228,6 +228,55 @@ def _yesterday_close(day: str) -> Check:
     return Check(f"close-day {prev}", OK, "all steps exit 0")
 
 
+def _calendar_coverage(day: str, calendar=None) -> Check:
+    """Whether the NSE calendar file covers today, the next session and the coming year.
+
+    The Python runner cannot warm up on a day the calendar does not cover, and the calendar is
+    edited by hand from the NSE circular, so the gap is announced from 1 December.
+    """
+    from signal_engine.backtest.data_readiness.calendar import (
+        SPECIAL,
+        TRADING,
+        CalendarError,
+        load_calendar,
+    )
+
+    name = "NSE calendar coverage"
+    try:
+        calendar = calendar or load_calendar()
+        first, last = calendar.coverage
+    except CalendarError as exc:
+        return Check(name, FAIL, f"calendar file unreadable: {str(exc)[:120]}")
+
+    today = date.fromisoformat(day)
+    covered = f"calendar covers {first}-{last}"
+    if not first <= today.year <= last:
+        return Check(name, FAIL, f"today ({day}) is not covered; {covered}")
+
+    cursor = today
+    for _ in range(14):  # a 14-day run with no session has never occurred; bounds the loop
+        cursor += timedelta(days=1)
+        try:
+            kind = calendar.classify(cursor)
+        except CalendarError:
+            return Check(
+                name, FAIL, f"next trading day is not covered (reached {cursor}); {covered}"
+            )
+        if kind in (TRADING, SPECIAL):
+            break
+
+    next_year = today.year + 1
+    if today.month == 12 and next_year > last:
+        return Check(
+            name,
+            WARN,
+            f"NSE calendar has no {next_year} holidays yet. Add them from the NSE circular "
+            f"before the first {next_year} session; the Python runner cannot warm up without "
+            f"it. ({covered})",
+        )
+    return Check(name, OK, f"{covered}; next session {cursor}")
+
+
 def open_day(day: str) -> str:
     checks = [
         _services(),
@@ -241,6 +290,7 @@ def open_day(day: str) -> str:
         _overnight_errors(day),
         *_morning_tasks(day),
         _yesterday_close(day),
+        _calendar_coverage(day),
     ]
     summary = "Is everything ready before the market opens at 09:15?"
     return write_phase("open-day", day, checks, summary)

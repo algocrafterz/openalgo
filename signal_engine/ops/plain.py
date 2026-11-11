@@ -50,6 +50,11 @@ _PLAIN: dict[str, tuple[str, str]] = {
         "No errors since yesterday's close.",
         "Errors were logged since yesterday's close (most are usually broker connection drops).",
     ),
+    "NSE calendar": (
+        "The exchange holiday calendar covers today, the next session and the coming year.",
+        "The exchange holiday calendar is missing days the engine needs. Add them from the NSE "
+        "circular before they are traded.",
+    ),
     "close-day ": (
         "Yesterday's end-of-day job finished cleanly.",
         "Yesterday's end-of-day job had a failed step or did not run.",
