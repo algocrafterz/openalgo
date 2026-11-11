@@ -5,6 +5,7 @@ import math
 import os
 import sqlite3
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -97,6 +98,11 @@ tracker = PositionTracker(risk_engine, poll_interval=settings.poll_interval)
 # Telethon dispatches each as a separate asyncio task, so without locking both handlers
 # find the same open position and place duplicate exit/SL orders.
 _exit_locks: dict[str, asyncio.Lock] = {}
+
+# Last operator alert about a chart "SL HIT" that the broker did not confirm, per position
+# (time.monotonic()); one alert per position per _SL_HIT_UNPROVEN_ALERT_INTERVAL_S.
+_sl_hit_unproven_alerted: dict[str, float] = {}
+_SL_HIT_UNPROVEN_ALERT_INTERVAL_S = 600.0
 
 
 def _exit_lock_key(symbol: str, strategy: str) -> str:
@@ -360,7 +366,7 @@ async def _handle_exit_locked(signal) -> None:
         )
         if own == 0:
             logger.warning(f"EXIT: {pos.symbol} stop executed during cancel, broker flat; reconciling, no order sent")
-            await _reconcile_sl_hit(signal, pos)
+            await _reconcile_sl_hit(signal, pos, broker_flat_confirmed=True)
             return
         if own is not None and abs(own) < pos.quantity:
             logger.warning(
@@ -376,12 +382,16 @@ async def _handle_exit_locked(signal) -> None:
     # A full exit that times out may still fill; the poll then books the close under this label
     # instead of assuming the stop. Cleared unless the exit is held as unconfirmed.
     pos.claimed_exit = (tp_level or "EXIT") if is_full_exit else ""
+    exit_sent_at = datetime.now(IST).replace(microsecond=0)  # broker stamps are whole seconds
     exit_order, trade_result = await _place_exit_order(pos, exit_qty)
     if trade_result.status != OrderStatus.TIMEOUT:
         pos.claimed_exit = ""
 
     if trade_result.status == OrderStatus.SUCCESS:
-        if not await _book_exit_result(signal, pos, tp_level, exit_qty, is_full_exit, trade_result):
+        if not await _book_exit_result(
+            signal, pos, tp_level, exit_qty, is_full_exit, trade_result,
+            sl_cancelled=bool(sl_cancelled), exit_order=exit_order, sent_at=exit_sent_at,
+        ):
             return
         if is_full_exit:
             await _sweep_protective_orders(pos)  # a late-landing stop on a flat position opens a short
@@ -538,11 +548,61 @@ async def _abort_exit_on_rejected_entry(signal, pos) -> bool:
     return True
 
 
-async def _reconcile_sl_hit(signal, pos) -> None:
+async def _sl_hit_is_proven(pos) -> bool:
+    """True when the broker confirms the position is closed: the tracked stop is `complete`, or
+    the position book has a ROW for it at 0. openposition's 0 is never proof: it answers 0 for a
+    missing row and for a failed read. A stop the broker reports as still working did not fire,
+    so that is refused without reading the position. An unreadable stop or book is not proof."""
+    if pos.sl_order_id:
+        status = (await fetch_order_status(pos.sl_order_id, pos.strategy)).lower()
+        if status in ("complete", "filled"):
+            return True
+        if status and status not in ("cancelled", "cancel", "rejected"):
+            return False
+    own = await tracker.fetch_own_position_proven(
+        pos.symbol, pos.strategy, pos.exchange or settings.exchange, pos.product or settings.product
+    )
+    return own == 0
+
+
+async def _alert_sl_hit_unproven(pos) -> None:
+    """Tell the operator, at most once per position per 10 minutes."""
+    key = _exit_lock_key(pos.symbol, pos.strategy)
+    now = time.monotonic()
+    last = _sl_hit_unproven_alerted.get(key)
+    if last is not None and now - last < _SL_HIT_UNPROVEN_ALERT_INTERVAL_S:
+        return
+    _sl_hit_unproven_alerted[key] = now
+    try:
+        await notifier.notify_event(
+            "sl_hit_unproven",
+            f"{pos.symbol} [{pos.strategy}]: the chart reported a stop-loss hit, but the broker "
+            "still shows the position open. Nothing was cancelled or closed. The position keeps "
+            "its stop-loss order.",
+        )
+    except Exception:  # noqa: BLE001 - an alert failure must not break the exit handler
+        logger.exception(f"{pos.symbol} [{pos.strategy}]: could not send the unconfirmed stop-loss alert")
+
+
+async def _reconcile_sl_hit(signal, pos, *, broker_flat_confirmed: bool = False) -> None:
     """Book a close the broker SL-M already executed.
 
     Do NOT place another SELL (would create naked short). Just clean up tracker.
+
+    A chart "SL HIT" alert is not proof. Unless the caller has just read the broker flat
+    (`broker_flat_confirmed`), the close is booked only when the tracked stop is `complete` or the
+    broker's position reads 0. Otherwise the position, its stop and its registration are left
+    untouched: cancelling the stop of a position the broker still holds leaves it unprotected.
     """
+    if not broker_flat_confirmed and not await _sl_hit_is_proven(pos):
+        logger.warning(
+            f"EXIT: SL HIT alert for {pos.symbol} [{pos.strategy}] is not confirmed by the broker "
+            f"(stop {pos.sl_order_id or '(none)'} not complete, position not read as flat); "
+            "keeping the position and its stop, nothing cancelled or booked"
+        )
+        pos.exit_pending = False
+        await _alert_sl_hit_unproven(pos)
+        return
     logger.info(
         f"EXIT: SL HIT reconcile for {pos.symbol} — no broker order placed, cleaning up tracker"
     )
@@ -650,7 +710,7 @@ async def _resolve_failed_missed_stop_cancel(signal, pos) -> None:
     )
     if own == 0:
         logger.warning(f"EXIT: {pos.symbol} stop already executed at the broker; reconciling, no order sent")
-        await _reconcile_sl_hit(signal, pos)
+        await _reconcile_sl_hit(signal, pos, broker_flat_confirmed=True)
         return
     logger.warning(
         f"EXIT: {pos.symbol} missed-stop close aborted: SL cancel failed and broker position is "
@@ -864,13 +924,28 @@ async def _watch_exit_for_late_fill(exit_order, pos, since: datetime):
     )
 
 
-async def _hold_uncertain_exit(exit_order, pos, detail: str, order_ids: tuple = ()) -> TradeResult:
+async def _hold_uncertain_exit(
+    exit_order, pos, detail: str, order_ids: tuple = (), *, accepted: bool = False,
+    sl_cancelled: bool = True,
+) -> TradeResult:
     message = (
         f"UNCERTAIN: {exit_order.action.value} {exit_order.quantity} {pos.symbol} "
-        f"[{pos.strategy}] timed out and could not be confirmed ({detail}); not resent"
+        f"[{pos.strategy}] was sent but its outcome could not be confirmed ({detail}); not resent"
     )
     candidates = ", ".join(order_ids) if order_ids else "none found on the book"
     logger.critical(f"EXIT {message}; candidate orders: {candidates}")
+    if accepted:
+        # The broker accepted this order and reports it working: a manual exit would double it.
+        text = (
+            f"{pos.symbol} [{pos.strategy}]: the exit order {candidates} was accepted but the "
+            "broker has not confirmed it yet. The engine is waiting for it and has not placed "
+            "another order. Do not exit by hand while that order is still working: cancel it at "
+            "the broker first if you want to close by hand."
+        )
+        if sl_cancelled:
+            text += " The position's stop-loss was cancelled for this exit."
+        await notifier.notify(text)
+        return TradeResult(status=OrderStatus.TIMEOUT, message=message)
     await notifier.notify(
         f"ORDER UNCONFIRMED: {message}. The stop was cancelled for this exit, so the position is "
         f"UNPROTECTED. Candidate orders: {candidates}. No further orders go out for it until the "
@@ -1043,15 +1118,106 @@ def _hold_minutes(pos) -> int:
     return int((datetime.now(IST) - pos.entry_time).total_seconds() / 60)
 
 
+async def _hold_accepted_exit(
+    pos, exit_qty: int, is_full_exit: bool, tp_level, trade_result, exit_order, sent_at, why: str,
+    sl_cancelled: bool = False,
+) -> None:
+    """Hold an accepted exit whose outcome is unknown, exactly as a timed-out exit is held.
+
+    Registered with the same registry the timed-out exit uses (no watch window: only a readable
+    order book releases it), so the sweeper settles it, no stop is placed beside it, and the
+    operator gets the same alert. The position stays registered and unchanged.
+    """
+    pos.claimed_exit = (tp_level or "EXIT") if is_full_exit else ""
+    pos.exit_pending = False
+    order_reconcile.mark_uncertain(
+        order_reconcile.UncertainOrder(
+            strategy=pos.strategy, symbol=pos.symbol, action=exit_order.action.value,
+            quantity=exit_qty, since=sent_at, kind="EXIT",
+        )
+    )
+    await _hold_uncertain_exit(
+        exit_order, pos, why, (trade_result.order_id,), accepted=True, sl_cancelled=sl_cancelled
+    )
+
+
+async def _exit_not_proven_filled(
+    pos, exit_qty: int, is_full_exit: bool, tp_level, trade_result, *, sl_cancelled: bool,
+    exit_order, sent_at,
+) -> bool:
+    """For an accepted exit with no readable fill price: True when the close may be booked.
+
+    The order's own status decides. rejected / cancelled: the exit did not happen, nothing is
+    booked and the normal failure handling runs (position stays, stop comes back). complete:
+    booked. Anything else (working, pending, unreadable): booked only when the broker position
+    already shows what this exit leaves; otherwise the exit is held as an uncertain order.
+    """
+    status = (await fetch_order_status(trade_result.order_id, pos.strategy)).lower()
+    if status in ("rejected", "cancelled", "cancel"):
+        word = "rejected" if status == "rejected" else "cancelled"
+        logger.error(
+            f"EXIT order {trade_result.order_id} for {pos.symbol} was accepted but then {word} by "
+            "the broker: nothing booked, position stays"
+        )
+        refused = TradeResult(
+            order_id=trade_result.order_id,
+            status=OrderStatus.REJECTED,
+            message=f"the broker {word} the exit order after accepting it",
+        )
+        await _handle_exit_order_failure(pos, refused, stop_cancelled=sl_cancelled)
+        return False
+    if status in ("complete", "filled"):
+        return True
+    own = await tracker.fetch_own_position_proven(pos.symbol, pos.strategy, pos.exchange, pos.product)
+    sign = 1 if pos.direction == Direction.LONG else -1
+    expected = 0 if is_full_exit else sign * (pos.quantity - exit_qty)
+    if (
+        own is not None
+        and own == expected
+        and not tracker.other_strategy_exit_in_flight(
+            pos.symbol, pos.exchange, pos.product, pos.strategy
+        )
+    ):
+        return True
+    why = (
+        f"order {trade_result.order_id} was accepted but its status is {status or 'unreadable'} and "
+        f"the broker position is {'unreadable' if own is None else own}"
+    )
+    await _hold_accepted_exit(
+        pos, exit_qty, is_full_exit, tp_level, trade_result, exit_order, sent_at, why,
+        sl_cancelled=sl_cancelled,
+    )
+    return False
+
+
 async def _book_exit_result(
-    signal, pos, tp_level, exit_qty: int, is_full_exit: bool, trade_result
+    signal, pos, tp_level, exit_qty: int, is_full_exit: bool, trade_result,
+    *, sl_cancelled: bool = False, exit_order=None, sent_at=None,
 ) -> bool:
     """Book P&L for a filled exit order.
 
     Returns False when the exit has already been fully finalised and the caller must
-    skip the DB save (the defensive invalid-remainder conversion), True otherwise.
+    skip the DB save (the defensive invalid-remainder conversion), True otherwise. It also
+    returns False, booking nothing, when the accepted order turns out refused or its outcome is
+    not known (see _exit_not_proven_filled).
     """
     logger.info(f"EXIT order placed for {pos.symbol}: id={trade_result.order_id} qty={exit_qty}")
+
+    fill_price = await fetch_order_fill_price(trade_result.order_id, pos.strategy)
+    if fill_price is None:
+        # Accepted is not filled: without the order's own price, ask its status before booking.
+        if exit_order is None:
+            exit_order = build_exit_order(
+                symbol=pos.symbol, exchange=pos.exchange, quantity=exit_qty, product=pos.product,
+                strategy_tag=pos.strategy, direction=pos.direction,
+            )
+        if sent_at is None:
+            sent_at = datetime.now(IST).replace(microsecond=0) - timedelta(seconds=5)
+        if not await _exit_not_proven_filled(
+            pos, exit_qty, is_full_exit, tp_level, trade_result,
+            sl_cancelled=sl_cancelled, exit_order=exit_order, sent_at=sent_at,
+        ):
+            return False
 
     pnl_delta, current_realised = await _book_realised_pnl_delta()
     logger.info(
@@ -1065,7 +1231,6 @@ async def _book_exit_result(
     # the portfolio-wide realised delta above also absorbs every other close that landed since
     # the last snapshot (PY RELIANCE 2026-10-01 was booked +1,871.0 against +1,362.1 true).
     approx_exit_price = signal.tp if signal.tp and signal.tp > 0 else None
-    fill_price = await fetch_order_fill_price(trade_result.order_id, pos.strategy)
     if fill_price and base_price:
         approx_exit_price = fill_price
         pnl_delta = leg_pnl(pos.direction, base_price, fill_price, exit_qty)
@@ -1474,6 +1639,11 @@ async def _handle_exit_order_failure(pos, trade_result, stop_cancelled: bool = F
         pos.exchange,
         pos.product,
     )
+    if broker_qty == 0:
+        # openposition's 0 is also a missing row or a failed read: only a book row proves flat.
+        broker_qty = await tracker.fetch_own_position_proven(
+            pos.symbol, pos.strategy, pos.exchange, pos.product
+        )
     if broker_qty == 0:
         # The stop most likely fired while the exit was being retried. Do not unregister and do
         # not record a close of 0.0 here: that dropped a real loss from the ledger and from the
@@ -2102,7 +2272,7 @@ async def _hold_uncertain_entry(signal, order, since: datetime) -> TradeResult:
     _hold_watched_entry_slot(signal)
     message = (
         f"UNCERTAIN: {order.action.value} {order.quantity} {signal.symbol} [{signal.strategy}] "
-        "entry timed out and the broker order book could not confirm it; no further orders for "
+        "entry was sent but its outcome is unknown, and the broker order book could not confirm it; no further orders for "
         "this symbol until it is reconciled"
     )
     logger.critical(f"ENTRY {message}")
@@ -2137,7 +2307,7 @@ async def _entry_held_by_unresolved_order(signal) -> bool:
         return True
     if result.outcome == order_reconcile.ABSENT and order_reconcile.watch_open(pending, datetime.now(IST)):
         logger.warning(
-            f"ENTRY held for {signal.symbol} [{signal.strategy}]: an earlier entry timed out and may still "
+            f"ENTRY held for {signal.symbol} [{signal.strategy}]: an earlier entry has an unknown outcome and may still "
             "land; waiting out its late-fill watch before allowing another"
         )
         return True
@@ -2188,6 +2358,32 @@ async def _adopt_untracked_entry(pending, order_id: str) -> None:
 
 _SWEEP_INTERVAL_SECONDS = 30.0
 _UNRESOLVED_ALERT_SECONDS = 600.0
+
+
+async def _apply_late_partial_exit(pos, pending) -> None:
+    """A held PARTIAL exit was found filled: track the remaining shares and let the poll re-stop.
+
+    Its order id is not the order that closes the position, so it is not filed as the stop id
+    (the poll would skip the stop retry, and a later empty book would book the whole position
+    closed). The quantity is reduced, the dead stop id and its retry counters are cleared so
+    the poll's missing-stop retry places a stop for the remaining shares, and the operator is
+    told once. No P&L is booked here: partial-exit accounting is a separate item.
+    """
+    remaining = pos.quantity - pending.quantity
+    pos.quantity = remaining
+    pos.sl_order_id = ""
+    pos.sl_retry_count = 0
+    pos.last_sl_retry_at = None
+    logger.critical(
+        f"EXIT {pos.symbol} [{pos.strategy}]: a partial exit of {pending.quantity} completed late; "
+        f"tracking {remaining} remaining, the poll re-places the stop"
+    )
+    await notifier.notify(
+        f"{pos.symbol} [{pos.strategy}]: a partial exit of {pending.quantity} shares was confirmed "
+        f"at the broker after a delay. The engine now tracks {remaining} remaining shares and is "
+        "placing their stop-loss. This partial exit's result is not in today's totals yet: check "
+        "it in the trade book."
+    )
 
 
 async def sweep_unresolved_orders() -> None:
@@ -2248,12 +2444,16 @@ async def sweep_unresolved_orders() -> None:
                 f"EXIT {pending.symbol} [{pending.strategy}] order {result.order_id} completed at the broker; "
                 "the tracker poll books the close"
             )
-            if pos is not None and result.order_id:
+            partial = pos is not None and pending.quantity < pos.quantity
+            if pos is not None and result.order_id and not partial:
                 # book_close() writes pos.sl_order_id as the closing order: without this the close
                 # is booked under the stop cancelled before the exit (4 days running, 10-27..10-30).
+                # A PARTIAL exit's id is never the order that closes the position (see below).
                 pos.sl_order_id = result.order_id
             if result.duplicate_ids:
                 await _handle_duplicate_exit_fills(pos, pending.action, pending.quantity, result)
+            if partial:
+                await _apply_late_partial_exit(pos, pending)
             continue
         if pos is not None:
             pos.claimed_exit = ""  # the exit never reached the broker: the close is not its own
@@ -2286,6 +2486,12 @@ async def _absent_exit_decision(pending, now: datetime) -> str:
             f"tracked (broker position {own}); hold released"
         )
         return "restore"  # _restore_stop_after_absent_exit is a no-op without a tracked position
+    if own == 0:
+        # openposition's 0 is also a missing row or a failed read: only a book row proves flat.
+        # Anything else goes through the held / restore decision below.
+        own = await tracker.fetch_own_position_proven(
+            pending.symbol, pending.strategy, exchange, product
+        )
     if own == 0:
         return "flat"
     expected = pos.quantity if pos.direction == Direction.LONG else -pos.quantity
@@ -2451,19 +2657,8 @@ async def _establish_position(signal, order, quantity: int, trade_result, entry_
     if guard is not None:
         sl_order_id = guard.replacement_sl_order_id
 
-    # Always notify LIVE so trader knows position is active and SL is protecting it.
-    # fill_price=0 triggers "fill pending" wording in the message.
-    await notifier.notify_entry_filled(
-        signal.symbol,
-        signal.direction.value,
-        entry_fill_price or 0.0,
-        quantity,
-        signal.entry,
-        strategy=signal.strategy,
-        sl=signal.sl,
-        tp=signal.tp if signal.tp > 0 else None,  # 0 = no take-profit, not shown
-    )
-
+    # Register BEFORE the notice: the notifier can wait on a Telegram flood wait, and until
+    # the position is tracked it has no close detection and no time exit.
     tracker.register(
         TrackedPosition(
             symbol=signal.symbol,
@@ -2482,6 +2677,20 @@ async def _establish_position(signal, order, quantity: int, trade_result, entry_
             sig_id=signal.sig_id or "",
         )
     )
+
+    # Always notify LIVE so trader knows position is active and SL is protecting it.
+    # fill_price=0 triggers "fill pending" wording in the message.
+    await notifier.notify_entry_filled(
+        signal.symbol,
+        signal.direction.value,
+        entry_fill_price or 0.0,
+        quantity,
+        signal.entry,
+        strategy=signal.strategy,
+        sl=signal.sl,
+        tp=signal.tp if signal.tp > 0 else None,  # 0 = no take-profit, not shown
+    )
+
     return True
 
 

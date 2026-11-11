@@ -414,6 +414,8 @@ async def _sweep(books, *, position=None, sl_status="canceled", own_qty=_TRACKED
     if own_qty is _TRACKED:
         own_qty = position.quantity if position is not None else 0
     tracker.fetch_own_position = AsyncMock(return_value=own_qty)
+    # The same quantity read from a position-book row: the read that counts as proof.
+    tracker.fetch_own_position_proven = AsyncMock(return_value=own_qty)
     tracker.book_close = AsyncMock()
     _sweep.tracker = tracker
     with (
@@ -711,7 +713,8 @@ async def _sweep_late(book, *, own_qty, position=None, booked=frozenset(), send_
     send = AsyncMock(return_value=send_result or TradeResult(status=OrderStatus.SUCCESS, order_id="C1"))
     notify = AsyncMock()
     tracker = MagicMock(find_position=MagicMock(return_value=position),
-                        fetch_own_position=AsyncMock(return_value=own_qty))
+                        fetch_own_position=AsyncMock(return_value=own_qty),
+                        fetch_own_position_proven=AsyncMock(return_value=own_qty))
     with (
         patch("signal_engine.main.fetch_orderbook", AsyncMock(return_value=book)),
         patch("signal_engine.main.fetch_order_ids_today", MagicMock(return_value=set(booked))),

@@ -255,6 +255,8 @@ class TestTPHitExitFlow:
             patch("signal_engine.main.build_exit_order", return_value=MagicMock()),
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
+            # The exit order traded; its price is unreadable here, so its status (E-03) says so.
+            patch("signal_engine.main.fetch_order_status", new_callable=AsyncMock, return_value="complete"),
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
             patch("signal_engine.main.save") as mock_save,
             patch("signal_engine.main.notifier", new_callable=AsyncMock) as mock_notifier,

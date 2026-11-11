@@ -9,6 +9,47 @@ import os
 # guarantee test/conftest.py gives the OpenAlgo core suite.
 os.environ["LOG_DIR"] = "log/test"
 
+# signal_engine.main builds RiskStore(RISK_DB_PATH) at import and its engine defaults to mode
+# "live", so every test that imported main opened the operational signal_engine/data/risk.db
+# and any unpatched record_trade()/record_close() wrote a PORTFOLIO/live row for today into it
+# (rows dated on weekends, 2026-10-24 and 2026-10-25, are in that file). Repointed here, BEFORE
+# any project import can bind the path, so the real file is unreachable from the suite.
+import tempfile  # noqa: E402
+
+import signal_engine.risk_store as _risk_store_module  # noqa: E402
+
+_risk_store_module.RISK_DB_PATH = os.path.join(
+    tempfile.mkdtemp(prefix="signal_engine_tests_"), "risk.db"
+)
+
+# logger_setup builds its file sinks and the errors_*.jsonl sink (plus its 90-day pruning of
+# errors_*.jsonl) from the cwd-relative directory "signal_engine/logs". A test that reaches
+# setup_logger() (main.main(), the startup runner) from the repo root therefore wrote
+# "Signal Engine starting" and test errors into the operator's real log files, and the sinks it
+# left behind kept doing so for every later test. The directory is read through _log_dir() and
+# _error_log_dir() at call time; they are replaced here, BEFORE any test runs, with versions that
+# send the real signal_engine/logs (however the relative path resolves) to a throwaway directory.
+# A relative path that resolves elsewhere (a test that chdirs into tmp_path) is left alone, so
+# tests that assert on the files they create keep working.
+import signal_engine.logger_setup as _logger_setup_module  # noqa: E402
+
+_REAL_LOG_DIR = os.path.realpath(
+    os.path.join(os.path.dirname(os.path.abspath(_logger_setup_module.__file__)), "logs")
+)
+_TEST_LOG_DIR = os.path.join(tempfile.mkdtemp(prefix="signal_engine_test_logs_"), "logs")
+
+
+def _redirect_real_log_dir(configured: str) -> str:
+    if os.path.realpath(configured) == _REAL_LOG_DIR:
+        return _TEST_LOG_DIR
+    return configured
+
+
+_logger_setup_module._log_dir = lambda: _redirect_real_log_dir(_logger_setup_module.LOG_DIR)
+_logger_setup_module._error_log_dir = lambda: _redirect_real_log_dir(
+    _logger_setup_module._ERROR_LOG_DIR
+)
+
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 
@@ -170,3 +211,31 @@ def _no_operator_entry_hold(tmp_path, monkeypatch):
     from signal_engine import mode_guard
 
     monkeypatch.setattr(mode_guard, "HOLD_FILE", tmp_path / "no-ENTRY_HOLD")
+
+
+@pytest.fixture(autouse=True)
+def _never_touch_operational_state_files(tmp_path, monkeypatch):
+    """Redirect the remaining default-path operational files (see test_operational_db_isolation).
+
+    risk.db is repointed at import above. The runner state database cannot be repointed through
+    its module constant, because RunnerStateStore binds the path as a default argument when the
+    class is built, so the default itself is replaced. The card state, day-summary pin state,
+    bug tracker and shadow tick directory are read at call time and are patched by name.
+    """
+    from signal_engine import notifier, strategy_cards
+    from signal_engine.bugs import store as bug_store
+    from signal_engine.pipeline.state import RunnerStateStore
+    from signal_engine.shadow import store as shadow_store
+
+    defaults = RunnerStateStore.__init__.__defaults__
+    monkeypatch.setattr(
+        RunnerStateStore.__init__,
+        "__defaults__",
+        (str(tmp_path / "runner_state.db"),) + tuple(defaults[1:]),
+    )
+    monkeypatch.setattr(strategy_cards, "_STATE_PATH", str(tmp_path / "strategy_card_state.json"))
+    monkeypatch.setattr(
+        notifier, "_DAY_SUMMARY_PIN_STATE_PATH", str(tmp_path / "day_summary_pin_state.json")
+    )
+    monkeypatch.setattr(bug_store, "TRACKER_PATH", str(tmp_path / "bugs.json"))
+    monkeypatch.setattr(shadow_store, "DATA_DIR", tmp_path / "shadow")

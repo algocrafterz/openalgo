@@ -37,7 +37,7 @@ class TestTrackerCheckPositions:
         tracker.register(_make_position())
 
         with (
-            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[{"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 0}]),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=1500.0),
         ):
             await tracker.check_positions()
@@ -54,7 +54,7 @@ class TestTrackerCheckPositions:
         tracker.register(_make_position())
 
         with (
-            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[{"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 0}]),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
         ):
             await tracker.check_positions()
@@ -117,7 +117,7 @@ class TestTrackerCheckPositions:
         tracker.send_day_summary = AsyncMock()
 
         with (
-            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[{"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 0}]),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=1500.0),
             patch("signal_engine.tracker.datetime") as mock_dt,
         ):
@@ -221,7 +221,7 @@ class TestOCOCancellation:
         tracker.register(pos)
 
         with (
-            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[{"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 0}]),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=-500.0),
         ):
             await tracker.check_positions()
@@ -240,7 +240,7 @@ class TestOCOCancellation:
         tracker.register(pos)
 
         with (
-            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[{"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 0}]),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
         ):
             await tracker.check_positions()
@@ -259,7 +259,7 @@ class TestOCOCancellation:
         tracker.register(pos)
 
         with (
-            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[{"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 0}]),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=False),
         ):
@@ -298,7 +298,7 @@ class TestOCOCancellation:
         tracker.register(pos)
 
         with (
-            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[{"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 0}]),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, side_effect=Exception("network down")),
         ):
@@ -312,18 +312,47 @@ class TestBatchPositionCheck:
     """Polling optimization: one positionbook call replaces N individual openposition calls."""
 
     @pytest.mark.asyncio
-    async def test_batch_check_detects_closed_position(self):
-        """Positionbook returns qty=0 for a tracked symbol -> position closed."""
+    async def test_batch_check_absent_row_with_unexecuted_stop_stays_tracked(self):
+        """E-02: a symbol missing from the positionbook is NOT proof of a close.
+
+        Flattrade returns an empty book as success for a failed read. With the stop not
+        executed, the position stays tracked and its stop is not cancelled.
+        """
         engine = _make_engine()
         engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 0.0
-        tracker.register(_make_position(symbol="RELIANCE", strategy=ORB))
+        pos = _make_position(symbol="RELIANCE", strategy=ORB, fill_price=2500.0)
+        pos.sl_order_id = "SL_LIVE"
+        tracker.register(pos)
 
-        # Positionbook returns empty list (RELIANCE not present = closed)
-        positionbook = []
         with (
-            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=positionbook),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value="open"),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=-200.0),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock) as mock_cancel,
+        ):
+            await tracker.check_positions()
+
+        assert tracker.tracked_count == 1
+        assert engine.open_positions_for(ORB) == 1
+        mock_cancel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_batch_check_absent_row_with_executed_stop_is_closed(self):
+        """E-02 counterpart: a symbol missing from the positionbook whose stop is `complete`
+        is a real close (the sandbox drops a row closed at exactly zero P&L)."""
+        engine = _make_engine()
+        engine._state(ORB).open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 0.0
+        pos = _make_position(symbol="RELIANCE", strategy=ORB, fill_price=2500.0)
+        pos.sl_order_id = "SL_FILLED"
+        tracker.register(pos)
+
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value="complete"),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=-200.0),
         ):
             await tracker.check_positions()
@@ -358,9 +387,10 @@ class TestBatchPositionCheck:
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB))
         tracker.register(_make_position(symbol="TCS", strategy=ORB))
 
-        # TCS still open (qty=10), RELIANCE not in positionbook (closed)
+        # TCS still open (qty=10), RELIANCE closed (row with qty 0)
         positionbook = [
             {"symbol": "TCS", "exchange": "NSE", "product": "MIS", "quantity": 10, "pnl": 50.0},
+            {"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 0},
         ]
         with (
             patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=positionbook),
@@ -520,9 +550,12 @@ class TestGuard2Timeout:
         assert tracker.tracked_count == 1  # still waiting
 
     @pytest.mark.asyncio
-    async def test_guard2_releases_as_orphan_when_old_and_status_unknown(self):
-        """Position older than guard2_timeout with still-unknown orderstatus is treated as
-        orphaned rejection (not 'assumed complete'). Slot released, SL cancelled."""
+    async def test_guard2_keeps_an_absent_position_when_old_and_status_unknown(self):
+        """Position older than guard2_timeout, no position-book row, order status unreadable:
+        nothing proves it never traded, so it stays tracked and its stop is not cancelled.
+        (Owner decision 2026-11-10: an unknown broker state never cancels a stop or drops a
+        position. It used to be released as an orphan.) An explicit rejection still releases
+        it: see test_guard2_immediate_rejection_cancels_sl."""
         engine = _make_engine()
         engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
@@ -540,8 +573,8 @@ class TestGuard2Timeout:
         ):
             await tracker.check_positions()
 
-        assert tracker.tracked_count == 0  # orphan released
-        mock_cancel.assert_awaited_once_with("SL_ORPHAN", pos.strategy)  # orphaned SL cancelled
+        assert tracker.tracked_count == 1  # kept: unknown is not a rejection
+        mock_cancel.assert_not_awaited()  # the stop stays in place
 
     @pytest.mark.asyncio
     async def test_guard2_processes_real_close_when_position_was_seen_filled(self):
@@ -562,7 +595,7 @@ class TestGuard2Timeout:
         tracker.register(pos)
 
         with (
-            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[{"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quantity": 0}]),
             patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value=""),
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock) as mock_cancel,
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=1200.0),

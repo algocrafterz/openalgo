@@ -111,7 +111,22 @@ def build_sink(
         raise single_source.SingleSourceError(
             f"{tag}: signal_source is python but no dispatcher was provided"
         )
-    return DispatchSink(dispatch, paper_only=entry.paper_only)
+    return DispatchSink(_shielded(dispatch), paper_only=entry.paper_only)
+
+
+def _shielded(dispatch: Callable[[object], Awaitable[None]]) -> Callable[[object], Awaitable[None]]:
+    """Run each dispatch as its own tracked task and await it shielded.
+
+    Cancelling the runner (shutdown) then cannot cancel an order pipeline mid-flight; the
+    startup shutdown drains the tracked tasks before it closes anything.
+    """
+    from signal_engine.listener import track_dispatch
+
+    async def run(signal) -> None:
+        name = f"runner {getattr(signal, 'strategy', '')} {getattr(signal, 'symbol', '')}"
+        await asyncio.shield(track_dispatch(dispatch(signal), name))
+
+    return run
 
 
 def build_exits(

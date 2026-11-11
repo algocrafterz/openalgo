@@ -5,6 +5,7 @@ import os
 import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 from loguru import logger
 
@@ -89,6 +90,14 @@ _FILL_PROCEED = "proceed"  # order traded (or is proven filled) — book the clo
 _FILL_WAIT = "wait"  # status still unresolved — retry on the next poll
 _FILL_ORPHANED = "orphaned"  # order never traded — slot released, no trade recorded
 
+#: A position with no position-book row and no executed closing order: alert after this many
+#: consecutive polls, then at most this often while it lasts.
+_ABSENT_ALERT_POLLS = 6
+_ABSENT_ALERT_REPEAT_S = 600.0
+
+#: How often the stand-down after a mode change repeats its CRITICAL log.
+_STANDDOWN_LOG_INTERVAL_S = 300.0
+
 
 def _poll_close_exit_types(exit_types: list, claimed: str = "") -> list:
     """Labels for a close the poll found on the broker: the stop, unless another path claimed it.
@@ -157,6 +166,13 @@ class BookEntry:
     #: may be a refresh the sandbox refused rather than a market that stood still. Set by
     #: PositionTracker._mark_stale_prices(); never by the positionbook itself.
     stale: bool = False
+    #: Where this row is booked. "" when the book did not say, which matches any position.
+    exchange: str = ""
+    product: str = ""
+    #: The other rows the book holds for the same symbol (another product or exchange). The
+    #: indexed entry is the last row for the symbol, as it always was; a tracked position takes
+    #: its own row through _entry_for_position().
+    siblings: "tuple[BookEntry, ...]" = ()
 
 
 #: How long an open position's price may stay exactly unchanged before the tracker stops trusting
@@ -179,6 +195,7 @@ def _index_positionbook(book) -> dict:
     _book_broker_close().
     """
     book_data: dict = {}
+    earlier: dict = {}
     for entry in book:
         sym = entry.get("symbol", "")
         qty = int(entry.get("quantity", 0))
@@ -188,8 +205,43 @@ def _index_positionbook(book) -> dict:
             realised = None if raw is None else float(raw)
         except (TypeError, ValueError):
             realised = None
-        book_data[sym] = BookEntry(qty, ltp, realised)
+        if sym in book_data:
+            earlier.setdefault(sym, []).append(book_data[sym])
+        book_data[sym] = BookEntry(
+            qty,
+            ltp,
+            realised,
+            exchange=str(entry.get("exchange") or "").upper(),
+            product=str(entry.get("product") or "").upper(),
+        )
+    for sym, rows in earlier.items():
+        book_data[sym] = replace(book_data[sym], siblings=tuple(rows))
     return book_data
+
+
+def _entry_for_position(book_data: dict, pos) -> "BookEntry | None":
+    """The position book row that belongs to a tracked position, or None when it has none.
+
+    The book can hold several rows for one symbol (a CNC row and a MIS row, or two exchanges).
+    The row for a position is the one with the same exchange and product. A row that carries no
+    exchange or product (a book that omits them) matches any position, and a position with no
+    exchange or product matches any row. Among several matches an open row wins: a flat row
+    must never hide a position the broker still holds.
+    """
+    top = book_data.get(pos.symbol)
+    if top is None:
+        return None
+    exchange = (pos.exchange or "").upper()
+    product = (pos.product or "").upper()
+    matches = [
+        row
+        for row in (top, *getattr(top, "siblings", ()))
+        if (not getattr(row, "exchange", "") or not exchange or row.exchange == exchange)
+        and (not getattr(row, "product", "") or not product or row.product == product)
+    ]
+    if not matches:
+        return None
+    return next((row for row in matches if row.quantity != 0), matches[0])
 
 
 @dataclass
@@ -249,6 +301,10 @@ class TrackedPosition:
     # exhausted all bracket.max_sl_retries attempts.
     sl_retry_count: int = 0
     last_sl_retry_at: datetime | None = None
+    # Flatness proof (see PositionTracker._absent_row_proven_flat): consecutive polls in which
+    # the position book had no row for this position and nothing proved it closed.
+    absent_polls: int = 0
+    absent_alerted_at: float | None = None  # time.monotonic() of the last operator alert
 
 
 #: Twin-stop audit of the order book: at most this often (one extra order-book read).
@@ -324,6 +380,12 @@ _BASELINE_READ_ATTEMPTS = 3  # startup reads of the day's realised P&L before gi
 _BASELINE_RETRY_SECONDS = 2.0
 
 
+#: A failing poll alerts on its first failure and then at most this often while it keeps failing.
+_POLL_ALERT_INTERVAL_S = 300
+#: A Telegram send inside the poll loop is bounded so it can never stall the loop.
+_POLL_ALERT_SEND_TIMEOUT_S = 5.0
+
+
 class PositionTracker:
     """Monitors open positions by polling OpenAlgo API.
 
@@ -336,6 +398,10 @@ class PositionTracker:
         self._risk_engine = risk_engine
         self._poll_interval = poll_interval
         self._running = False
+        self._last_poll_ok_at: datetime | None = None  # IST; see last_poll_ok_at
+        self._poll_failures = 0  # consecutive failed polls
+        self._poll_alerted = False  # a failure alert went out and no recovery notice has yet
+        self._poll_last_alert_at: float | None = None  # time.monotonic() of the last failure alert
         self._last_realised_pnl: float = 0.0
         self._pnl_lock: asyncio.Lock = asyncio.Lock()  # serialise _last_realised_pnl updates
         self._time_exit_active: bool = False  # True while time_exit_all() is in progress
@@ -361,11 +427,14 @@ class PositionTracker:
         #: positions have all closed gets an explicit 0.0 rather than keeping a stale figure
         #: that would go on throttling it. See _push_unrealised().
         self._reported_unrealised: set = set()
-        #: symbol -> (price, time.monotonic() when that price last changed). See
-        #: _mark_stale_prices().
-        self._price_seen: dict[str, tuple[float, float]] = {}
-        #: Symbols already reported stale, so a freeze is logged once, not every 5s poll.
-        self._stale_reported: set[str] = set()
+        #: (symbol, exchange, product) -> (price, time.monotonic() when that price last changed).
+        #: See _mark_stale_prices().
+        self._price_seen: dict[tuple, tuple[float, float]] = {}
+        # monotonic time of the last stand-down CRITICAL log (E-04), None before the first
+        self._standdown_logged_at: float | None = None
+        #: (symbol, exchange, product) rows already reported stale, so a freeze is logged once,
+        #: not every 5s poll.
+        self._stale_reported: set[tuple] = set()
         #: position key -> that leg's last unrealised loss computed from a fresh price. A leg
         #: on a stale price keeps this figure. See _push_unrealised().
         self._leg_loss: dict[str, float] = {}
@@ -467,6 +536,25 @@ class PositionTracker:
         if net is None:
             return None
         return net - self.other_strategies_signed_qty(symbol, exchange, product, strategy)
+
+    async def fetch_own_position_proven(
+        self, symbol: str, strategy: str, exchange: str, product: str
+    ) -> "int | None":
+        """Like fetch_own_position, but only from a position-book ROW; None means UNKNOWN.
+
+        OpenAlgo's openposition answers 0 for a missing row and for a failed read (Flattrade
+        turns a failed PositionBook reply into an empty list), so a 0 from it proves nothing.
+        Here an unreadable book, or a book with no row for this symbol / exchange / product,
+        returns None and never 0. A row's quantity (0 included) is the broker's own answer.
+        """
+        book = await fetch_positionbook()
+        if book is None:
+            return None
+        probe = SimpleNamespace(symbol=symbol, exchange=exchange, product=product)
+        row = _entry_for_position(_index_positionbook(book), probe)
+        if row is None:
+            return None
+        return row.quantity - self.other_strategies_signed_qty(symbol, exchange, product, strategy)
 
     def find_position(self, symbol: str, strategy: str) -> "TrackedPosition | None":
         """Look up a tracked position by symbol and strategy. Returns None if not found."""
@@ -904,7 +992,7 @@ class PositionTracker:
         leg_loss: dict[str, float] = {}
         for key, pos in self._positions.items():
             losses.setdefault(pos.strategy, 0.0)
-            book_entry = book_data.get(pos.symbol)
+            book_entry = _entry_for_position(book_data, pos)
             if book_entry is not None and book_entry.stale:
                 # A frozen price may be a refresh the sandbox refused. Keep what the last fresh
                 # price said about this leg: it is never better than what was last confirmed.
@@ -938,28 +1026,53 @@ class PositionTracker:
         """
         now = time.monotonic() if now is None else now
         out: dict = {}
-        seen: dict[str, tuple[float, float]] = {}
-        for sym, entry in book_data.items():
+        seen: dict[tuple, tuple[float, float]] = {}
+
+        present: set[tuple] = set()
+        stale_now: set[tuple] = set()
+        multi = {sym for sym, entry in book_data.items() if entry.siblings}
+
+        def label(key: tuple) -> str:
+            # A single-row symbol logs by its name alone; a multi-row one names the row.
+            return key[0] if key[0] not in multi else "|".join(key)
+
+        def judge(sym: str, entry: BookEntry) -> BookEntry:
+            # Every row, the indexed top one included, is keyed by (symbol, exchange, product), so
+            # a change of row order between polls cannot swap two rows' price histories.
+            key = (sym, entry.exchange, entry.product)
+            present.add(key)
             if entry.quantity == 0 or entry.ltp <= 0:
-                out[sym] = entry
-                continue
-            prev = self._price_seen.get(sym)
+                return entry
+            prev = self._price_seen.get(key)
             changed_at = prev[1] if prev is not None and prev[0] == entry.ltp else now
-            seen[sym] = (entry.ltp, changed_at)
+            seen[key] = (entry.ltp, changed_at)
             stale = (now - changed_at) > _STALE_PRICE_SECONDS
-            out[sym] = replace(entry, stale=True) if stale else entry
-            if stale and sym not in self._stale_reported:
-                self._stale_reported.add(sym)
+            if stale and key not in self._stale_reported:
+                self._stale_reported.add(key)
                 logger.warning(
-                    f"{sym}: price {entry.ltp:.2f} unchanged for {now - changed_at:.0f}s while held;"
+                    f"{label(key)}: price {entry.ltp:.2f} unchanged for {now - changed_at:.0f}s while held;"
                     " treating it as unconfirmed (no no-progress exit, unrealised loss held at"
                     " its last confirmed figure) until it moves"
                 )
-        for sym in list(self._stale_reported):
-            if sym not in out or not out[sym].stale:
-                self._stale_reported.discard(sym)
-                if sym in out:
-                    logger.info(f"{sym}: price is moving again; resuming normal use")
+            if stale:
+                stale_now.add(key)
+            return replace(entry, stale=True) if stale else entry
+
+        for sym, entry in book_data.items():
+            judged = judge(sym, entry)
+            if entry.siblings:
+                # Each other row of the symbol (another product or exchange) is judged on its own
+                # price under its own (symbol, exchange, product) key.
+                judged = replace(
+                    judged,
+                    siblings=tuple(judge(sym, row) for row in entry.siblings),
+                )
+            out[sym] = judged
+        for key in list(self._stale_reported):
+            if key not in stale_now:
+                self._stale_reported.discard(key)
+                if key in present:
+                    logger.info(f"{label(key)}: price is moving again; resuming normal use")
         self._price_seen = seen
         return out
 
@@ -983,6 +1096,19 @@ class PositionTracker:
         except Exception as e:
             logger.warning(f"Could not send mode-flip alert: {e}")
 
+    def _log_standdown(self) -> None:
+        now = time.monotonic()
+        last = self._standdown_logged_at
+        if last is not None and now - last < _STANDDOWN_LOG_INTERVAL_S:
+            return
+        self._standdown_logged_at = now
+        logger.critical(
+            f"OpenAlgo mode changed while the engine was running: the {len(self._positions)} "
+            "position(s) opened before the change are NOT being checked (no close detection, "
+            "no stop repair, no sweep). They rest on their broker stop-loss orders until "
+            "OpenAlgo is switched back and the engine is restarted."
+        )
+
     async def check_positions(self) -> None:
         """Poll all tracked positions with a single positionbook call.
 
@@ -1004,6 +1130,18 @@ class PositionTracker:
         if self._time_exit_active:
             return
 
+        # First, before any read: after an OpenAlgo mode change every read and every order goes to
+        # the other mode's pipe, so the book below would not be the book these positions live in
+        # (a position open in live shows as qty 0 in the sandbox book, and would be booked closed
+        # with its stop cancelled). The poll stands down. This is deliberate, not an error: it
+        # returns normally and counts as a good iteration.
+        await self._check_mode_flip()
+        from signal_engine import mode_guard
+
+        if mode_guard.mode_halted():
+            self._log_standdown()
+            return
+
         # Before the positionbook read, so an outage that fails it still re-checks (and keeps
         # alerting about) orders left unconfirmed; the sweep needs only the order book.
         try:
@@ -1023,15 +1161,19 @@ class PositionTracker:
 
         book_data = self._mark_stale_prices(_index_positionbook(book))
         self._push_unrealised(book_data)
-        await self._check_mode_flip()
         closed_keys = []
 
         # Snapshot the position list so concurrent _handle_exit_locked unregisters
         # don't mutate the dict mid-iteration (RuntimeError on dict-size-change).
+        failed_keys = []
         for key, pos in list(self._positions.items()):
             with logger.contextualize(symbol=pos.symbol):
-                if await self._check_one_position(key, pos, book_data, _settings):
-                    closed_keys.append(key)
+                try:
+                    if await self._check_one_position(key, pos, book_data, _settings):
+                        closed_keys.append(key)
+                except Exception:  # noqa: BLE001 - one position must not skip the others
+                    logger.exception(f"Position check failed for {key}; continuing with the rest")
+                    failed_keys.append(key)
 
         for key in closed_keys:
             self._positions.pop(key, None)  # another path may already have unregistered it
@@ -1048,6 +1190,10 @@ class PositionTracker:
             and self._positions
         ):
             await self._check_no_progress(book_data)
+
+        if failed_keys:
+            # After the whole poll ran: start() counts this poll as failed and alerts.
+            raise RuntimeError(f"position check failed for {', '.join(failed_keys)}")
 
     async def _reconcile_stops(self) -> None:
         """Duplicate protective stops: audit the book, retry unresolved cleanup, escalate.
@@ -1107,7 +1253,7 @@ class PositionTracker:
                 continue
             if order_reconcile.get_uncertain(pos.strategy, pos.symbol) is not None:
                 continue  # an order for this position is unconfirmed: a stop now could reverse it
-            entry = book_data.get(pos.symbol)
+            entry = _entry_for_position(book_data, pos)
             if entry is None or entry.quantity == 0:
                 continue  # not confirmed open yet, or already closed — nothing to protect
             exhausted = pos.sl_retry_count >= _settings.bracket_max_sl_reretries
@@ -1203,8 +1349,10 @@ class PositionTracker:
         if self._positions.get(key) is not pos:
             return False
 
-        entry = book_data.get(pos.symbol)
+        entry = _entry_for_position(book_data, pos)
         qty = entry.quantity if entry else 0
+        if entry is not None:
+            pos.absent_polls = 0  # the book shows this position again
         if qty != 0:
             if not pos.ever_seen_nonzero_qty:
                 pos.ever_seen_nonzero_qty = True
@@ -1226,10 +1374,16 @@ class PositionTracker:
         pos.exit_pending = True
         closed = False
         try:
-            verdict = await self._verify_unconfirmed_fill(key, pos, age, _settings)
+            verdict = await self._verify_unconfirmed_fill(
+                key, pos, age, _settings, absent=entry is None
+            )
             if verdict == _FILL_ORPHANED:
                 closed = True
             elif verdict != _FILL_WAIT:
+                # A missing row is not proof of a close; this read is inside the claim so a
+                # signal exit cannot start between the proof and the booking.
+                if entry is None and not await self._absent_row_proven_flat(key, pos):
+                    return False
                 closed = await self._book_broker_close(key, pos, age, _settings, entry)
             return closed
         finally:
@@ -1239,6 +1393,52 @@ class PositionTracker:
                 self._positions.pop(key, None)
             else:
                 pos.exit_pending = False
+
+    async def _absent_row_proven_flat(self, key: str, pos) -> bool:
+        """True only when the closing order has executed. An absent row is UNKNOWN, not flat.
+
+        Flattrade maps any failed PositionBook reply to an empty list returned as success
+        (broker/flattrade/mapping/order_data.py), so the engine cannot tell a failed read from an
+        empty book. The sandbox drops a row closed at exactly zero P&L. A missing row can be a
+        real close in both modes and a failed read in one, so the order that closes the position
+        (its tracked stop, or the exit order the engine sent) decides. Without that proof the
+        stop is not cancelled, nothing is booked and the position stays tracked.
+        """
+        status = ""
+        if pos.sl_order_id:
+            status = (await fetch_order_status(pos.sl_order_id, pos.strategy)).lower()
+        if status in ("complete", "filled"):
+            pos.absent_polls = 0
+            return True
+        await self._count_absent_unknown(
+            key,
+            pos,
+            f"its closing order {pos.sl_order_id or '(none)'} is not proven executed "
+            f"(status={status!r}); keeping the position and its stop",
+            f"{pos.symbol} [{pos.strategy}] is not in the position book and has no stop-loss "
+            "order on record. The engine is keeping the position. Check the position book and "
+            "protect the position by hand if it is still open."
+            if not pos.sl_order_id
+            else f"{pos.symbol} [{pos.strategy}] is not in the position book, and its closing "
+            "order has not executed. The engine is keeping the position. Check the position "
+            "book and the order book.",
+        )
+        return False
+
+    async def _count_absent_unknown(self, key: str, pos, log_detail: str, alert_text: str) -> None:
+        """Bookkeeping for an absent row that is UNKNOWN: count it, warn (rate-limited), alert."""
+        pos.absent_polls += 1
+        if self._should_log_debug(key, "absent_unknown", interval_sec=60):
+            logger.warning(
+                f"check_positions: {key} has no row in the position book and {log_detail} "
+                f"({pos.absent_polls} polls)"
+            )
+        if pos.absent_polls >= _ABSENT_ALERT_POLLS:
+            now = time.monotonic()
+            last = pos.absent_alerted_at
+            if last is None or now - last >= _ABSENT_ALERT_REPEAT_S:
+                pos.absent_alerted_at = now
+                await self._send_poll_alert("position_absent_unproven", alert_text)
 
     def _position_too_young(self, key: str, age: timedelta, _settings) -> bool:
         """Guard 1 — a freshly registered position showing qty=0 is usually positionbook lag.
@@ -1254,11 +1454,16 @@ class PositionTracker:
             )
         return True
 
-    async def _verify_unconfirmed_fill(self, key: str, pos, age: timedelta, _settings) -> str:
+    async def _verify_unconfirmed_fill(
+        self, key: str, pos, age: timedelta, _settings, absent: bool = False
+    ) -> str:
         """Guard 2 — verify the entry order actually traded before recording a close.
 
         A rejected order never appears in positionbook; without this check the tracker
         would invent a phantom closed trade at entry price with 0 PnL.
+
+        `absent` is True when the position book has no row at all for this position (as opposed
+        to a row at quantity 0).
 
         Returns _FILL_PROCEED, _FILL_WAIT, or _FILL_ORPHANED.
         """
@@ -1292,10 +1497,17 @@ class PositionTracker:
                 )
             return _FILL_WAIT
 
-        return await self._resolve_stuck_order(key, pos, age, order_status)
+        return await self._resolve_stuck_order(key, pos, age, order_status, absent)
 
-    async def _resolve_stuck_order(self, key: str, pos, age: timedelta, order_status: str) -> str:
-        """Decide the fate of an order whose status never resolved within the timeout."""
+    async def _resolve_stuck_order(
+        self, key: str, pos, age: timedelta, order_status: str, absent: bool = False
+    ) -> str:
+        """Decide the fate of an order whose status never resolved within the timeout.
+
+        With no book row at all (`absent`) an unreadable or non-final entry status is UNKNOWN: a
+        broker outage gives exactly an empty book and blank statuses. The position is then kept,
+        not released as an orphan (only an explicit rejected / cancelled status does that, above).
+        """
         if pos.ever_seen_nonzero_qty:
             # Positionbook previously confirmed qty > 0, so the order DID fill.
             # The orderstatus API is unreliable (intermittent 500s / empty responses),
@@ -1310,6 +1522,17 @@ class PositionTracker:
             return _FILL_PROCEED
 
         # Never appeared in positionbook with qty > 0 — order never filled.
+        if absent:
+            await self._count_absent_unknown(
+                key,
+                pos,
+                f"its entry order {pos.entry_order_id} is not confirmed "
+                f"(status={order_status!r}); keeping the position and its stop",
+                f"{pos.symbol} [{pos.strategy}] is not in the position book and the broker "
+                "has not confirmed its entry order. The engine is keeping the position and "
+                "its stop in place. Check the position book and the order book.",
+            )
+            return _FILL_WAIT
         logger.error(
             f"check_positions: {key} order status={order_status!r} still unresolved "
             f"after {age.total_seconds() / 60:.0f}min and never seen in positionbook "
@@ -1457,7 +1680,17 @@ class PositionTracker:
             return True
 
         self._risk_engine.record_close(pnl_delta, strategy=pos.strategy, symbol=pos.symbol)
-        await self._record_closed_trade(key, pos, age, pnl_delta, _settings)
+        try:
+            await self._record_closed_trade(key, pos, age, pnl_delta, _settings)
+        except Exception:
+            # The close is already counted. Returning False here would make the next poll
+            # count it again (the loss added twice, open_positions decremented twice).
+            logger.exception(f"{key}: close counted but the trade record could not be saved")
+            await self._send_poll_alert(
+                "close_record_failed",
+                f"{pos.symbol} [{pos.strategy}] closed and its result was counted, but the "
+                "trade record could not be fully saved. Check today's trades for this position.",
+            )
         return True
 
     async def _cancel_untracked_stops(self, key: str, pos):
@@ -1675,7 +1908,7 @@ class PositionTracker:
         if tp_distance <= 0:
             return None
 
-        np_entry = book_data.get(pos.symbol)
+        np_entry = _entry_for_position(book_data, pos)
         ltp = np_entry.ltp if np_entry else 0.0
         if ltp <= 0:
             return None
@@ -1836,6 +2069,7 @@ class PositionTracker:
             return
         if result.status != OrderStatus.SUCCESS:
             logger.error(f"No-progress market exit failed for {pos.symbol}: {result.message}")
+            self._drop_no_progress_label(pos)
             restored = await self._restore_stop_after_failed_exit(pos)
             await notifier.notify_sl_failed(
                 pos.symbol,
@@ -1847,6 +2081,29 @@ class PositionTracker:
             return
 
         logger.info(f"No-progress market exit placed for {pos.symbol}: id={result.order_id}")
+        # Accepted is not filled. Without the order's own price, its status says whether the exit
+        # happened: a rejected or cancelled order leaves the position open with no stop, so the
+        # stop goes back and the dead exit id is never filed as the closing order.
+        fill_price = await fetch_order_fill_price(result.order_id, pos.strategy)
+        if fill_price is None:
+            status = (await fetch_order_status(result.order_id, pos.strategy)).lower()
+            if status in ("rejected", "cancelled", "cancel"):
+                word = "cancelled" if status == "cancel" else status
+                logger.error(
+                    f"No-progress market exit {result.order_id} for {pos.symbol} was accepted but "
+                    f"then {word} by the broker: restoring the stop"
+                )
+                self._drop_no_progress_label(pos)
+                pos.sl_order_id = ""
+                restored = await self._restore_stop_after_failed_exit(pos)
+                await notifier.notify_sl_failed(
+                    pos.symbol,
+                    f"No-progress market exit was {word} by the broker after "
+                    f"{age.total_seconds() / 60:.0f}min. "
+                    + ("Stop restored." if restored else "Stop NOT restored - position unprotected."),
+                    strategy=pos.strategy,
+                )
+                return
         # book_close() reads sl_order_id as "the order that will close this position" -
         # the SL was just cancelled above, so this is the only closing order id we have.
         pos.sl_order_id = result.order_id
@@ -1868,7 +2125,6 @@ class PositionTracker:
         # the broker-delta is a portfolio-level snapshot that can be stale or shared with
         # another close in the same poll cycle, neither of which applies to an order this
         # function itself just placed and can confirm directly.
-        fill_price = await fetch_order_fill_price(result.order_id, pos.strategy)
         if fill_price is None:
             logger.warning(
                 f"No-progress exit for {pos.symbol}: could not confirm fill price for order "
@@ -1891,17 +2147,39 @@ class PositionTracker:
         from signal_engine.config import settings as _settings
 
         self._risk_engine.record_close(pnl_delta, strategy=pos.strategy, symbol=pos.symbol)
-        await self.book_close(
-            pos,
-            pnl_delta=pnl_delta,
-            exit_price=fill_price,
-            exit_types=pos.exit_types[:],
-            hold_minutes=int(age.total_seconds() / 60),
-            max_trades=_settings.max_trades_per_day,
-            new_realised_pnl=current_realised,
-        )
+        try:
+            await self.book_close(
+                pos,
+                pnl_delta=pnl_delta,
+                exit_price=fill_price,
+                exit_types=pos.exit_types[:],
+                hold_minutes=int(age.total_seconds() / 60),
+                max_trades=_settings.max_trades_per_day,
+                new_realised_pnl=current_realised,
+            )
+        except Exception:
+            # The close is already counted (record_close above). Leaving the position registered
+            # would let the next poll count it again.
+            logger.exception(
+                f"{pos.symbol} [{pos.strategy}]: no-progress close counted but the trade record "
+                "could not be saved"
+            )
+            await self._send_poll_alert(
+                "close_record_failed",
+                f"{pos.symbol} [{pos.strategy}] closed and its result was counted, but the "
+                "trade record could not be fully saved. Check today's trades for this position.",
+            )
         self.unregister(pos.symbol, pos.strategy)
         await self.maybe_send_day_summary()
+
+    @staticmethod
+    def _drop_no_progress_label(pos) -> None:
+        """Remove the NO-PROGRESS label a failed no-progress exit appended before it was sent."""
+        if "NO-PROGRESS" in pos.exit_types:
+            for i in range(len(pos.exit_types) - 1, -1, -1):
+                if pos.exit_types[i] == "NO-PROGRESS":
+                    del pos.exit_types[i]
+                    break
 
     async def _restore_stop_after_failed_exit(self, pos) -> bool:
         """Put back the stop cancelled for a market exit the broker definitely did not take.
@@ -2388,7 +2666,7 @@ class PositionTracker:
         book_data = _index_positionbook(book)
         out = {}
         for key, pos in mis_positions.items():
-            entry = book_data.get(pos.symbol)
+            entry = _entry_for_position(book_data, pos)
             base = pos.fill_price if pos.fill_price > 0 else pos.entry_price
             if entry is None or entry.quantity != 0 or not entry.ltp or base <= 0:
                 continue
@@ -2484,16 +2762,27 @@ class PositionTracker:
         self._risk_engine.record_close(pnl=total_pnl, strategy=pos.strategy, symbol=pos.symbol)
         self._day_trades += 1
         self._day_time_exits += 1
-        await notifier.notify_time_exit(
-            pos.symbol,
-            strategy=pos.strategy,
-            direction=pos.direction.value,
-            pnl=total_pnl,
-            r_multiple=r,
-            entry_price=base_price,
-            hold_minutes=hold_min,
-            day_context=self.day_context_line(_settings.max_trades_per_day),
-        )
+        try:
+            await notifier.notify_time_exit(
+                pos.symbol,
+                strategy=pos.strategy,
+                direction=pos.direction.value,
+                pnl=total_pnl,
+                r_multiple=r,
+                entry_price=base_price,
+                hold_minutes=hold_min,
+                day_context=self.day_context_line(_settings.max_trades_per_day),
+            )
+        except Exception:
+            # The close is already counted (record_close above). Leaving the position registered
+            # would let the next poll count it again.
+            logger.exception(f"{key}: time exit counted but its notification could not be sent")
+            await self._send_poll_alert(
+                "close_record_failed",
+                f"{pos.symbol} [{pos.strategy}] closed at the square-off and its result was "
+                "counted, but the close message could not be sent. Check today's trades for "
+                "this position.",
+            )
         logger.info(f"Time exit: cleared tracker entry {key}")
         del self._positions[key]
 
@@ -2551,9 +2840,56 @@ class PositionTracker:
         logger.info(f"Position tracker started (poll every {self._poll_interval}s)")
 
         while self._running:
-            if self._positions:
-                await self.check_positions()
+            try:
+                if self._positions:
+                    await self.check_positions()
+                self._last_poll_ok_at = datetime.now(IST)
+                await self._note_poll_ok()
+            except Exception:  # noqa: BLE001 - CancelledError is a BaseException and still ends the loop
+                logger.exception("Position tracker poll failed; retrying at the next interval")
+                await self._note_poll_failed()
             await asyncio.sleep(self._poll_interval)
+
+    @property
+    def last_poll_ok_at(self) -> datetime | None:
+        """IST time of the last poll that finished without an error, None before the first."""
+        return self._last_poll_ok_at
+
+    async def _send_poll_alert(self, event: str, text: str) -> None:
+        """Send a poll-supervision alert; bounded and guarded so it can never stall the loop."""
+        try:
+            await asyncio.wait_for(
+                notifier.notify_event(event, text), timeout=_POLL_ALERT_SEND_TIMEOUT_S
+            )
+        except Exception:  # noqa: BLE001 - an alert failure must not end the poll loop
+            logger.warning(f"Could not send the tracker poll alert ({event})")
+
+    async def _note_poll_failed(self) -> None:
+        self._poll_failures += 1
+        now = time.monotonic()
+        last = self._poll_last_alert_at
+        if last is not None and now - last < _POLL_ALERT_INTERVAL_S:
+            return
+        self._poll_last_alert_at = now
+        self._poll_alerted = True
+        await self._send_poll_alert(
+            "tracker_poll_failed",
+            "Position tracker check failed and is being retried. Open positions keep their "
+            "broker stop-loss orders, but closes and missing stops are not being detected "
+            "until it recovers. Check the engine log.",
+        )
+
+    async def _note_poll_ok(self) -> None:
+        self._poll_failures = 0
+        if not self._poll_alerted:
+            return
+        self._poll_alerted = False
+        self._poll_last_alert_at = None
+        await self._send_poll_alert(
+            "tracker_poll_recovered",
+            "Position tracker is checking positions again. Closes and missing stops are "
+            "being detected.",
+        )
 
     def stop(self) -> None:
         """Signal the polling loop to stop."""

@@ -21,6 +21,14 @@ from signal_engine.tests.pipeline_fixtures import tracker_mock
 from signal_engine.tracker import TrackedPosition
 
 
+@pytest.fixture(autouse=True)
+def _accepted_exit_order_is_complete():
+    """These tests start from an exit order that traded. The order's price is unreadable in
+    them, so since E-03 its status (complete) is what lets the close be booked."""
+    with patch("signal_engine.main.fetch_order_status", new_callable=AsyncMock, return_value="complete"):
+        yield
+
+
 class TestPartialExitFlow:
     """Multi-TP partial exit: TP1 exits a fraction of qty, keeps position registered."""
 

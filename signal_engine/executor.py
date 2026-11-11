@@ -209,14 +209,23 @@ def build_order(
     )
 
 
+_OUTCOME_UNKNOWN = "the server did not confirm whether the order was placed"
+_NOT_SENT_MESSAGE = "could not reach OpenAlgo, so the order was not sent"
+
+
 async def send_order(order: Order) -> TradeResult:
     """Send order to OpenAlgo REST API asynchronously."""
     url = f"{settings.openalgo_base_url}/api/v1/placeorder"
     payload = _placeorder_payload(order)
 
+    # `reply_received` separates "the request may have reached the server" from "it never left":
+    # an exception after the reply came back (bad JSON, an unreadable body) leaves the order's
+    # outcome unknown, exactly like a read timeout.
+    reply_received = False
     try:
         async with httpx.AsyncClient(timeout=settings.order_timeout) as client:
             response = await client.post(url, json=payload)
+            reply_received = True
             data = (
                 response.json()
                 if response.headers.get("content-type", "").startswith("application/json")
@@ -226,9 +235,19 @@ async def send_order(order: Order) -> TradeResult:
     except httpx.TimeoutException:
         logger.error(f"Timeout sending order for {order.symbol}")
         return TradeResult(status=OrderStatus.TIMEOUT, message="Request timed out")
+    except httpx.ConnectError as e:
+        # The connection was never made, so the order was never sent: a definite failure.
+        logger.error(f"Error sending order for {order.symbol}: {e}")
+        return TradeResult(status=OrderStatus.ERROR, message=_NOT_SENT_MESSAGE)
+    except httpx.TransportError as e:
+        # ReadError, WriteError, RemoteProtocolError ...: the request may have been sent.
+        logger.error(f"Transport error sending order for {order.symbol}: {e!r}")
+        return TradeResult(status=OrderStatus.TIMEOUT, message=_OUTCOME_UNKNOWN)
     except Exception as e:
         logger.error(f"Error sending order for {order.symbol}: {e}")
-        return TradeResult(status=OrderStatus.ERROR, message=str(e))
+        if reply_received:
+            return TradeResult(status=OrderStatus.TIMEOUT, message=_OUTCOME_UNKNOWN)
+        return TradeResult(status=OrderStatus.ERROR, message=_NOT_SENT_MESSAGE)
 
 
 def _placeorder_payload(order: Order) -> dict:
@@ -256,6 +275,20 @@ def _interpret_placeorder(order: Order, response, data: dict) -> TradeResult:
     treats a success status with a null orderid as a rejection — some brokers answer
     that way when the order was refused downstream.
     """
+    if response.status_code >= 500:
+        # OpenAlgo core answers 500 when its broker call raised, which can happen after the
+        # broker accepted the order. The outcome is unknown, so it is handled like a timeout
+        # (reconciled against the order book, never resent blindly).
+        reason = data.get("message", response.text)
+        logger.warning(f"Order outcome unknown for {order.symbol}: server error: {reason}")
+        # The server's own message is written for users; a raw body or a status code is not.
+        server_message = data.get("message")
+        return TradeResult(
+            status=OrderStatus.TIMEOUT,
+            message=server_message if isinstance(server_message, str) and server_message
+            else _OUTCOME_UNKNOWN,
+        )
+
     if response.status_code >= 400:
         reason = data.get("message", response.text)
         mode = data.get("mode", "")

@@ -466,7 +466,9 @@ class TestExitOrderPlacement:
             send_order=AsyncMock(return_value=_fail()),
             fetch_open_position=AsyncMock(return_value=0),
         )
-        with h.stack:
+        # Flat is proven by a position-book row at quantity 0, not by a bare zero read.
+        flat_book = AsyncMock(return_value=[{"symbol": "RELIANCE", "quantity": 0}])
+        with h.stack, patch("signal_engine.tracker.fetch_positionbook", flat_book):
             await _handle_exit(_exit_signal(tp_level="TP1"))
             h.notifier.notify_exit_failed.assert_not_awaited()
             h.risk.record_close.assert_not_called()  # no 0.0 close; the poll books the real one

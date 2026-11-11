@@ -173,7 +173,11 @@ class TestSignalExitAndPollBookTheSameCloseOnce:
         signal.tp_level = "SL"
 
         async def scenario():
-            await main._handle_exit_locked(signal)
+            # E-05: a chart SL HIT books only on broker proof. The stop has executed here.
+            with patch(
+                "signal_engine.main.fetch_order_status", AsyncMock(return_value="complete")
+            ):
+                await main._handle_exit_locked(signal)
 
         record_close = await _run(h, scenario)
 

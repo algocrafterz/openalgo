@@ -34,6 +34,7 @@ position in that name — and max_positions_per_sector is the control for it
 """
 
 import math
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -159,6 +160,7 @@ class RiskEngine:
         self.margin_reserve_buffer = margin_reserve_buffer
         self.worst_case_sl_pct = worst_case_sl_pct
         self._store = store
+        self._persist_logged_at: dict[str, float] = {}
         self._trade_mode = trade_mode
         self.max_positions_per_symbol = max_positions_per_symbol
         self.max_positions_per_sector = max_positions_per_sector
@@ -359,16 +361,29 @@ class RiskEngine:
             return
         state = self._state(strategy)
         today = datetime.now(IST).date()
-        self._store.save(
-            self._key(strategy),
-            self._trade_mode,
-            today,
-            trades_today=state.trades_today,
-            daily_loss=state.daily_realised_loss,
-            daily_net_pnl=state.daily_net_pnl,
-            open_positions=state.open_positions,
-            day_start_capital=state.day_start_capital,
-        )
+        try:
+            self._store.save(
+                self._key(strategy),
+                self._trade_mode,
+                today,
+                trades_today=state.trades_today,
+                daily_loss=state.daily_realised_loss,
+                daily_net_pnl=state.daily_net_pnl,
+                open_positions=state.open_positions,
+                day_start_capital=state.day_start_capital,
+            )
+        except Exception:  # noqa: BLE001 - the counters in memory are already changed
+            # Memory is authoritative for the session and startup reconciliation repairs the
+            # store. Raising here would make the caller repeat a count that already happened.
+            key = self._key(strategy)
+            now = time.monotonic()
+            last = self._persist_logged_at.get(key)
+            if last is None or now - last >= 60:
+                self._persist_logged_at[key] = now
+                logger.exception(
+                    f"[{strategy}] The risk counters could not be saved; the in-memory "
+                    "counters stay in force for this session"
+                )
 
     def _maybe_reset_daily(self) -> None:
         today = datetime.now(IST).timetuple().tm_yday

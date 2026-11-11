@@ -43,5 +43,8 @@ def tracker_mock() -> MagicMock:
     m.send_day_summary = AsyncMock()
     m.maybe_send_day_summary = AsyncMock()
     m.fetch_own_position = AsyncMock(return_value=0)
+    # The position-book-row read that counts as proof of flatness (None = no row / unreadable).
+    m.fetch_own_position_proven = AsyncMock(return_value=0)
+    m.other_strategy_exit_in_flight = MagicMock(return_value=False)  # no other strategy exiting
     m.find_position = MagicMock(return_value=None)  # an empty tracker: nothing held yet
     return m

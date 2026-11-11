@@ -21,6 +21,15 @@ _LOG_FORMAT = (
 #: db._TRADE_MODE, since logger_setup is imported very early and needs to stay a leaf module.
 _current_mode = "unknown"
 
+#: Directory every log sink writes under. Relative to the working directory, as it always
+#: was. Read through _log_dir() / _error_log_dir() at call time so the test suite can
+#: repoint it (signal_engine/tests/conftest.py); production never changes it.
+LOG_DIR = "signal_engine/logs"
+
+
+def _log_dir() -> str:
+    return LOG_DIR
+
 
 def set_mode(mode: str) -> None:
     """Route subsequent log lines to that mode's own file.
@@ -62,12 +71,12 @@ def setup_logger() -> logger.__class__:
         "diagnose": False,
     }
     logger.add(
-        "signal_engine/logs/signal_engine_live_{time:YYYY-MM-DD}.log",
+        f"{_log_dir()}/signal_engine_live_{{time:YYYY-MM-DD}}.log",
         filter=lambda record: _current_mode == "live",
         **_file_kwargs,
     )
     logger.add(
-        "signal_engine/logs/signal_engine_analyze_{time:YYYY-MM-DD}.log",
+        f"{_log_dir()}/signal_engine_analyze_{{time:YYYY-MM-DD}}.log",
         filter=lambda record: _current_mode == "analyze",
         **_file_kwargs,
     )
@@ -75,7 +84,7 @@ def setup_logger() -> logger.__class__:
     # fallback if it never does (a crash before that point). Should stay a short file; a large
     # one is itself a sign the mode never got set.
     logger.add(
-        "signal_engine/logs/signal_engine_unknown_{time:YYYY-MM-DD}.log",
+        f"{_log_dir()}/signal_engine_unknown_{{time:YYYY-MM-DD}}.log",
         filter=lambda record: _current_mode not in ("live", "analyze"),
         **_file_kwargs,
     )
@@ -99,8 +108,12 @@ def setup_logger() -> logger.__class__:
 #: literal emoji into every line of errors_*.jsonl, against the project's no-icons rule and
 #: for no benefit (level.name says the same thing). A small sink lets the icon be dropped
 #: while keeping the same one-object-per-line shape everything downstream already reads.
-_ERROR_LOG_DIR = "signal_engine/logs"
+_ERROR_LOG_DIR = LOG_DIR
 _ERROR_LOG_RETENTION_DAYS = 90
+
+
+def _error_log_dir() -> str:
+    return _ERROR_LOG_DIR
 
 
 def _error_record(record) -> dict:
@@ -131,7 +144,7 @@ def _prune_error_logs() -> None:
     called once per file rotation (a new date), which is as often as it needs to run.
     """
     cutoff = date.today() - timedelta(days=_ERROR_LOG_RETENTION_DAYS)
-    for name in os.listdir(_ERROR_LOG_DIR):
+    for name in os.listdir(_error_log_dir()):
         if not (name.startswith("errors_") and name.endswith(".jsonl")):
             continue
         try:
@@ -140,7 +153,7 @@ def _prune_error_logs() -> None:
             continue
         if stamp < cutoff:
             try:
-                os.remove(os.path.join(_ERROR_LOG_DIR, name))
+                os.remove(os.path.join(_error_log_dir(), name))
             except OSError:
                 pass
 
@@ -155,11 +168,11 @@ def _error_jsonl_sink(message) -> None:
     try:
         record = message.record
         today = record["time"].date()
-        os.makedirs(_ERROR_LOG_DIR, exist_ok=True)
+        os.makedirs(_error_log_dir(), exist_ok=True)
         if _last_error_log_date != today:
             _last_error_log_date = today
             _prune_error_logs()
-        path = os.path.join(_ERROR_LOG_DIR, f"errors_{today.isoformat()}.jsonl")
+        path = os.path.join(_error_log_dir(), f"errors_{today.isoformat()}.jsonl")
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(_error_record(record), default=str) + "\n")
     except Exception:  # noqa: BLE001

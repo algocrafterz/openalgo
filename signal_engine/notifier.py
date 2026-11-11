@@ -251,7 +251,7 @@ async def _mirror_to_strategy(event: str, text: str, strategy: str) -> None:
     if channel is None:
         return
     try:
-        await _deliver(_client, channel.id, text, phase)
+        await _deliver(_client, channel.id, text, phase, event)
     except Exception as e:
         logger.warning(f"Could not mirror {event} to {channel.name}: {e}")
 
@@ -268,15 +268,29 @@ async def _mirror_to_strategy(event: str, text: str, strategy: str) -> None:
 _PHASE_TAG = {"live": "[LIVE] ", "analyze": "[PAPER] "}
 
 
-async def _deliver(client, channel_id, text: str, phase: str):
+#: Longest a single Telegram send may take. The Telethon client sleeps inline on a flood wait
+#: (up to 120 s), and a caller on an order path must not wait that long for a notice.
+_SEND_TIMEOUT_S = 10
+
+
+async def _deliver(client, channel_id, text: str, phase: str, event: str = ""):
     """The single low-level Telegram send every path in this module goes through - notify(),
     _mirror_to_strategy(), _send_and_pin_day_summary(), and _send_oneshot(). Centralising it
     here is what makes the phase tag (and any future cross-cutting concern) a one-line change
     instead of four. Returns whatever TelegramClient.send_message returns (the day-summary pin
     path needs the Message object); raises exactly like it does - callers keep their own
-    try/except.
+    try/except. A send that takes longer than _SEND_TIMEOUT_S raises TimeoutError, which those
+    callers already treat as "not delivered" and log as a warning (the message names `event`).
     """
-    return await client.send_message(channel_id, f"{_PHASE_TAG.get(phase, '')}{text}")
+    try:
+        return await asyncio.wait_for(
+            client.send_message(channel_id, f"{_PHASE_TAG.get(phase, '')}{text}"),
+            timeout=_SEND_TIMEOUT_S,
+        )
+    except TimeoutError:
+        raise TimeoutError(
+            f"Telegram send did not finish within {_SEND_TIMEOUT_S}s (event: {event or 'unnamed'})"
+        ) from None
 
 
 async def notify_event(event: str, text: str, strategy: str = "") -> bool:
@@ -323,7 +337,7 @@ async def notify(text: str, event: str = "") -> bool:
     if channel is None:
         return False
     try:
-        await _deliver(_client, channel.id, text, phase)
+        await _deliver(_client, channel.id, text, phase, event)
         return True
     except asyncio.CancelledError:
         logger.debug("Notifier: send cancelled (event loop shutting down)")

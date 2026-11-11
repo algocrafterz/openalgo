@@ -195,10 +195,78 @@ def _make_handler(on_message, channel_names: dict):
         logger.info(f"[{source}] Signal received: {clean_text}")
         # The origin time rides along so dispatch_signal can re-check freshness itself: this
         # check only covers the time up to here, not any wait between here and the order.
+        # The pipeline runs as its own task and is shielded: Telethon's disconnect() cancels
+        # every event-handler task, and a cancel delivered into send_order or the exit path
+        # would leave an order at the broker with nothing recording or tracking it. The task
+        # is created INSIDE the scope because create_task copies the context.
         with freshness.origin_scope(_origin_time(msg)):
-            await on_message(msg.text)
+            task = track_dispatch(on_message(msg.text), f"signal [{source}]")
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            raise  # the handler is cancelled; the dispatch task keeps running
+        except Exception:  # noqa: BLE001 - already logged by the task's done-callback
+            pass
 
     return handler
+
+
+#: Order pipelines currently running (Telegram signals and Python-runner dispatches). Shutdown
+#: drains this set before it stops the tracker, so a pipeline is never cut off mid-order.
+_inflight_dispatches: set = set()
+
+
+def _log_dispatch_outcome(task: asyncio.Task) -> None:
+    _inflight_dispatches.discard(task)
+    if task.cancelled():
+        logger.warning(f"Order pipeline '{task.get_name()}' was cancelled before it finished")
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.opt(exception=exc).error(f"Order pipeline '{task.get_name()}' failed: {exc}")
+
+
+def track_dispatch(coro, name: str = "dispatch") -> asyncio.Task:
+    """Run an order pipeline as its own task, registered in the in-flight set.
+
+    The caller awaits it through asyncio.shield() so cancelling the caller never cancels the
+    pipeline. An exception the task raises is logged here, so it cannot vanish.
+    """
+    task = asyncio.create_task(coro, name=name)
+    _inflight_dispatches.add(task)
+    task.add_done_callback(_log_dispatch_outcome)
+    return task
+
+
+async def drain_inflight(timeout: float) -> int:
+    """Wait up to `timeout` seconds for running order pipelines to finish.
+
+    Returns how many are still running. Each one is logged at CRITICAL: an order may already
+    be at the broker with no tracking, and the next start reconciles against the broker.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    still_running: set = set()
+    # Re-read the set each round: a pipeline dispatched while Telethon is still disconnecting
+    # is not in the first snapshot, and shutdown must not stop the tracker under it.
+    while True:
+        pending = set(_inflight_dispatches)
+        if not pending:
+            break
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            still_running = pending
+            break
+        _, still_running = await asyncio.wait(pending, timeout=remaining)
+        if still_running:
+            break
+    for task in still_running:
+        logger.critical(
+            f"Shutdown: order pipeline '{task.get_name()}' is still running after "
+            f"{timeout:.0f}s. An order may be at the broker with no tracking; the next "
+            "start reconciles open positions against the broker."
+        )
+    return len(still_running)
 
 
 #: Channels already alerted about a phase mismatch this session. A mode mismatch affects

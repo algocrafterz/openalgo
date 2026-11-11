@@ -16,7 +16,7 @@ from signal_engine import mode_guard, notifier, order_reconcile
 from signal_engine.api_client import fetch_available_capital, fetch_trading_mode
 from signal_engine.config import settings
 from signal_engine.db import fetch_last_entry_trade, set_trade_mode
-from signal_engine.listener import start_listener
+from signal_engine.listener import drain_inflight, start_listener
 from signal_engine.logger_setup import set_mode as set_log_mode
 from signal_engine.models import Direction
 from signal_engine.pipeline import service, single_source
@@ -921,6 +921,80 @@ def start_engine(risk_engine, tracker, handle_message, dispatch_signal=None) -> 
         sys.exit(0)
 
 
+#: A mode read that fails (OpenAlgo still starting, a blip) is retried before startup gives up.
+_MODE_RETRY_ATTEMPTS = 5
+_MODE_RETRY_SPACING_S = 2.0
+#: Total wait for order pipelines still running when the engine shuts down.
+_SHUTDOWN_DRAIN_S = 20
+
+
+async def _confirm_trading_mode():
+    """(mode_str, is_analyze) once OpenAlgo gives a definite live or analyze answer, else None.
+
+    fetch_trading_mode returns ("unknown", False) on any error. Reading only the boolean made
+    that mean live. Never default to live: an unreadable mode aborts startup instead.
+    """
+    mode_str, is_analyze = await fetch_trading_mode()
+    attempts = 0
+    while mode_str not in ("live", "analyze") and attempts < _MODE_RETRY_ATTEMPTS:
+        attempts += 1
+        logger.warning(
+            f"OpenAlgo trading mode not confirmed (got {mode_str!r}); "
+            f"retry {attempts}/{_MODE_RETRY_ATTEMPTS}"
+        )
+        await asyncio.sleep(_MODE_RETRY_SPACING_S)
+        mode_str, is_analyze = await fetch_trading_mode()
+    if mode_str in ("live", "analyze"):
+        return mode_str, is_analyze
+    logger.critical(
+        "Startup aborted: could not confirm whether OpenAlgo is in live or sandbox mode "
+        f"after {_MODE_RETRY_ATTEMPTS} retries; not defaulting to live"
+    )
+    await notifier.notify_startup_result(
+        all_passed=False,
+        summary=(
+            "Engine did not start: could not confirm whether OpenAlgo is in live or sandbox "
+            "mode. Check that OpenAlgo is running, then start the engine again."
+        ),
+    )
+    return None
+
+
+def _background_task_ended(name: str, alert_text: str, stopping: asyncio.Event):
+    """Done-callback for a task that must run for the whole session.
+
+    An exception, or a normal end while the engine is not stopping, is logged at CRITICAL and
+    alerted. A cancellation, or a normal end during shutdown, is silent.
+    """
+
+    def _callback(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None and stopping.is_set():
+            return
+        if exc is not None:
+            logger.opt(exception=exc).critical(f"{name} task stopped with an error: {exc}")
+        else:
+            logger.critical(f"{name} task ended while the engine is still running")
+        alert = asyncio.get_running_loop().create_task(_alert_task_ended(name, alert_text))
+        _alert_tasks.add(alert)
+        alert.add_done_callback(_alert_tasks.discard)
+
+    return _callback
+
+
+#: Strong references to in-flight alert tasks, so none is garbage-collected mid-send.
+_alert_tasks: set = set()
+
+
+async def _alert_task_ended(name: str, alert_text: str) -> None:
+    try:
+        await asyncio.wait_for(notifier.notify_event("engine_task_stopped", alert_text), timeout=5.0)
+    except Exception:  # noqa: BLE001
+        logger.warning(f"Could not send the alert that the {name} task stopped")
+
+
 async def _run_engine(risk_engine, tracker, handle_message, dispatch_signal=None) -> None:
     loop = asyncio.get_running_loop()
     shutdown_event = asyncio.Event()
@@ -941,7 +1015,11 @@ async def _run_engine(risk_engine, tracker, handle_message, dispatch_signal=None
         shutdown_event.set()
         return
 
-    mode_str, is_analyze = await fetch_trading_mode()
+    confirmed = await _confirm_trading_mode()
+    if confirmed is None:
+        shutdown_event.set()
+        sys.exit(1)  # non-zero: the engine did not start and must not look like a clean stop
+    mode_str, is_analyze = confirmed
     if is_analyze:
         logger.info("Trading mode: ANALYZE (sandbox capital)")
     else:
@@ -974,15 +1052,42 @@ async def _run_engine(risk_engine, tracker, handle_message, dispatch_signal=None
         startup_report, mode_label, startup_capital, _resolve_broker_name()
     )
 
+    stopping = asyncio.Event()  # set once the shutdown sequence begins
     tracker_task = asyncio.create_task(tracker.start())
+    tracker_task.add_done_callback(
+        _background_task_ended(
+            "Position tracker",
+            "Position tracker stopped unexpectedly. Restart the engine; open positions are "
+            "protected only by their broker stop-loss orders.",
+            stopping,
+        )
+    )
     time_exit_scheduler, time_exit_task = _start_time_exit_scheduler(tracker)
+    if time_exit_task is not None:
+        time_exit_task.add_done_callback(
+            _background_task_ended(
+                "Time exit scheduler",
+                "The time exit scheduler stopped unexpectedly. Restart the engine; positions "
+                "will not be squared off at the exit time and are protected only by their "
+                "broker stop-loss orders.",
+                stopping,
+            )
+        )
     runner_service = await _start_runner_service(tracker, trade_mode, dispatch_signal)
 
     try:
         await _serve_until_shutdown(handle_message, shutdown_event)
     finally:
+        stopping.set()
         if runner_service is not None:
             runner_service.cancel()
+        # New work has stopped (the listener is cancelled, the runner is cancelled). Let order
+        # pipelines already running finish BEFORE the tracker stops, and keep the tracker
+        # polling meanwhile. Runner dispatches are shielded and tracked in the same set.
+        try:
+            await drain_inflight(_SHUTDOWN_DRAIN_S)
+        except Exception:  # noqa: BLE001 - never skip the rest of the shutdown
+            logger.exception("Shutdown: waiting for in-flight order pipelines failed")
         tracker.stop()
         tracker_task.cancel()
         if time_exit_task is not None:
