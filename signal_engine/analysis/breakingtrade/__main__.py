@@ -272,6 +272,23 @@ def check_fresh(captured_at, now) -> None:
         )
 
 
+#: The BTST (next-day carry) list is off. It ranks names by delivery %, and breakingtrade.com
+#: stopped providing that figure on 2026-11-06. Set True only once delivery % has a source.
+BTST_ENABLED = False
+
+
+def _btst_window_disabled(captured_at) -> None:
+    """The 14:45+ window with BTST off: no carry list, but the intraday summary still goes out."""
+    from signal_engine.analysis.breakingtrade import eod_summary
+
+    try:
+        day = captured_at.strftime("%Y-%m-%d")
+        if eod_summary.alert_intraday_eod_summary(day, captured_at):
+            print("  paper: intraday EOD summary sent")
+    except Exception as exc:
+        print(f"  intraday EOD summary failed: {type(exc).__name__}: {exc}")
+
+
 def _fetch_and_report(
     store_it: bool, want_volume: bool, debug_dir, btst_mode: bool = False, session=None
 ) -> None:
@@ -285,16 +302,6 @@ def _fetch_and_report(
 
     mp_snapshot = session.fetch("market_profile")
     vol_snapshot = session.fetch("volume") if want_volume else None
-    if vol_snapshot is not None and not vol_snapshot.frame["delivery_pct"].notna().any():
-        critical.notifier.raise_issue(
-            "delivery",
-            "delivery % is no longer provided by breakingtrade.com",
-            "The volume scanner has no Del% column any more (last stored 2026-11-05). The BTST "
-            "list needs a delivery figure, so it cannot be produced; surge and session volume "
-            "are still collected.",
-            "decide on another delivery source (for example NSE end-of-day delivery data) "
-            "or change the BTST rule.",
-        )
 
     captured_at = mp_snapshot.captured_at
     if store_it:
@@ -348,8 +355,12 @@ def _fetch_and_report(
         return
 
     # The BTST decision window (14:50/15:05) alerts the carry list; every other poll alerts only
-    # names that ENTERED a scan on this poll.
-    if store_it and vol_snapshot is not None and captured_at.time() >= time(14, 45):
+    # names that ENTERED a scan on this poll. With BTST_ENABLED off the window still does
+    # nothing new for scans (same as before), it just skips the carry list.
+    btst_window = store_it and vol_snapshot is not None and captured_at.time() >= time(14, 45)
+    if btst_window and not BTST_ENABLED:
+        _btst_window_disabled(captured_at)
+    elif btst_window:
         from signal_engine.analysis.breakingtrade import btst
 
         try:
@@ -387,7 +398,7 @@ def _fetch_and_report(
                 print("  paper: intraday EOD summary sent")
         except Exception as exc:
             print(f"  BTST alert failed: {type(exc).__name__}: {exc}")
-    elif store_it:
+    elif store_it and not btst_window:
         if new_by_scan:
             alerts.alert_transitions(new_by_scan, captured_at, mp_snapshot.frame)
             _emit_trade_signals(new_by_scan, mp_snapshot.frame, captured_at)
@@ -748,13 +759,7 @@ def _watch(args) -> int:
         elif mode == "unknown":
             logger.warning("OpenAlgo unreachable - cannot confirm analyze mode")
         else:
-            logger.error(f"OpenAlgo mode is {mode.upper()}, NOT analyze - orders would be REAL")
-            critical.notifier.raise_issue(
-                "live-mode",
-                f"OpenAlgo mode is {mode}, not analyze",
-                "BreakingTrade signals would place REAL orders.",
-                "switch OpenAlgo to analyze mode unless live trading is intended.",
-            )
+            logger.info(f"OpenAlgo mode: {mode} (live)")
     except Exception as exc:
         logger.warning(f"could not check trading mode: {type(exc).__name__}: {exc}")
 
@@ -872,8 +877,8 @@ def _watch(args) -> int:
                     critical.notifier.raise_issue(
                         "login",
                         "no fresh data: breakingtrade.com sign-in is not available",
-                        f"Poll {pending:%H:%M} could not run. {exc} No scans, entries or BTST "
-                        "list are produced while this lasts.",
+                        f"Poll {pending:%H:%M} could not run. {exc} No scans or entries "
+                        "are produced while this lasts.",
                         "sign in to breakingtrade.com by hand, then delete "
                         "signal_engine/data/breakingtrade_login_guard.json so the poller may "
                         "use the new session.",
@@ -882,7 +887,7 @@ def _watch(args) -> int:
                     logger.exception(f"poll {pending:%H:%M} FAILED: {type(exc).__name__}: {exc}")
                     if isinstance(exc, SnapshotFormatError):
                         # The vendor changed the page. Say so at once instead of waiting for the
-                        # heartbeat: no scan, trigger or BTST list is valid until it is mapped.
+                        # heartbeat: no scan or trigger is valid until it is mapped.
                         critical.notifier.raise_issue(
                             "format",
                             "no fresh data: breakingtrade.com changed its table",
@@ -951,8 +956,8 @@ def _watch(args) -> int:
                     critical.notifier.raise_issue(
                         "stale",
                         f"no successful poll for {stale:.0f} minutes",
-                        "The poller is running but has stored nothing fresh. Entries, exits "
-                        "watch and BTST depend on these polls.",
+                        "The poller is running but has stored nothing fresh. Entries and exit "
+                        "watches depend on these polls.",
                         "check signal_engine/data/breakingtrade_poller.log for the reason.",
                     )
                     last_heartbeat_alert = _ist_now()

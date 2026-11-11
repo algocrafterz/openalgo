@@ -57,9 +57,7 @@ class TestPollerRetries:
             run.fetches += 1
             raise exc
 
-        monkeypatch.setattr(
-            "signal_engine.analysis.breakingtrade.__main__._fetch_and_report", boom
-        )
+        monkeypatch.setattr("signal_engine.analysis.breakingtrade.__main__._fetch_and_report", boom)
         run.run()
         return run
 
@@ -151,3 +149,13 @@ class TestFormatFailureKeepsBrowser:
         run.run()
         # Only the shutdown close; no mid-day teardown that would force another sign-in.
         assert closed == [1]
+
+
+def test_refusal_is_read_only_and_matches_reserve(tmp_path):
+    path = str(tmp_path / "guard.json")
+    start = datetime(2026, 11, 11, 10, 0)
+    assert login_guard.refusal(start, path) is None
+    assert login_guard.refusal(start, path) is None  # asking claims nothing
+    assert login_guard.reserve_attempt(start, path) is None
+    assert "under 30 minutes" in login_guard.refusal(start + timedelta(minutes=5), path)
+    assert login_guard.refusal(start + timedelta(minutes=31), path) is None

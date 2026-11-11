@@ -72,37 +72,57 @@ class _Locked:
             self._fh.close()
 
 
+def _refusal(state: dict, attempts: list, now: datetime, path: str) -> str | None:
+    today = now.date().isoformat()
+    if state.get("failed_day") == today:
+        return (
+            "A sign-in to breakingtrade.com was rejected earlier today. No more sign-in "
+            "attempts will be made today, to avoid locking the account. Check the "
+            "credentials, sign in by hand, then delete "
+            f"{path} to allow attempts again."
+        )
+    if len(attempts) >= MAX_PER_DAY:
+        return f"Already signed in {MAX_PER_DAY} times today; no more attempts today."
+    if attempts and now - attempts[-1] < timedelta(minutes=MIN_GAP_MINUTES):
+        return (
+            f"Last sign-in attempt was under {MIN_GAP_MINUTES} minutes ago; "
+            "waiting before trying again."
+        )
+    return None
+
+
+def _today_state(path: str, now: datetime) -> tuple:
+    today = now.date().isoformat()
+    state = _load(path)
+    if state.get("day") != today:
+        if state.get("failed_day") == today:
+            state = {"day": today, "failed_day": today, "attempts": []}
+        else:
+            state = {"day": today, "attempts": []}
+    attempts = [datetime.fromisoformat(a) for a in state.get("attempts", [])]
+    return state, attempts
+
+
+def refusal(now: datetime | None = None, path: str = STATE_PATH) -> str | None:
+    """Would a sign-in be refused right now? Read-only: claims nothing, so the caller can skip
+    starting a browser that could not sign in anyway."""
+    now = now or _now()
+    with _Locked(path):
+        state, attempts = _today_state(path, now)
+        return _refusal(state, attempts, now, path)
+
+
 def reserve_attempt(now: datetime | None = None, path: str = STATE_PATH) -> str | None:
     """Claim the right to sign in. Returns None when allowed, else the reason it is refused.
 
     A granted claim is recorded before the sign-in starts, so a crash mid-attempt still counts.
     """
     now = now or _now()
-    today = now.date().isoformat()
     with _Locked(path):
-        state = _load(path)
-        if state.get("day") != today:
-            if state.get("failed_day") == today:
-                state = {"day": today, "failed_day": today, "attempts": []}
-            else:
-                state = {"day": today, "attempts": []}
-        attempts = [datetime.fromisoformat(a) for a in state.get("attempts", [])]
-
-        if state.get("failed_day") == today:
-            return (
-                "A sign-in to breakingtrade.com was rejected earlier today. No more sign-in "
-                "attempts will be made today, to avoid locking the account. Check the "
-                "credentials, sign in by hand, then delete "
-                f"{path} to allow attempts again."
-            )
-        if len(attempts) >= MAX_PER_DAY:
-            return f"Already signed in {MAX_PER_DAY} times today; no more attempts today."
-        if attempts and now - attempts[-1] < timedelta(minutes=MIN_GAP_MINUTES):
-            return (
-                f"Last sign-in attempt was under {MIN_GAP_MINUTES} minutes ago; "
-                "waiting before trying again."
-            )
-
+        state, attempts = _today_state(path, now)
+        reason = _refusal(state, attempts, now, path)
+        if reason:
+            return reason
         attempts.append(now)
         state["attempts"] = [a.isoformat() for a in attempts]
         _save(path, state)

@@ -201,3 +201,25 @@ def test_volume_fetch_uses_api(monkeypatch):
     FakeApi.volume_rows = lambda self: _volume_rows()
     snap = session.fetch("volume")
     assert session.sources["volume"] == "api" and snap.kind == "volume"
+
+
+def test_signed_out_with_guard_refusing_does_not_start_a_browser(monkeypatch):
+    from signal_engine.analysis.breakingtrade import login_guard
+
+    session = _session(monkeypatch, error=api_scan.ApiSignedOut("x"))
+    monkeypatch.setattr(login_guard, "refusal", lambda: "Already signed in 3 times today")
+    monkeypatch.setattr(
+        session, "_ensure_browser", lambda: pytest.fail("no browser when sign-in is refused")
+    )
+    with pytest.raises(fetcher.LoginBlocked):
+        session.fetch("market_profile")
+
+
+def test_signed_out_with_guard_open_falls_back_to_browser(monkeypatch):
+    from signal_engine.analysis.breakingtrade import login_guard
+
+    session = _session(monkeypatch, error=api_scan.ApiSignedOut("x"))
+    monkeypatch.setattr(login_guard, "refusal", lambda: None)
+    reached = []
+    monkeypatch.setattr(session, "_fetch_once", lambda *_a, **_k: reached.append(1) or "snap")
+    assert session.fetch("market_profile") == "snap" and reached

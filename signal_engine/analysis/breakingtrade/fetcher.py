@@ -596,6 +596,13 @@ class ScannerSession:
             self.api_notes[scanner] = self.api_note
             if snapshot is not None:
                 return snapshot
+            if self.api_note and self.api_note.startswith("session signed out"):
+                # The vendor says the session is gone. If the guard would refuse a sign-in,
+                # starting a browser that cannot sign in is wasted work and another page load
+                # against the site, so stop here with the reason.
+                blocked = login_guard.refusal()
+                if blocked:
+                    raise LoginBlocked(blocked)
         last_error = None
         for attempt in range(attempts):
             try:
