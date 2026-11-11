@@ -174,22 +174,30 @@ wait_for_network() {
 # Killing the uv wrapper PID leaves the actual python3 process running as an orphan.
 # We must also kill by matching the project .venv path — specific enough to never
 # match unrelated Python processes on this machine.
+# True while the signal_engine process is alive (its uv wrapper from the PID file, or the python
+# it spawned, which survives the wrapper).
+signal_engine_running() {
+    local pid
+    pid=$(sed -n '2p' "$PID_FILE" 2>/dev/null || true)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+    pgrep -f "$PROJECT_DIR/.venv/bin/python3 -m signal_engine.main" >/dev/null 2>&1
+}
+
 kill_from_pidfile() {
     local venv_python="$PROJECT_DIR/.venv/bin/python3"
 
+    # Stop order: signal_engine first, app.py second. The engine's shutdown drain finishes the
+    # orders still in flight THROUGH OpenAlgo, and app.py exits within about 2 s of its TERM, so
+    # TERM to both at once leaves the drain talking to a server that is already gone.
     if [ -f "$PID_FILE" ]; then
-        local old_app old_signal
-        old_app=$(sed -n '1p' "$PID_FILE")
+        local old_signal
         old_signal=$(sed -n '2p' "$PID_FILE")
 
         if [ -n "$old_signal" ] && kill -0 "$old_signal" 2>/dev/null; then
             log "Killing signal_engine uv wrapper (PID $old_signal)..."
             kill "$old_signal" 2>/dev/null || true
-        fi
-
-        if [ -n "$old_app" ] && kill -0 "$old_app" 2>/dev/null; then
-            log "Killing app.py uv wrapper (PID $old_app)..."
-            kill "$old_app" 2>/dev/null || true
         fi
     fi
 
@@ -203,9 +211,39 @@ kill_from_pidfile() {
     # entrypoint this script itself starts instead.
     log "Killing Python processes (venv)..."
     pkill -TERM -f "$venv_python -m signal_engine.main" 2>/dev/null || true
-    pkill -TERM -f "$venv_python app.py" 2>/dev/null || true
 
-    sleep 2
+    # signal_engine finishes its own shutdown after TERM (it drains orders still in flight, then
+    # closes its connections), which takes longer than 2 s. A -9 in the middle of that leaves an
+    # order at the broker with nothing tracking it. Poll every 0.5 s for up to 30 s and stop
+    # waiting as soon as it has exited. When it is not running at all, this loop ends at once.
+    local waited=0
+    while [ "$waited" -lt 60 ]; do
+        if ! signal_engine_running; then
+            break
+        fi
+        sleep 0.5
+        waited=$((waited + 1))
+    done
+    if [ "$waited" -ge 60 ]; then
+        log "signal_engine still running 30s after TERM; forcing it down."
+    fi
+
+    # Now app.py. It needs only a short wait (2 s) before the -9 stage.
+    if [ -f "$PID_FILE" ]; then
+        local old_app
+        old_app=$(sed -n '1p' "$PID_FILE")
+
+        if [ -n "$old_app" ] && kill -0 "$old_app" 2>/dev/null; then
+            log "Killing app.py uv wrapper (PID $old_app)..."
+            kill "$old_app" 2>/dev/null || true
+        fi
+    fi
+    pkill -TERM -f "$venv_python app.py" 2>/dev/null || true
+    local app_waited=0
+    while [ "$app_waited" -lt 4 ]; do
+        sleep 0.5
+        app_waited=$((app_waited + 1))
+    done
 
     # Force-kill anything still alive
     if [ -f "$PID_FILE" ]; then

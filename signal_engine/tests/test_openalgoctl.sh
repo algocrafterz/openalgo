@@ -93,6 +93,74 @@ check "gives up and refuses when still held after the wait" \
     "$(_try_acquire "$lock_long" 1)" ""
 wait "$holder" 2>/dev/null
 
+# --- kill_from_pidfile: signal_engine gets time to finish before the -9 -------------------------
+# Regression guard for finding I-05: TERM, a fixed 2 s sleep, then `pkill -9`, which cut the engine
+# off in the middle of its own shutdown (an order in flight is then at the broker with nothing
+# tracking it). Every process command is replaced by a function inside a subshell, so this test
+# never signals a real process: `kill`, `pkill`, `pgrep` and `sleep` below are stubs.
+echo "kill_from_pidfile: stop grace for signal_engine"
+
+_stop_run() {
+    # $1 = number of pgrep polls during which signal_engine still reports as running
+    (
+        PID_FILE="$TMP/no_such.pid"
+        PROJECT_DIR="$TMP/project"
+        ACTIONS="$TMP/actions.$RANDOM"
+        : > "$ACTIONS"
+        POLLS=0
+        STILL_RUNNING_FOR="$1"
+        kill() { echo "kill $*" >> "$ACTIONS"; return 0; }
+        # A `pkill -9` on the engine only matters when it is still running at that moment.
+        pkill() {
+            # Record every TERM with whether the engine was still reported running at that moment.
+            if [ "$1" = "-TERM" ]; then
+                local who=app; [[ "$*" == *signal_engine.main* ]] && who=engine
+                local alive=no; [ "$POLLS" -lt "$STILL_RUNNING_FOR" ] && alive=yes
+                echo "term_$who engine_alive=$alive" >> "$ACTIONS"
+            fi
+            if [ "$1" = "-9" ] && [[ "$*" == *signal_engine.main* ]] \
+                && [ "$POLLS" -lt "$STILL_RUNNING_FOR" ]; then
+                echo "killed_live" >> "$ACTIONS"
+            fi
+            return 0
+        }
+        pgrep() {
+            POLLS=$((POLLS + 1))
+            [ "$POLLS" -le "$STILL_RUNNING_FOR" ]
+        }
+        sleep() { echo "sleep $*" >> "$ACTIONS"; }
+        kill_from_pidfile
+        echo "sleeps=$(grep -c '^sleep' "$ACTIONS") hard_kills=$(grep -c '^killed_live' "$ACTIONS")"
+        grep '^term_' "$ACTIONS" > "$TMP/terms.last"
+    )
+}
+
+# Exits after ~3 s: waited for it, no force-kill of the engine.
+out="$(_stop_run 6)"
+check "engine that exits on TERM is not force-killed"        "${out##*hard_kills=}" "0"
+check "waits in 0.5 s steps while the engine is running"    "$([ "${out%% hard_kills*}" != "sleeps=0" ] && echo yes)" "yes"
+
+# Never exits: the full 30 s (60 half-second polls) pass before the -9.
+out="$(_stop_run 100000)"
+# 60 polls for the engine, then the 4 polls (2 s) app.py is given after its own TERM.
+check "engine that ignores TERM waits the full 30 s"       "${out%% hard_kills*}" "sleeps=64"
+check "engine that ignores TERM is force-killed after it"  "${out##*hard_kills=}" "1"
+
+# Already gone at the first poll: still waits the old 2 s floor for app.py, then continues.
+out="$(_stop_run 0)"
+check "keeps the old 2 s wait when the engine is already gone" "${out%% hard_kills*}" "sleeps=4"
+
+# Stop order: the engine's shutdown drain finishes its in-flight orders through OpenAlgo, so
+# app.py gets TERM only after the engine has exited.
+_stop_run 6 > /dev/null
+check "engine is sent TERM first, app.py second" \
+    "$(sed 's/ engine_alive=.*//' "$TMP/terms.last" | tr '\n' ' ')" "term_engine term_app "
+check "app.py is not sent TERM while the engine still runs" \
+    "$(grep '^term_app' "$TMP/terms.last")" "term_app engine_alive=no"
+_stop_run 0 > /dev/null
+check "app.py is sent TERM at once when the engine is already gone" \
+    "$(sed 's/ engine_alive=.*//' "$TMP/terms.last" | tr '\n' ' ')" "term_engine term_app "
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]
