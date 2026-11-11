@@ -70,15 +70,14 @@ def prune_database(
     conn = sqlite3.connect(path, timeout=30)
     try:
         existing = {
-            row[0] for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
         for table in _PRUNABLE:
             if table not in existing:
                 continue
             cur = conn.execute(
-                f"DELETE FROM {table} WHERE date(captured_at) < ?", (cutoff,)  # noqa: S608
+                f"DELETE FROM {table} WHERE date(captured_at) < ?",
+                (cutoff,),  # noqa: S608
             )
             deleted[table] = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         conn.commit()

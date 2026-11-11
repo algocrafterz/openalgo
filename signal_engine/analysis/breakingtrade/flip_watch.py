@@ -98,7 +98,9 @@ def _already_warned(symbol: str, since: str) -> bool:
     return row is not None
 
 
-def _alert_flip(symbol: str, pos: dict, open_type_dir: str, tail: str, captured_at: datetime) -> None:
+def _alert_flip(
+    symbol: str, pos: dict, open_type_dir: str, tail: str, captured_at: datetime
+) -> None:
     entry_ref = alerts.find_last_alert(symbol, "trade_signal", before=captured_at)
     was_dir = _EXPECTED_DIR[pos["direction"]]
     was_tail = _EXPECTED_TAIL[pos["direction"]]

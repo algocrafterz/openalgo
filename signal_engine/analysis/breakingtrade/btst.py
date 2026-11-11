@@ -158,10 +158,16 @@ def candidates(
     # and use whichever the vendor has actually published more of, K preferred on a tie since it
     # carries less look-ahead - not a relaxation of what counts as a "ramp", just using whichever
     # data genuinely exists yet instead of scoring a column that is mostly absent.
-    exec_columns = [f"vol_{letter}" for letter in volume_shapes.EXECUTABLE_LETTERS
-                    if f"vol_{letter}" in shaped.columns]
-    late_columns = [f"vol_{letter}" for letter in volume_shapes.LATE_LETTERS
-                    if f"vol_{letter}" in shaped.columns]
+    exec_columns = [
+        f"vol_{letter}"
+        for letter in volume_shapes.EXECUTABLE_LETTERS
+        if f"vol_{letter}" in shaped.columns
+    ]
+    late_columns = [
+        f"vol_{letter}"
+        for letter in volume_shapes.LATE_LETTERS
+        if f"vol_{letter}" in shaped.columns
+    ]
     exec_coverage = shaped[exec_columns].notna().any(axis=1).mean() if exec_columns else 0.0
     late_coverage = shaped[late_columns].notna().any(axis=1).mean() if late_columns else 0.0
 
@@ -171,7 +177,9 @@ def candidates(
         ramp_column, ramp_letters = "closing_ramp", volume_shapes.LATE_LETTERS
     else:
         ramp_column = "closing_ramp_executable" if executable else "closing_ramp"
-        ramp_letters = volume_shapes.EXECUTABLE_LETTERS if executable else volume_shapes.LATE_LETTERS
+        ramp_letters = (
+            volume_shapes.EXECUTABLE_LETTERS if executable else volume_shapes.LATE_LETTERS
+        )
     required = [f"vol_{letter}" for letter in ramp_letters if f"vol_{letter}" in shaped.columns]
 
     # Only judge names carrying the data the judgement needs - scoring a name whose sessions are

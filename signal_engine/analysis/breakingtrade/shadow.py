@@ -42,7 +42,9 @@ def summarise(trades: list, tags: dict, cost_of: Callable[[dict], float]) -> dic
         groups["strategy"].setdefault(trade["strategy"], []).append(row)
         groups["range_integrity"].setdefault(flag_name, []).append(row)
         groups["scan"].setdefault(scan or "unknown", []).append(row)
-    return {key: [_stats(name, rows) for name, rows in sorted(by.items())] for key, by in groups.items()}
+    return {
+        key: [_stats(name, rows) for name, rows in sorted(by.items())] for key, by in groups.items()
+    }
 
 
 def _stats(name: str, rows: list) -> dict:
@@ -106,8 +108,10 @@ def _print(title: str, rows: list) -> None:
     for r in rows:
         pf = f"{r['profit_factor']:.2f}" if r["profit_factor"] is not None else "-"
         exp_r = f"{r['exp_r']:+.3f}" if r["exp_r"] is not None else "-"
-        print(f"  {r['group']:32} {r['trades']:>6} {r['net']:>10,.0f} "
-              f"{100 * r['win_rate']:>5.0f}% {pf:>6} {exp_r:>7}")
+        print(
+            f"  {r['group']:32} {r['trades']:>6} {r['net']:>10,.0f} "
+            f"{100 * r['win_rate']:>5.0f}% {pf:>6} {exp_r:>7}"
+        )
 
 
 def main() -> int:
@@ -118,8 +122,10 @@ def main() -> int:
     args = parser.parse_args()
     trades = paper_trades(args.since, ist_today())
     rows = summarise(trades, signal_tags(args.since), cost_model(args.broker, args.slippage_bps))
-    print(f"BreakingTrade paper trades since {args.since}: {len(trades)} "
-          f"(net of {args.broker} charges and {args.slippage_bps:g} bps slippage per side)")
+    print(
+        f"BreakingTrade paper trades since {args.since}: {len(trades)} "
+        f"(net of {args.broker} charges and {args.slippage_bps:g} bps slippage per side)"
+    )
     _print("By strategy", rows["strategy"])
     _print("By range-integrity flag (signal recorded it from 2026-10-28)", rows["range_integrity"])
     _print("By scan", rows["scan"])

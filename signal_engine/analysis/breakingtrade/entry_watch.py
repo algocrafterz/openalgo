@@ -63,8 +63,7 @@ def _already_confirmed(symbol: str, since: str, kind: str = "trade_signal") -> b
     """
     with alerts._connect() as conn:
         row = conn.execute(
-            f"SELECT 1 FROM alerts WHERE kind = ? AND symbol = ? "
-            f"AND {alerts.SINCE_CLAUSE} LIMIT 1",
+            f"SELECT 1 FROM alerts WHERE kind = ? AND symbol = ? AND {alerts.SINCE_CLAUSE} LIMIT 1",
             (kind, symbol, since),
         ).fetchone()
     return row is not None

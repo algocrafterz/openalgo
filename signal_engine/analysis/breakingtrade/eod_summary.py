@@ -231,9 +231,22 @@ def btst_metrics(settled: list, strategy_capital: float) -> dict:
     after costs it is not a win.
     """
     if not settled:
-        return {"count": 0, "wins": 0, "losses": 0, "hit_rate": 0.0, "net_pct": 0.0,
-                "net_rupees": 0.0, "per_position": 0.0, "deployed": 0.0, "avg_win": None,
-                "avg_loss": None, "payoff": None, "best": None, "worst": None, "rows": []}
+        return {
+            "count": 0,
+            "wins": 0,
+            "losses": 0,
+            "hit_rate": 0.0,
+            "net_pct": 0.0,
+            "net_rupees": 0.0,
+            "per_position": 0.0,
+            "deployed": 0.0,
+            "avg_win": None,
+            "avg_loss": None,
+            "payoff": None,
+            "best": None,
+            "worst": None,
+            "rows": [],
+        }
 
     per_position = strategy_capital / len(settled)
     rows = [dict(t, rupees=t["pct"] / 100.0 * per_position) for t in settled]
@@ -321,9 +334,13 @@ def alert_btst_eod_summary(day: str) -> bool:
     wins = [r for r in m["rows"] if r["pct"] > 0]
     losses = [r for r in m["rows"] if r["pct"] <= 0]
     if wins:
-        lines += ["", f"WINNERS ({len(wins)})"] + [_btst_row(t) for t in sorted(wins, key=lambda t: -t["pct"])]
+        lines += ["", f"WINNERS ({len(wins)})"] + [
+            _btst_row(t) for t in sorted(wins, key=lambda t: -t["pct"])
+        ]
     if losses:
-        lines += ["", f"LOSERS ({len(losses)})"] + [_btst_row(t) for t in sorted(losses, key=lambda t: t["pct"])]
+        lines += ["", f"LOSERS ({len(losses)})"] + [
+            _btst_row(t) for t in sorted(losses, key=lambda t: t["pct"])
+        ]
     lines += [
         "",
         "Equal-weight basket, one position per stock. LONG only, bought on the recommended "
@@ -334,7 +351,11 @@ def alert_btst_eod_summary(day: str) -> bool:
 
     delivered, message_id = alerts.send(message, "btst", monospace=True)
     alerts.record(
-        "eod_summary", message, scan="BTST", deliver=False, delivered=delivered,
+        "eod_summary",
+        message,
+        scan="BTST",
+        deliver=False,
+        delivered=delivered,
         message_id=message_id,
     )
     return True

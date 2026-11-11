@@ -112,6 +112,7 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
         if name not in existing:
             conn.execute(f"ALTER TABLE alerts ADD COLUMN {name} {coltype}")
 
+
 # Long vendor scan names are unreadable in a phone notification. A trader needs to know which
 # setup fired, not its full title.
 _SHORT_SCAN = {
@@ -154,6 +155,7 @@ def scan_reason(scan_name: str) -> str:
     one (a vendor scan added to scans.py without a matching entry here shouldn't crash the
     poller - just read less helpfully until _SCAN_REASON is updated)."""
     return _SCAN_REASON.get(scan_name, "setup matched (reason not documented yet)")
+
 
 #: (group, phase) pairs already warned about — one warning per DESTINATION, not one for the
 #: whole module. See send().
@@ -238,7 +240,7 @@ _PHASE_TAG = {"live": "[LIVE] ", "analyze": "[PAPER] "}
 
 
 def _current_phase() -> str:
-    """"analyze" or "live", from OpenAlgo's live analyze/live state, cached briefly.
+    """ "analyze" or "live", from OpenAlgo's live analyze/live state, cached briefly.
 
     Defaults to "analyze" - the lower-stakes destination - whenever OpenAlgo can't be reached,
     so a network hiccup routes a message to the paper channel rather than the live one. This
@@ -576,8 +578,7 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
     # three pipe-delimited sections in the same order in both channels, so a trader scanning
     # either one always finds "how many" in the same place before reading further.
     lines = [
-        f"BREAKINGTRADE WATCHLIST {captured_at:%H:%M} | {count} new | "
-        "no action, not a trade signal"
+        f"BREAKINGTRADE WATCHLIST {captured_at:%H:%M} | {count} new | no action, not a trade signal"
     ]
     lines += [
         f"{side:<5} {sym:<{width}} {px:>9} - {reason} ({tag})"
@@ -635,9 +636,7 @@ def alert_btst(watchlist, captured_at: datetime) -> int:
 
     width = max(len(str(r.symbol)) for r in watchlist.itertuples())
     # Header shape matches alert_transitions() above: "LABEL timestamp | N noun | context".
-    lines = [
-        f"BTST {captured_at:%d-%b}{revised} | {len(watchlist)} names | BUY CNC before 15:15"
-    ]
+    lines = [f"BTST {captured_at:%d-%b}{revised} | {len(watchlist)} names | BUY CNC before 15:15"]
     for row in watchlist.itertuples():
         delivery = (
             f"del{row.delivery_pct * 100:.0f}" if row.delivery_pct == row.delivery_pct else "del-"
@@ -745,14 +744,18 @@ def build_trade_signal_message(plan, strategy: str = "BREAKINGTRADE", scan_name:
         # R:R measures the TP on the line above - the one the engine actually trades. It
         # used to measure to the ladder's FINAL target while TP carried the first, which
         # overstated every alert by exactly 2.00x (see TradePlan.reward_risk).
-        f"R:R: 1:{getattr(plan, 'reward_risk', None)}" if getattr(plan, "reward_risk", None) else "",
+        f"R:R: 1:{getattr(plan, 'reward_risk', None)}"
+        if getattr(plan, "reward_risk", None)
+        else "",
         # The ladder, named rather than folded into R:R. It is what the plan WOULD be worth
         # if the staged exits were wired through; today they are not, so it is context for a
         # reader, never a number to size or judge the trade on.
         (
             f"Runner target (not traded yet): {plan.targets[-1]} = 1:"
             f"{getattr(plan, 'reward_risk_runner', None)}"
-        ) if getattr(plan, "reward_risk_runner", None) else "",
+        )
+        if getattr(plan, "reward_risk_runner", None)
+        else "",
         f"Time: {plan.triggered_at:%H:%M}" if plan.triggered_at else "",
     ]
     if scan_name:

@@ -140,8 +140,13 @@ def _last_level_hit(symbol: str, since: str, strategy: str) -> str | None:
 
 
 def _send_tp_hit(
-    symbol: str, direction: str, price: float, level: str, exit_qty_pct: float,
-    strategy: str, kind: str,
+    symbol: str,
+    direction: str,
+    price: float,
+    level: str,
+    exit_qty_pct: float,
+    strategy: str,
+    kind: str,
 ) -> None:
     """Canonical EXIT alert, the exact shape normalizer.py already produces for ORB's PineScript
     TP-HIT alerts (Entry/SL as 0.0 placeholders - the engine looks up the real position from its
@@ -167,8 +172,15 @@ def _send_tp_hit(
     )
     delivered, message_id = alerts.send(message, kind)
     alerts.record(
-        "tp_hit", message, symbol=symbol, direction=direction, scan=level, strategy=strategy,
-        deliver=False, delivered=delivered, message_id=message_id,
+        "tp_hit",
+        message,
+        symbol=symbol,
+        direction=direction,
+        scan=level,
+        strategy=strategy,
+        deliver=False,
+        delivered=delivered,
+        message_id=message_id,
     )
 
 
