@@ -40,6 +40,15 @@ When two changesets overlap on the same lines (so no hunk boundary separates the
 6. Re-check `git log -1` before finishing; other sessions commit while you work.
 7. When the user has approved the exact split, do not re-verify it: stage the explicit list for commit 1, confirm the staged diff equals the prepared patch, commit, then repeat for commit 2 (reset nothing; use the separate index or `git apply --cached`). Report hashes, files, and the untouched foreign paths.
 
+### Commit-everything mode ("commit all, by changeset, irrespective of session")
+
+When the user lifts the isolation (every dirty path is to go in, staging area left empty):
+
+1. Group the paths into changesets by concern, not by session: one commit per feature, fix, dependency change, skill edit and regenerated data file. Read `git diff -U0` for ambiguous files (a `pyproject.toml` change and the example that needs it are one changeset). Derive the message from the diff and say in the report that it is inferred.
+2. A foreign untracked file that a tracked in-scope file imports belongs in the same commit as its importer; committing the importer alone breaks the build. Say so in the report and offer to split.
+3. Stage by `git add -- <explicit paths>` per group, commit, and check `git diff --cached --name-only | wc -l` is 0 before the next group. At the end `git status --short` must be empty.
+4. Run targeted tests per group on literal file paths. The full-suite guard hook blocks a pytest command whose targets come from a shell variable or `$(...)`, so write each path out. Say plainly which required suites (full signal_engine, gthread) were not run.
+
 ## 2. Stage explicit paths only
 
 ```bash
