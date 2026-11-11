@@ -102,13 +102,42 @@ def _find_header_row(raw: pd.DataFrame, max_scan_rows: int = 8) -> int:
     )
 
 
+_KNOWN_OTHER_COLUMNS = {"#", "Name", "Sector", "Price", "Change%", "Change %", "Chg%", "AI"}
+
+#: Market Profile fields that are filled on essentially every row. A vendor wording change that
+#: no keyword matches turns a whole column into None without any error, which is how a silent
+#: break would look. The poor-high/low and open-type columns are sparse by nature and excluded.
+_ALWAYS_POPULATED = ("opening", "day_type", "tpo_pos", "tpo_pos_prev", "ib_pct", "price")
+_MIN_ROWS_FOR_CANARY = 20
+_MAX_EMPTY_SHARE = 0.9
+
+
+def check_populated(out: pd.DataFrame) -> None:
+    """Raise SnapshotFormatError when a normally full column came out (almost) empty."""
+    if len(out) < _MIN_ROWS_FOR_CANARY:
+        return
+    empty = [
+        column
+        for column in _ALWAYS_POPULATED
+        if column in out.columns and out[column].isna().mean() > _MAX_EMPTY_SHARE
+    ]
+    if empty:
+        raise SnapshotFormatError(
+            f"Market Profile columns parsed empty on more than {_MAX_EMPTY_SHARE:.0%} of "
+            f"{len(out)} rows: {empty}. The vendor probably changed the wording of the cells."
+        )
+
+
 def _detect_kind(columns: set) -> str:
     if MARKET_PROFILE_COLUMNS <= columns:
         return "market_profile"
     if VOLUME_COLUMNS <= columns:
         return "volume"
+    missing = sorted(MARKET_PROFILE_COLUMNS - columns)
+    unexpected = sorted(columns - MARKET_PROFILE_COLUMNS - VOLUME_COLUMNS - _KNOWN_OTHER_COLUMNS)
     raise SnapshotFormatError(
         "Unrecognized column set - not a market_profile or volume breakingtrade.com export. "
+        f"Missing market_profile columns: {missing}. Unmapped new columns: {unexpected}. "
         f"Got columns: {sorted(columns)}"
     )
 
@@ -475,6 +504,8 @@ def normalize_table(frame: pd.DataFrame, captured_at=None) -> Snapshot:
     normalized = (
         _normalize_market_profile(frame) if kind == "market_profile" else _normalize_volume(frame)
     )
+    if kind == "market_profile":
+        check_populated(normalized)
     return Snapshot(kind=kind, captured_at=captured_at, frame=enrich_sector(normalized))
 
 

@@ -753,6 +753,8 @@ def _watch(args) -> int:
     attempts_by_mark: dict = {}
     retry_not_before: dict = {}
     login_alerted = False
+    format_alerted: set = set()
+    started_at = _ist_now()
 
     try:
         while True:
@@ -836,6 +838,14 @@ def _watch(args) -> int:
                         )
                 except Exception as exc:
                     logger.exception(f"poll {pending:%H:%M} FAILED: {type(exc).__name__}: {exc}")
+                    if isinstance(exc, SnapshotFormatError) and str(exc) not in format_alerted:
+                        # The vendor changed the page. Say so at once instead of waiting for the
+                        # heartbeat: no scan, trigger or BTST list is valid until it is mapped.
+                        format_alerted.add(str(exc))
+                        alerts.alert_health(
+                            f"poll {pending:%H:%M}: the breakingtrade.com table changed shape and "
+                            f"cannot be read. No signals until the columns are mapped. {exc}"[:900]
+                        )
                     count = attempts_by_mark.get(pending, 0) + 1
                     attempts_by_mark[pending] = count
                     if count >= MAX_ATTEMPTS_PER_MARK:
@@ -857,8 +867,11 @@ def _watch(args) -> int:
 
             # Heartbeat: silence during a SCHEDULED poll window is the failure mode that cost
             # 04-Sep - silence during the 13:00-14:50 gap between windows is just the schedule.
-            if _within_poll_hours(current) and last_success is not None:
-                stale = (_ist_now() - last_success).total_seconds() / 60
+            # A poller that has never succeeded today is the worst case, not a quiet one: use its
+            # own start as the baseline so a day of failures from the first mark still alerts.
+            baseline = last_success or started_at
+            if _within_poll_hours(current):
+                stale = (_ist_now() - baseline).total_seconds() / 60
                 if stale > HEARTBEAT_STALE_MINUTES and (
                     last_heartbeat_alert is None
                     or (_ist_now() - last_heartbeat_alert).total_seconds() > 3600
