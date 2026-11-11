@@ -402,7 +402,8 @@ class ScannerSession:
         self._playwright = None
         self._context = None
         self._page = None
-        self.last_source: str | None = None
+        self.sources: dict = {}
+        self.api_notes: dict = {}
         self.api_note: str | None = None
         self.script_version: str | None = None
 
@@ -534,7 +535,7 @@ class ScannerSession:
             frame = _pick_scanner_table(self._page.evaluate(_EXTRACT_TABLES_JS))
             yield normalize_table(frame, captured_at=captured_at)
 
-    def _fetch_via_api(self) -> Snapshot | None:
+    def _fetch_via_api(self, scanner: str = "market_profile") -> Snapshot | None:
         """The Market Profile table from the vendor's JSON, or None to use the browser.
 
         None means "this path is not usable right now" and is explained in self.api_note; it
@@ -548,7 +549,9 @@ class ScannerSession:
             return None
         try:
             with api_scan.ApiSession(jsessionid) as api:
-                rows = api.market_profile_rows()
+                rows = (
+                    api.market_profile_rows() if scanner == "market_profile" else api.volume_rows()
+                )
                 sectors = api.symbol_sectors()
                 self.script_version = api.script_version
         except api_scan.ApiSignedOut:
@@ -560,12 +563,17 @@ class ScannerSession:
         if not rows:
             self.api_note = "scanner endpoint returned no rows"
             return None
-        frame = api_scan.build_market_profile_frame(rows, sectors)
+        build = (
+            api_scan.build_market_profile_frame
+            if scanner == "market_profile"
+            else api_scan.build_volume_frame
+        )
+        frame = build(rows, sectors)
         try:
             captured_at = parse_captured_at(frame) or session_stamp(_ist_now())
             return normalize_table(frame, captured_at=captured_at)
         except SnapshotFormatError as exc:
-            _dump_raw_frame(frame, "market_profile_api")
+            _dump_raw_frame(frame, f"{scanner}_api")
             self.api_note = f"scanner JSON no longer matches the expected shape: {exc}"
             return None
 
@@ -582,9 +590,10 @@ class ScannerSession:
         gets an account rate-limited or blocked. Three tries spaced 5s and 15s costs at most 20
         extra seconds against a 15-minute poll interval.
         """
-        if scanner == "market_profile" and not days_back:
-            snapshot = self._fetch_via_api()
-            self.last_source = "api" if snapshot is not None else "browser"
+        if not days_back:
+            snapshot = self._fetch_via_api(scanner)
+            self.sources[scanner] = "api" if snapshot is not None else "browser"
+            self.api_notes[scanner] = self.api_note
             if snapshot is not None:
                 return snapshot
         last_error = None

@@ -112,18 +112,27 @@ _MIN_ROWS_FOR_CANARY = 20
 _MAX_EMPTY_SHARE = 0.9
 
 
-def check_populated(out: pd.DataFrame) -> None:
-    """Raise SnapshotFormatError when a normally full column came out (almost) empty."""
+_VOLUME_ALWAYS_POPULATED = ("today_volume_m", "avg_7d_volume_m", "surge_x", "price")
+
+
+def check_populated(out: pd.DataFrame, kind: str = "market_profile") -> None:
+    """Raise SnapshotFormatError when a normally full column came out (almost) empty.
+
+    Delivery % is deliberately not in the volume list: the vendor dropped it, and that is
+    reported on its own as a critical alert rather than as a failed snapshot, so the surge and
+    session figures that are still good keep flowing.
+    """
     if len(out) < _MIN_ROWS_FOR_CANARY:
         return
+    required = _ALWAYS_POPULATED if kind == "market_profile" else _VOLUME_ALWAYS_POPULATED
     empty = [
         column
-        for column in _ALWAYS_POPULATED
+        for column in required
         if column in out.columns and out[column].isna().mean() > _MAX_EMPTY_SHARE
     ]
     if empty:
         raise SnapshotFormatError(
-            f"Market Profile columns parsed empty on more than {_MAX_EMPTY_SHARE:.0%} of "
+            f"{kind} columns parsed empty on more than {_MAX_EMPTY_SHARE:.0%} of "
             f"{len(out)} rows: {empty}. The vendor probably changed the wording of the cells."
         )
 
@@ -504,8 +513,7 @@ def normalize_table(frame: pd.DataFrame, captured_at=None) -> Snapshot:
     normalized = (
         _normalize_market_profile(frame) if kind == "market_profile" else _normalize_volume(frame)
     )
-    if kind == "market_profile":
-        check_populated(normalized)
+    check_populated(normalized, kind)
     return Snapshot(kind=kind, captured_at=captured_at, frame=enrich_sector(normalized))
 
 

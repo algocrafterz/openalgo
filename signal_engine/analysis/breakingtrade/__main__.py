@@ -30,6 +30,7 @@ from time import sleep
 
 import pandas as pd
 
+from signal_engine.analysis.breakingtrade import critical
 from signal_engine.analysis.breakingtrade.extractor import (
     DEFAULT_EXCEL_DIR,
     SnapshotFormatError,
@@ -284,6 +285,16 @@ def _fetch_and_report(
 
     mp_snapshot = session.fetch("market_profile")
     vol_snapshot = session.fetch("volume") if want_volume else None
+    if vol_snapshot is not None and not vol_snapshot.frame["delivery_pct"].notna().any():
+        critical.notifier.raise_issue(
+            "delivery",
+            "delivery % is no longer provided by breakingtrade.com",
+            "The volume scanner has no Del% column any more (last stored 2026-11-05). The BTST "
+            "list needs a delivery figure, so it cannot be produced; surge and session volume "
+            "are still collected.",
+            "decide on another delivery source (for example NSE end-of-day delivery data) "
+            "or change the BTST rule.",
+        )
 
     captured_at = mp_snapshot.captured_at
     if store_it:
@@ -738,7 +749,12 @@ def _watch(args) -> int:
             logger.warning("OpenAlgo unreachable - cannot confirm analyze mode")
         else:
             logger.error(f"OpenAlgo mode is {mode.upper()}, NOT analyze - orders would be REAL")
-            alerts.alert_health(f"mode is {mode}, NOT analyze - orders would be REAL")
+            critical.notifier.raise_issue(
+                "live-mode",
+                f"OpenAlgo mode is {mode}, not analyze",
+                "BreakingTrade signals would place REAL orders.",
+                "switch OpenAlgo to analyze mode unless live trading is intended.",
+            )
     except Exception as exc:
         logger.warning(f"could not check trading mode: {type(exc).__name__}: {exc}")
 
@@ -754,8 +770,6 @@ def _watch(args) -> int:
     done_marks = set()
     attempts_by_mark: dict = {}
     retry_not_before: dict = {}
-    login_alerted = False
-    format_alerted: set = set()
     api_alerted: set = set()
     started_at = _ist_now()
     last_keepalive = started_at
@@ -817,20 +831,24 @@ def _watch(args) -> int:
                     done_marks.add(pending)
                     logger.info(
                         f"poll {pending:%H:%M} ok in {took:.0f}s (volume={want_volume}, "
-                        f"source={session.last_source})"
+                        f"source={session.sources})"
                     )
                     last_keepalive = _ist_now()
-                    if session.last_source == "browser" and session.api_note:
-                        # The JSON path was skipped. A signed-out session is routine (the browser
-                        # signs in and the next poll is back on JSON); anything else means the
-                        # vendor changed something and the cheap path is gone.
-                        logger.warning(f"JSON path not used: {session.api_note}")
-                        if not session.api_note.startswith(("session signed out", "no saved")):
-                            if session.api_note not in api_alerted:
-                                api_alerted.add(session.api_note)
+                    for key in ("login", "format", "stale"):
+                        critical.notifier.clear(key, "polls are collecting fresh data again")
+                    for scanner, note in session.api_notes.items():
+                        if session.sources.get(scanner) != "browser" or not note:
+                            continue
+                        # The JSON path was skipped. A signed-out session is routine (the
+                        # browser signs in and the next poll is back on JSON); anything else
+                        # means the vendor changed something and the cheap path is gone.
+                        logger.warning(f"JSON path not used for {scanner}: {note}")
+                        if not note.startswith(("session signed out", "no saved")):
+                            if note not in api_alerted:
+                                api_alerted.add(note)
                                 alerts.alert_health(
-                                    f"poll {pending:%H:%M} used the slow browser path because "
-                                    f"{session.api_note}"[:600]
+                                    f"poll {pending:%H:%M} used the slow browser path for "
+                                    f"{scanner} because {note}"[:600]
                                 )
                 except StaleSnapshot as exc:
                     # Not a browser fault: keep the session (a new one would sign in again) and
@@ -851,21 +869,28 @@ def _watch(args) -> int:
                     # the browser: nothing is wrong with it.
                     logger.error(f"poll {pending:%H:%M} needs sign-in: {exc}")
                     done_marks.add(pending)
-                    if not login_alerted:
-                        login_alerted = True
-                        alerts.alert_health(
-                            f"breakingtrade.com sign-in is not available right now. {exc} "
-                            "Polls are skipped until a sign-in is allowed."
-                        )
+                    critical.notifier.raise_issue(
+                        "login",
+                        "no fresh data: breakingtrade.com sign-in is not available",
+                        f"Poll {pending:%H:%M} could not run. {exc} No scans, entries or BTST "
+                        "list are produced while this lasts.",
+                        "sign in to breakingtrade.com by hand, then delete "
+                        "signal_engine/data/breakingtrade_login_guard.json so the poller may "
+                        "use the new session.",
+                    )
                 except Exception as exc:
                     logger.exception(f"poll {pending:%H:%M} FAILED: {type(exc).__name__}: {exc}")
-                    if isinstance(exc, SnapshotFormatError) and str(exc) not in format_alerted:
+                    if isinstance(exc, SnapshotFormatError):
                         # The vendor changed the page. Say so at once instead of waiting for the
                         # heartbeat: no scan, trigger or BTST list is valid until it is mapped.
-                        format_alerted.add(str(exc))
-                        alerts.alert_health(
-                            f"poll {pending:%H:%M}: the breakingtrade.com table changed shape and "
-                            f"cannot be read. No signals until the columns are mapped. {exc}"[:900]
+                        critical.notifier.raise_issue(
+                            "format",
+                            "no fresh data: breakingtrade.com changed its table",
+                            f"Poll {pending:%H:%M} could not be read, so nothing was stored. {exc}"[
+                                :700
+                            ],
+                            "the column or cell mapping needs updating in "
+                            "signal_engine/analysis/breakingtrade (extractor.py / api_scan.py).",
                         )
                     count = attempts_by_mark.get(pending, 0) + 1
                     attempts_by_mark[pending] = count
@@ -923,7 +948,13 @@ def _watch(args) -> int:
                     or (_ist_now() - last_heartbeat_alert).total_seconds() > 3600
                 ):
                     logger.error(f"no successful poll for {stale:.0f} minutes")
-                    alerts.alert_health(f"no successful poll for {stale:.0f} minutes")
+                    critical.notifier.raise_issue(
+                        "stale",
+                        f"no successful poll for {stale:.0f} minutes",
+                        "The poller is running but has stored nothing fresh. Entries, exits "
+                        "watch and BTST depend on these polls.",
+                        "check signal_engine/data/breakingtrade_poller.log for the reason.",
+                    )
                     last_heartbeat_alert = _ist_now()
 
             sleep(20)

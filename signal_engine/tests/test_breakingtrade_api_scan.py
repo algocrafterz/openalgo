@@ -158,4 +158,46 @@ def test_fetch_prefers_api_and_skips_the_browser(monkeypatch):
         session, "_fetch_once", lambda *_a, **_k: pytest.fail("browser must not be used")
     )
     snap = session.fetch("market_profile")
-    assert session.last_source == "api" and len(snap.frame) == len(_rows())
+    assert session.sources["market_profile"] == "api" and len(snap.frame) == len(_rows())
+
+
+_VOLUME_FIXTURE = os.path.join(
+    os.path.dirname(__file__), "fixtures", "breakingtrade_volume_api_2026_11_11.json"
+)
+
+
+def _volume_rows() -> list:
+    with open(_VOLUME_FIXTURE, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def test_volume_rows_normalize_with_session_factors_and_no_delivery():
+    snap = normalize_table(api_scan.build_volume_frame(_volume_rows()))
+    out = snap.frame
+    assert snap.kind == "volume" and len(out) == len(_volume_rows())
+    first = _volume_rows()[0]["otherInfo"]
+    assert out["surge_x"].iloc[0] == pytest.approx(first["IntradaySurge"]["factor"])
+    assert out["today_volume_m"].iloc[0] == pytest.approx(first["Day_Volume"] / 1e6)
+    assert out["vol_a"].iloc[0] == pytest.approx(first["VolumeFactor"]["A"])
+    assert out["vol_m"].isna().all()  # a session not yet traded is empty, not zero
+    assert out["delivery_pct"].isna().all()
+
+
+def test_volume_with_emptied_surge_is_refused():
+    rows = [{**r, "otherInfo": {**r["otherInfo"], "IntradaySurge": None}} for r in _volume_rows()]
+    rows = rows * 2  # enough rows for the canary
+    from signal_engine.analysis.breakingtrade.extractor import SnapshotFormatError
+
+    with pytest.raises(SnapshotFormatError, match="surge_x"):
+        normalize_table(api_scan.build_volume_frame(rows))
+
+
+def test_volume_fetch_uses_api(monkeypatch):
+    session = _session(monkeypatch, rows=_volume_rows())
+    monkeypatch.setattr(
+        session, "_fetch_once", lambda *_a, **_k: pytest.fail("browser must not be used")
+    )
+    FakeApi = fetcher.api_scan.ApiSession
+    FakeApi.volume_rows = lambda self: _volume_rows()
+    snap = session.fetch("volume")
+    assert session.sources["volume"] == "api" and snap.kind == "volume"

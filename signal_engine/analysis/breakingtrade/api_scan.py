@@ -28,6 +28,7 @@ import pandas as pd
 
 HOME_URL = "https://breakingtrade.com/Home.jsp"
 INTRADAY_URL = "https://breakingtrade.com/liveIntradayScannerController"
+VOLUME_URL = "https://breakingtrade.com/liveVolumeScannerController"
 SYMBOLS_URL = "https://breakingtrade.com/dynamicSymbolController"
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{43}\.\d{13}")
 _SCRIPT_VERSION_RE = re.compile(r"JavaScript/[A-Za-z]+\.js\?v=(\d+)")
@@ -104,8 +105,14 @@ class ApiSession:
             return {}
 
     def market_profile_rows(self) -> list:
+        return self._rows(INTRADAY_URL)
+
+    def volume_rows(self) -> list:
+        return self._rows(VOLUME_URL)
+
+    def _rows(self, url: str) -> list:
         token = self._token()
-        reply = self._client.post(INTRADAY_URL, json=_BODY, headers={"x-bt-token": token})
+        reply = self._client.post(url, json=_BODY, headers={"x-bt-token": token})
         if reply.status_code == 403 and "login" in reply.text.lower():
             raise ApiSignedOut("The vendor reports the session is signed out")
         if reply.status_code != 200:
@@ -267,4 +274,43 @@ def build_market_profile_frame(rows: list, sectors: dict | None = None) -> pd.Da
                 "Change%": item.get("percentChange"),
             }
         )
+    return pd.DataFrame.from_records(records)
+
+
+#: Session letters in the order the page lists them (the 9:15-9:20 opening stub first).
+VOLUME_SESSIONS = ("O", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M")
+
+
+def build_volume_frame(rows: list, sectors: dict | None = None) -> pd.DataFrame:
+    """Rows of the volume JSON as the raw table the page would have drawn.
+
+    The vendor's page no longer shows delivery %, so "Del%" is left empty here on purpose: the
+    column exists so the table keeps its shape, and the poller raises a critical alert when it
+    sees the delivery figure missing. A session that has not traded yet is "-" (not zero).
+    """
+    records = []
+    for index, item in enumerate(rows):
+        if not isinstance(item, dict) or "stockName" not in item:
+            continue
+        other = item.get("otherInfo") or {}
+        surge = (other.get("IntradaySurge") or {}).get("factor")
+        factors = other.get("VolumeFactor") or {}
+        today = other.get("Day_Volume")
+        average = other.get("Average_Volume")
+        record = {
+            "#": str(index),
+            "Name": item["stockName"],
+            "Sector": (sectors or {}).get(item["stockName"]),
+            "Price": other.get("currentData"),
+            "Chg%": item.get("percentChange"),
+            "Surge x": None if surge is None else f"{surge}x",
+            "Today (M)": None if today is None else abs(float(today)) / 1.0e6,
+            "7D Avg (M)": None if average is None else abs(float(average)) / 1.0e6,
+            "Del%": None,
+            "Latest Time": item.get("time"),
+        }
+        for letter in VOLUME_SESSIONS:
+            value = factors.get(letter)
+            record[letter] = "-" if value is None else value
+        records.append(record)
     return pd.DataFrame.from_records(records)
