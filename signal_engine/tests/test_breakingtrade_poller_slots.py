@@ -57,6 +57,7 @@ class _Run:
         self.stopped_alert = MagicMock()
         self.mode_check = MagicMock(return_value=("analyze", True))
 
+        monkeypatch.setattr(poller, "_INSTANCE_LOCK_PATH", "/dev/null")
         monkeypatch.setattr(poller, "_ist_now", lambda: self.ticks[self.index])
         monkeypatch.setattr(poller.signal, "signal", lambda *a, **k: None)
         monkeypatch.setattr(poller, "_setup_logging", lambda: MagicMock())

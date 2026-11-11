@@ -31,6 +31,7 @@ from datetime import datetime, time, timedelta
 import pandas as pd
 from dotenv import dotenv_values
 
+from signal_engine.analysis.breakingtrade import login_guard
 from signal_engine.analysis.breakingtrade.extractor import (
     MARKET_PROFILE_COLUMNS,
     VOLUME_COLUMNS,
@@ -65,6 +66,10 @@ class FetchError(RuntimeError):
 
 class LoginRequired(FetchError):
     """Raised when the session has lapsed and no usable credentials are configured."""
+
+
+class LoginBlocked(LoginRequired):
+    """A sign-in is needed but login_guard refuses it (rate limit, or rejected earlier today)."""
 
 
 # The scanner is a DataTables grid that paginates to 20 of ~220 rows. Rather than clicking
@@ -354,10 +359,15 @@ class ScannerSession:
                 f"{PROFILE_DIR}."
             )
 
+        refusal = login_guard.reserve_attempt()
+        if refusal:
+            raise LoginBlocked(refusal)
+
         _attempt_login(self._page, email, password)
         self._page.goto(url, timeout=60000, wait_until="domcontentloaded")
         self._page.wait_for_timeout(self.settle_ms)
         if _is_signed_out(self._page):
+            login_guard.record_failure()
             raise LoginRequired(
                 "Sign-in did not take - the scanner page still shows a login control. Check "
                 "BREAKINGTRADE_EMAIL / BREAKINGTRADE_PASSWORD, or whether the account needs "

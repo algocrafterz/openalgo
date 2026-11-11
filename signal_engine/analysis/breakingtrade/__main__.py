@@ -20,11 +20,12 @@ manual pre-trade research step - review the output, do not wire it to auto-fire 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import os
 import signal
 import sqlite3
 import sys
-from datetime import date, time
+from datetime import date, time, timedelta
 from time import sleep
 
 import pandas as pd
@@ -241,6 +242,35 @@ def _within_poll_hours(now: time) -> bool:
     return False
 
 
+#: A snapshot whose own vendor time is older than this, during market hours, is not acted on.
+#: Measured over 470 live polls since 2026-10-15: normal lag is 0.6 min median, 1.4 min p90.
+MAX_SNAPSHOT_AGE_MINUTES = 5
+
+
+class StaleSnapshot(Exception):
+    """The vendor served a table older than MAX_SNAPSHOT_AGE_MINUTES during market hours."""
+
+
+def check_fresh(captured_at, now) -> None:
+    """Raise StaleSnapshot if `captured_at` is not from today or lags `now` too far.
+
+    Only enforced inside market hours on a trading day; outside them the scanner legitimately
+    shows the last completed session and nothing is traded from it.
+    """
+    from signal_engine.analysis.breakingtrade import fetcher
+
+    if not is_trading_day(now.date()):
+        return
+    if not (fetcher.MARKET_OPEN <= now.time() <= fetcher.MARKET_CLOSE):
+        return
+    age_minutes = (now - captured_at).total_seconds() / 60
+    if captured_at.date() != now.date() or age_minutes > MAX_SNAPSHOT_AGE_MINUTES:
+        raise StaleSnapshot(
+            f"scanner data is stamped {captured_at:%Y-%m-%d %H:%M}, "
+            f"{age_minutes:.0f} minutes old at {now:%H:%M}"
+        )
+
+
 def _fetch_and_report(
     store_it: bool, want_volume: bool, debug_dir, btst_mode: bool = False, session=None
 ) -> None:
@@ -256,6 +286,9 @@ def _fetch_and_report(
     vol_snapshot = session.fetch("volume") if want_volume else None
 
     captured_at = mp_snapshot.captured_at
+    if store_it:
+        # Nothing below (storing, scans, signals, flip warnings) may run on stale data.
+        check_fresh(captured_at, _ist_now())
     if vol_snapshot is not None:
         # ONE poll, one timestamp. Each fetch stamps itself with its own wall clock, and the
         # second scanner lands 30-60s after the first, so left alone the two halves of the
@@ -424,6 +457,12 @@ HEARTBEAT_STALE_MINUTES = 35
 # A poll may still be taken this many minutes after its scheduled mark - covers a restart that
 # lands just after a due time, so a bounced process does not silently skip the slot.
 CATCH_UP_GRACE_MINUTES = 4
+
+#: A failed mark is retried at most this many times, spaced this far apart. Every retry opens a
+#: fresh browser, and the vendor login does not survive one, so unbounded 20s retries meant a
+#: sign-in every 20s (account locked 2026-11-10).
+MAX_ATTEMPTS_PER_MARK = 2
+RETRY_GAP_SECONDS = 120
 
 # The process self-terminates at this time rather than idling forever waiting for something
 # external (a cron job, poller.sh stop, a manually-typed Ctrl-C) to notice the day is over.
@@ -626,6 +665,14 @@ def _is_bearish(scan_name: str) -> bool:
     return scan_name.rstrip().endswith(("Down", "Dn", "Trap", "Breakdown", "PDL"))
 
 
+_INSTANCE_LOCK_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "data",
+    "breakingtrade_poller.lock",
+)
+_INSTANCE_LOCK = None
+
+
 def _watch(args) -> int:
     """Poll on the documented schedule until interrupted, on ONE browser for the whole day.
 
@@ -643,6 +690,16 @@ def _watch(args) -> int:
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
 
     logger = _setup_logging()
+
+    # One poller per machine. A second instance doubles every browser start and sign-in; the
+    # PID file in poller.sh is checked before the start, so two starts racing both pass it.
+    global _INSTANCE_LOCK
+    _INSTANCE_LOCK = open(_INSTANCE_LOCK_PATH, "w")
+    try:
+        fcntl.flock(_INSTANCE_LOCK, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        logger.info("another poller instance holds the lock - exiting")
+        return 0
 
     # The Windows watchdog runs `poller.sh start` every 5 minutes, also after the auto-stop. A
     # start with nothing left on today's schedule must exit quietly: on 2026-10-20 and 10-22
@@ -691,6 +748,9 @@ def _watch(args) -> int:
     # Marks this process fetched successfully. The stored-poll check alone is not enough: the
     # vendor stamp can also fall BEFORE the mark, or the snapshot can be skipped as a duplicate.
     done_marks = set()
+    attempts_by_mark: dict = {}
+    retry_not_before: dict = {}
+    login_alerted = False
 
     try:
         while True:
@@ -726,6 +786,7 @@ def _watch(args) -> int:
                 if (
                     0 <= age <= CATCH_UP_GRACE_MINUTES
                     and mark not in done_marks
+                    and retry_not_before.get(mark, now) <= now
                     and not _mark_stored(mark, _stored_polls(now.date()))
                 ):
                     pending = mark
@@ -744,8 +805,40 @@ def _watch(args) -> int:
                     last_success = _ist_now()
                     done_marks.add(pending)
                     logger.info(f"poll {pending:%H:%M} ok in {took:.0f}s (volume={want_volume})")
+                except StaleSnapshot as exc:
+                    # Not a browser fault: keep the session (a new one would sign in again) and
+                    # retry on the same bounded schedule as any failed mark.
+                    logger.error(f"poll {pending:%H:%M} skipped, stale data: {exc}")
+                    count = attempts_by_mark.get(pending, 0) + 1
+                    attempts_by_mark[pending] = count
+                    if count >= MAX_ATTEMPTS_PER_MARK:
+                        done_marks.add(pending)
+                        alerts.alert_health(
+                            f"poll {pending:%H:%M} skipped: {exc}. No signals were sent from it."
+                        )
+                    else:
+                        retry_not_before[pending] = now + timedelta(seconds=RETRY_GAP_SECONDS)
+                except fetcher.LoginRequired as exc:
+                    # Credentials or the account state will not fix themselves by retrying, and
+                    # each retry is another sign-in against the vendor. Give the mark up and keep
+                    # the browser: nothing is wrong with it.
+                    logger.error(f"poll {pending:%H:%M} needs sign-in: {exc}")
+                    done_marks.add(pending)
+                    if not login_alerted:
+                        login_alerted = True
+                        alerts.alert_health(
+                            "breakingtrade.com sign-in is not available. Polls are paused "
+                            "until you sign in by hand. No automatic retries will be made."
+                        )
                 except Exception as exc:
                     logger.exception(f"poll {pending:%H:%M} FAILED: {type(exc).__name__}: {exc}")
+                    count = attempts_by_mark.get(pending, 0) + 1
+                    attempts_by_mark[pending] = count
+                    if count >= MAX_ATTEMPTS_PER_MARK:
+                        logger.error(f"poll {pending:%H:%M} given up after {count} attempts")
+                        done_marks.add(pending)
+                    else:
+                        retry_not_before[pending] = now + timedelta(seconds=RETRY_GAP_SECONDS)
                     # A dead browser poisons every later poll, so drop it and rebuild next time.
                     try:
                         if session is not None:
