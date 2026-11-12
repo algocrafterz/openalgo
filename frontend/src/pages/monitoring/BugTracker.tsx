@@ -1,14 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import {
-  Bug as BugIcon,
-  ChevronDown,
-  ChevronRight,
-  LayoutGrid,
-  RefreshCw,
-  Rows3,
-  Search,
-  X,
-} from 'lucide-react'
+import { Bug as BugIcon, ChevronDown, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { type Bug, type BugKind, type BugSeverity, type BugStatus, bugsApi } from '@/api/bugs'
@@ -92,11 +83,11 @@ const KIND: Record<BugKind, string> = {
 }
 
 const STATUS_TEXT: Record<BugStatus, string> = {
-  open: 'Confirmed, needs fixing',
-  in_progress: 'Confirmed, being fixed',
-  fixed: 'Fixed, awaiting proof',
+  open: 'Needs fixing',
+  in_progress: 'Being fixed',
+  fixed: 'Awaiting proof',
   verified: 'Verified',
-  wontfix: 'Closed, not fixing',
+  wontfix: 'Not fixing',
 }
 
 const STATUSES = Object.keys(STATUS_TEXT) as BugStatus[]
@@ -139,7 +130,7 @@ function Lifecycle({ bug, tone }: { bug: Bug; tone: Tone }) {
     const reason = [...bug.history].reverse().find((h) => h.status === 'wontfix')?.note
     return (
       <div className="text-[15px]">
-        <StatusBadge tone="idle">Closed, not fixing</StatusBadge>
+        <StatusBadge tone="idle">Not fixing</StatusBadge>
         {reason && <span className="ml-2 text-muted-foreground">{reason}</span>}
       </div>
     )
@@ -188,9 +179,9 @@ function Lifecycle({ bug, tone }: { bug: Bug; tone: Tone }) {
   )
 }
 
-function BugCard({ bug, expandAll }: { bug: Bug; expandAll: boolean }) {
+function BugRow({ bug, defaultOpen }: { bug: Bug; defaultOpen: boolean }) {
   const [toggled, setToggled] = useState(false)
-  const open = expandAll !== toggled
+  const open = defaultOpen !== toggled
   const risk = RISK[bug.severity]
   const tone = statusTone(bug)
   const criteria = acceptanceCriteria(bug)
@@ -198,201 +189,141 @@ function BugCard({ bug, expandAll }: { bug: Bug; expandAll: boolean }) {
   const methods = verificationMethods(bug.verification)
   const refs = evidenceRefs(bug)
   const days = bug.occurrences.length
+  const summary = bug.plain || bug.impact
   return (
-    <Card id={bug.id}>
-      <CardContent className="pt-5 space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-mono text-[15px] font-semibold">{bug.id}</span>
-          <StatusBadge tone={risk.tone}>{risk.label}</StatusBadge>
-          <StatusBadge tone={tone}>{STATUS_TEXT[bug.status]}</StatusBadge>
-          {wasReopened(bug) && <StatusBadge tone="warn">Reopened</StatusBadge>}
-          <span className="ml-auto text-[13px] text-muted-foreground">
-            {categoryLabel(categoryOfBug(bug))} | {KIND[bug.kind]}
+    <li id={bug.id} className="scroll-mt-4">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setToggled(!toggled)}
+        className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-muted/50"
+      >
+        <span className="min-w-0 flex-1 space-y-1">
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-[15px] font-semibold">{bug.id}</span>
+            <StatusBadge tone={risk.tone}>{risk.label}</StatusBadge>
+            <StatusBadge tone={tone}>{STATUS_TEXT[bug.status]}</StatusBadge>
+            {wasReopened(bug) && <StatusBadge tone="warn">Reopened</StatusBadge>}
           </span>
-        </div>
-
-        <h3 className="text-lg font-bold leading-snug">{bug.title}</h3>
-
-        {bug.impact && (
-          <p className="rounded-r-md border-l-4 border-primary/60 bg-muted/40 py-1.5 pl-3 pr-2 text-base leading-relaxed">
-            <span className="font-semibold">Trading impact: </span>
-            {bug.impact}
-          </p>
-        )}
-        {bug.plain && (
-          <p className="text-[15px] leading-relaxed text-muted-foreground">{bug.plain}</p>
-        )}
-
-        <Lifecycle bug={bug} tone={tone} />
-
-        {criteria && bug.status !== 'verified' && (
-          <p className={`rounded-md border border-l-4 px-3 py-2 text-base ${TONE_STYLE.info}`}>
-            <span className="font-bold">Acceptance criteria, how we will know it is fixed: </span>
-            <span className="text-foreground">{criteria}</span>
-          </p>
-        )}
-        {bug.status === 'verified' && (
-          <dl
-            className={`grid gap-x-6 gap-y-2 rounded-md border border-l-4 px-3 py-2 text-[15px] sm:grid-cols-2 ${TONE_STYLE.good}`}
-          >
-            <div>
-              <dt className="font-bold">Verification date</dt>
-              <dd className="text-foreground">
-                {verifiedStep?.date ? shortDate(verifiedStep.date) : 'Not recorded'}
-              </dd>
-            </div>
-            <div>
-              <dt className="font-bold">Verification method</dt>
-              <dd className="text-foreground">
-                {methods.length > 0 ? methods.join(', ') : 'Not recorded'}
-                <span className="block text-[13px] text-muted-foreground">
-                  Read from the evidence text; the tracker has no method field.
-                </span>
-              </dd>
-            </div>
-            <div className="sm:col-span-2">
-              <dt className="font-bold">Evidence</dt>
-              <dd className="text-foreground">
-                {bug.verification || 'No verification text was recorded.'}
-                {refs.length > 0 && (
-                  <span className="mt-1 block break-words font-mono text-[13px] text-muted-foreground">
-                    {refs.join('  |  ')}
-                  </span>
-                )}
-              </dd>
-            </div>
-            <div className="sm:col-span-2">
-              <dt className="font-bold">Acceptance criteria satisfied</dt>
-              <dd className="text-foreground">
-                {criteria ?? 'No acceptance criteria were recorded for this bug.'}
-              </dd>
-            </div>
-          </dl>
-        )}
-        {bug.status === 'fixed' && !criteria && (
-          <p className="text-[15px] text-muted-foreground">
-            No acceptance criteria are recorded for this fix yet. When it is verified, the evidence
-            that shows it works has to be recorded with it.
-          </p>
-        )}
-
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-muted-foreground">
-          <span>
+          <span className="block text-base font-semibold leading-snug">{bug.title}</span>
+          {summary && (
+            <span className="block text-[15px] leading-relaxed text-muted-foreground">
+              {summary}
+            </span>
+          )}
+          <span className="block text-[13px] text-muted-foreground">
             Seen {days} {days === 1 ? 'day' : 'days'}, last {shortDate(bug.last_seen)}
           </span>
-          <span>Updated {shortDate(lastUpdated(bug).slice(0, 10))}</span>
-          {bug.strategies.length > 0 && <span>Strategies: {bug.strategies.join(', ')}</span>}
-          <span>Component: {bug.area}</span>
-          {reportedFromWorkflow(bug) && (
-            <Link
-              to={`/logs/workflow?day=${bug.last_seen}`}
-              className="font-medium text-primary hover:underline"
-              title="Open the Daily Workflow day this was last seen"
-            >
-              From Daily Workflow, {shortDate(bug.last_seen)}
-            </Link>
+        </span>
+        <ChevronDown
+          className={`mt-1 h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+      {open && (
+        <div className="space-y-3 border-t bg-muted/20 px-4 py-4">
+          {bug.plain && bug.impact && (
+            <p className="rounded-r-md border-l-4 border-primary/60 bg-muted/40 py-1.5 pl-3 pr-2 text-[15px] leading-relaxed">
+              <span className="font-semibold">Trading impact: </span>
+              {bug.impact}
+            </p>
           )}
-          <span>
-            Fix commit:{' '}
-            {bug.fix_commit ? <span className="font-mono">{bug.fix_commit}</span> : 'none recorded'}
-          </span>
-        </div>
 
-        <button
-          type="button"
-          aria-expanded={open}
-          onClick={() => setToggled(!toggled)}
-          className="flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground"
-        >
-          {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-          Technical details
-        </button>
-        {open && (
-          <div className="grid gap-3 md:grid-cols-2 rounded-md border p-4">
-            <Detail label="Cause">{bug.root_cause || 'Not found yet'}</Detail>
-            <Detail label="Fix">{bug.fix || 'None yet'}</Detail>
-            <Detail label="Days seen">{bug.occurrences.join(', ')}</Detail>
-            <Detail label="Sources">
-              {readableSources(bug).length > 0 ? readableSources(bug).join('\n') : 'None recorded'}
-            </Detail>
-            {bug.evidence.length > 0 && (
+          <Lifecycle bug={bug} tone={tone} />
+
+          {criteria && bug.status !== 'verified' && (
+            <p className={`rounded-md border border-l-4 px-3 py-2 text-[15px] ${TONE_STYLE.info}`}>
+              <span className="font-bold">How we will know it is fixed: </span>
+              <span className="text-foreground">{criteria}</span>
+            </p>
+          )}
+          {bug.status === 'verified' && (
+            <div
+              className={`rounded-md border border-l-4 px-3 py-2 text-[15px] ${TONE_STYLE.good}`}
+            >
+              <div className="text-foreground">
+                <span className="font-bold">Verified</span>{' '}
+                {verifiedStep?.date ? shortDate(verifiedStep.date) : '(date not recorded)'}
+                {methods.length > 0 && <span> by {methods.join(', ')}</span>}
+              </div>
+              <div className="text-foreground">
+                {bug.verification || 'No verification text was recorded.'}
+              </div>
+              {refs.length > 0 && (
+                <div className="mt-1 break-words font-mono text-[13px] text-muted-foreground">
+                  {refs.join('  |  ')}
+                </div>
+              )}
+              {criteria && (
+                <div className="mt-1 text-foreground">
+                  <span className="font-bold">Criteria met: </span>
+                  {criteria}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-muted-foreground">
+            <span>{categoryLabel(categoryOfBug(bug))}</span>
+            <span>{KIND[bug.kind]}</span>
+            <span>Component: {bug.area}</span>
+            {bug.strategies.length > 0 && <span>Strategies: {bug.strategies.join(', ')}</span>}
+            <span>Updated {shortDate(lastUpdated(bug).slice(0, 10))}</span>
+            <span>
+              Fix commit:{' '}
+              {bug.fix_commit ? <span className="font-mono">{bug.fix_commit}</span> : 'none'}
+            </span>
+            {reportedFromWorkflow(bug) && (
+              <Link
+                to={`/logs/workflow?day=${bug.last_seen}`}
+                className="font-medium text-primary hover:underline"
+                title="Open the Daily Workflow day this was last seen"
+              >
+                From Daily Workflow, {shortDate(bug.last_seen)}
+              </Link>
+            )}
+          </div>
+
+          <details className="rounded-md border bg-card">
+            <summary className="cursor-pointer px-3 py-2 text-[13px] text-muted-foreground">
+              Technical details
+            </summary>
+            <div className="grid gap-3 border-t p-4 md:grid-cols-2">
+              <Detail label="Cause">{bug.root_cause || 'Not found yet'}</Detail>
+              <Detail label="Fix">{bug.fix || 'None yet'}</Detail>
+              <Detail label="Days seen">{bug.occurrences.join(', ')}</Detail>
+              <Detail label="Sources">
+                {readableSources(bug).length > 0
+                  ? readableSources(bug).join('\n')
+                  : 'None recorded'}
+              </Detail>
+              {bug.evidence.length > 0 && (
+                <div className="md:col-span-2">
+                  <Detail label="Evidence">
+                    <ul className="list-disc pl-5">
+                      {bug.evidence.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </Detail>
+                </div>
+              )}
               <div className="md:col-span-2">
-                <Detail label="Evidence">
-                  <ul className="list-disc pl-5">
-                    {bug.evidence.map((item) => (
-                      <li key={item}>{item}</li>
+                <Detail label="History">
+                  <ul className="space-y-1 text-muted-foreground">
+                    {bug.history.map((entry) => (
+                      <li key={`${entry.at}-${entry.status}-${entry.note}`}>
+                        {entry.at.replace('T', ' ').slice(0, 16)} - {STATUS_TEXT[entry.status]}:{' '}
+                        {entry.note}
+                      </li>
                     ))}
                   </ul>
                 </Detail>
               </div>
-            )}
-            <div className="md:col-span-2">
-              <Detail label="History">
-                <ul className="space-y-1 text-muted-foreground">
-                  {bug.history.map((entry) => (
-                    <li key={`${entry.at}-${entry.status}-${entry.note}`}>
-                      {entry.at.replace('T', ' ').slice(0, 16)} - {STATUS_TEXT[entry.status]}:{' '}
-                      {entry.note}
-                    </li>
-                  ))}
-                </ul>
-              </Detail>
             </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-function BugTable({ bugs, onOpen }: { bugs: Bug[]; onOpen: (id: string) => void }) {
-  return (
-    <div className="overflow-x-auto rounded-lg border">
-      <table className="w-full text-[15px]">
-        <thead>
-          <tr className="border-b bg-muted/30 text-[13px] text-muted-foreground">
-            <th className="px-3 py-2 text-left font-medium">ID</th>
-            <th className="px-3 py-2 text-left font-medium">Risk</th>
-            <th className="px-3 py-2 text-left font-medium">Problem</th>
-            <th className="px-3 py-2 text-left font-medium">Category</th>
-            <th className="px-3 py-2 text-left font-medium">Status</th>
-            <th className="px-3 py-2 text-left font-medium">Strategies</th>
-            <th className="px-3 py-2 text-left font-medium">Last seen</th>
-            <th className="px-3 py-2 text-left font-medium">Updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          {bugs.map((b) => (
-            <tr key={b.id} className="border-b last:border-0 align-top">
-              <td className="px-3 py-2 font-mono whitespace-nowrap">{b.id}</td>
-              <td className="px-3 py-2">
-                <StatusBadge tone={RISK[b.severity].tone}>{RISK[b.severity].label}</StatusBadge>
-              </td>
-              <td className="px-3 py-2 min-w-[18rem]">
-                <button
-                  type="button"
-                  className="text-left hover:underline"
-                  onClick={() => onOpen(b.id)}
-                >
-                  {b.title}
-                </button>
-              </td>
-              <td className="px-3 py-2 whitespace-nowrap">{categoryLabel(categoryOfBug(b))}</td>
-              <td className="px-3 py-2">
-                <StatusBadge tone={statusTone(b)}>{STATUS_TEXT[b.status]}</StatusBadge>
-              </td>
-              <td className="px-3 py-2 text-muted-foreground">
-                {b.strategies.length > 0 ? b.strategies.join(', ') : 'none'}
-              </td>
-              <td className="px-3 py-2 whitespace-nowrap">{shortDate(b.last_seen)}</td>
-              <td className="px-3 py-2 whitespace-nowrap">
-                {shortDate(lastUpdated(b).slice(0, 10))}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </details>
+        </div>
+      )}
+    </li>
   )
 }
 
@@ -461,7 +392,7 @@ function FilterSelect({
 
 export default function BugTracker() {
   const [params, setParams] = useSearchParams()
-  const [expandAll, setExpandAll] = useState(false)
+  const [showFilters, setShowFilters] = useState(false)
   const filters = readFilters(params)
   const groupParam = params.get('group')
   const group: BugGroup = GROUPS.some((g) => g.key === groupParam)
@@ -469,7 +400,6 @@ export default function BugTracker() {
     : 'todo'
   const sortParam = params.get('sort')
   const sort: BugSort = SORTS.some((s) => s.key === sortParam) ? (sortParam as BugSort) : 'severity'
-  const view = params.get('view') === 'table' ? 'table' : 'cards'
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['bug-tracker'],
@@ -501,11 +431,13 @@ export default function BugTracker() {
   }, [all])
   const shown = useMemo(() => visibleBugs(all, group, filters, sort), [all, group, filters, sort])
   const filtering = isFiltering(filters)
+  // Filters that are active stay visible; otherwise they hide behind one button.
+  const filtersOpen = showFilters || filters.severity !== 'all' || filters.highRisk
 
   const sub: Record<BugGroup, string> = {
-    todo: `${summary.highNeedsFix} high risk`,
-    proving: `${summary.highAwaitingProof} high risk, waiting for a live session`,
-    done: `${summary.verified} verified, ${summary.closedNotFixing} closed not fixing`,
+    todo: summary.highNeedsFix ? `${summary.highNeedsFix} high risk` : '',
+    proving: summary.highAwaitingProof ? `${summary.highAwaitingProof} high risk` : '',
+    done: '',
   }
   const subTone: Record<BugGroup, string> = {
     todo: summary.highNeedsFix ? TONE_TEXT.bad : '',
@@ -514,7 +446,7 @@ export default function BugTracker() {
   }
 
   return (
-    <div className="py-6 space-y-6">
+    <div className="py-6 space-y-5">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -522,8 +454,8 @@ export default function BugTracker() {
             Bug Tracker
           </h1>
           <p className="text-muted-foreground mt-1">
-            What is broken, what has been fixed, and what still needs proof. To fix one, ask Claude:
-            /resolve BUG-007, or /resolve for the next one.
+            What is broken, what is fixed, what needs proof. To fix one, ask Claude: /resolve
+            BUG-007
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
@@ -532,20 +464,21 @@ export default function BugTracker() {
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-3 gap-2 sm:gap-3">
         {GROUPS.map((g) => (
           <button
             type="button"
             key={g.key}
             aria-pressed={group === g.key}
+            title={g.hint}
             onClick={() => setParam('group', g.key, 'todo')}
-            className={`text-left rounded-lg border p-4 transition-colors ${
+            className={`text-left rounded-lg border p-3 sm:p-4 transition-colors ${
               group === g.key
                 ? 'border-primary ring-1 ring-primary bg-primary/5'
                 : 'hover:bg-muted/50'
             }`}
           >
-            <div className="text-3xl font-bold tabular-nums">
+            <div className="text-2xl sm:text-3xl font-bold tabular-nums">
               {counts[g.key]}
               {filtering && (
                 <span className="ml-1 text-[15px] font-normal text-muted-foreground">
@@ -554,9 +487,8 @@ export default function BugTracker() {
               )}
             </div>
             <div className="font-semibold">{g.label}</div>
-            <div className="text-[13px] text-muted-foreground">{g.hint}</div>
-            {data && (
-              <div className={`mt-1 text-[13px] font-medium ${subTone[g.key]}`}>{sub[g.key]}</div>
+            {data && sub[g.key] && (
+              <div className={`text-[13px] font-medium ${subTone[g.key]}`}>{sub[g.key]}</div>
             )}
           </button>
         ))}
@@ -575,101 +507,14 @@ export default function BugTracker() {
             />
           </div>
           <Button
-            variant={filters.highRisk ? 'default' : 'outline'}
+            variant={filtersOpen ? 'secondary' : 'outline'}
             size="sm"
-            aria-pressed={filters.highRisk}
-            onClick={() => setParam('highrisk', filters.highRisk ? '' : '1', '')}
+            aria-expanded={filtersOpen}
+            onClick={() => setShowFilters(!showFilters)}
           >
-            High risk only
+            <SlidersHorizontal className="h-4 w-4 mr-1" />
+            Filters and sort
           </Button>
-          <Select value={sort} onValueChange={(v) => setParam('sort', v, 'severity')}>
-            <SelectTrigger className="w-48" aria-label="Sort">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SORTS.map((o) => (
-                <SelectItem key={o.key} value={o.key}>
-                  {o.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <fieldset className="m-0 flex min-w-0 rounded-md border p-0">
-            <legend className="sr-only">View</legend>
-            <Button
-              variant={view === 'cards' ? 'secondary' : 'ghost'}
-              size="sm"
-              aria-pressed={view === 'cards'}
-              onClick={() => setParam('view', 'cards', 'cards')}
-            >
-              <LayoutGrid className="h-4 w-4 mr-1" />
-              Cards
-            </Button>
-            <Button
-              variant={view === 'table' ? 'secondary' : 'ghost'}
-              size="sm"
-              aria-pressed={view === 'table'}
-              onClick={() => setParam('view', 'table', 'cards')}
-            >
-              <Rows3 className="h-4 w-4 mr-1" />
-              Table
-            </Button>
-          </fieldset>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <FilterSelect
-            label="Risk"
-            value={filters.severity}
-            onChange={(v) => setParam('severity', v, 'all')}
-            anyLabel="Any risk"
-            options={(Object.keys(RISK) as BugSeverity[]).map((k) => ({
-              value: k,
-              label: RISK[k].label,
-            }))}
-            width="w-36"
-          />
-          <FilterSelect
-            label="Category"
-            value={filters.category}
-            onChange={(v) => setParam('category', v, 'all')}
-            anyLabel="Any category"
-            options={categories.map((c) => ({ value: c.key, label: c.label }))}
-            width="w-48"
-          />
-          <FilterSelect
-            label="Status"
-            value={filters.status}
-            onChange={(v) => setParam('status', v, 'all')}
-            anyLabel="Any status"
-            options={STATUSES.map((s) => ({ value: s, label: STATUS_TEXT[s] }))}
-            width="w-52"
-          />
-          {strategies.length > 0 && (
-            <FilterSelect
-              label="Strategy"
-              value={filters.strategy}
-              onChange={(v) => setParam('strategy', v, 'all')}
-              anyLabel="Any strategy"
-              options={strategies.map((s) => ({ value: s, label: s }))}
-              width="w-48"
-            />
-          )}
-          {areas.length > 1 && (
-            <FilterSelect
-              label="Component"
-              value={filters.area}
-              onChange={(v) => setParam('area', v, 'all')}
-              anyLabel="Any component"
-              options={areas.map((a) => ({ value: a, label: a }))}
-            />
-          )}
-          <FilterSelect
-            label="Type"
-            value={filters.kind}
-            onChange={(v) => setParam('kind', v, 'all')}
-            anyLabel="Any type"
-            options={(Object.keys(KIND) as BugKind[]).map((k) => ({ value: k, label: KIND[k] }))}
-          />
           {filtering && (
             <Button
               variant="ghost"
@@ -689,17 +534,79 @@ export default function BugTracker() {
               Clear
             </Button>
           )}
-          {view === 'cards' && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="ml-auto"
-              onClick={() => setExpandAll(!expandAll)}
-            >
-              {expandAll ? 'Collapse all' : 'Expand all'}
-            </Button>
-          )}
         </div>
+        {filtersOpen && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={sort} onValueChange={(v) => setParam('sort', v, 'severity')}>
+              <SelectTrigger className="w-48" aria-label="Sort">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SORTS.map((o) => (
+                  <SelectItem key={o.key} value={o.key}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FilterSelect
+              label="Risk"
+              value={filters.highRisk ? 'HIGH' : filters.severity}
+              onChange={(v) => {
+                setParam('highrisk', '', '')
+                setParam('severity', v, 'all')
+              }}
+              anyLabel="Any risk"
+              options={(Object.keys(RISK) as BugSeverity[]).map((k) => ({
+                value: k,
+                label: RISK[k].label,
+              }))}
+              width="w-36"
+            />
+            <FilterSelect
+              label="Category"
+              value={filters.category}
+              onChange={(v) => setParam('category', v, 'all')}
+              anyLabel="Any category"
+              options={categories.map((c) => ({ value: c.key, label: c.label }))}
+              width="w-48"
+            />
+            <FilterSelect
+              label="Status"
+              value={filters.status}
+              onChange={(v) => setParam('status', v, 'all')}
+              anyLabel="Any status"
+              options={STATUSES.map((st) => ({ value: st, label: STATUS_TEXT[st] }))}
+              width="w-44"
+            />
+            {strategies.length > 0 && (
+              <FilterSelect
+                label="Strategy"
+                value={filters.strategy}
+                onChange={(v) => setParam('strategy', v, 'all')}
+                anyLabel="Any strategy"
+                options={strategies.map((st) => ({ value: st, label: st }))}
+                width="w-48"
+              />
+            )}
+            {areas.length > 1 && (
+              <FilterSelect
+                label="Component"
+                value={filters.area}
+                onChange={(v) => setParam('area', v, 'all')}
+                anyLabel="Any component"
+                options={areas.map((a) => ({ value: a, label: a }))}
+              />
+            )}
+            <FilterSelect
+              label="Type"
+              value={filters.kind}
+              onChange={(v) => setParam('kind', v, 'all')}
+              anyLabel="Any type"
+              options={(Object.keys(KIND) as BugKind[]).map((k) => ({ value: k, label: KIND[k] }))}
+            />
+          </div>
+        )}
       </div>
 
       {isLoading ? (
@@ -716,27 +623,16 @@ export default function BugTracker() {
               : 'Nothing here.'}
           </CardContent>
         </Card>
-      ) : view === 'table' ? (
-        <BugTable
-          bugs={shown}
-          onOpen={(id) =>
-            setParams(
-              (prev) => {
-                const next = new URLSearchParams(prev)
-                next.delete('view')
-                next.set('q', id)
-                return next
-              },
-              { replace: true }
-            )
-          }
-        />
       ) : (
-        <div className="space-y-3">
+        <ul className="divide-y rounded-lg border bg-card">
           {shown.map((bug) => (
-            <BugCard key={bug.id} bug={bug} expandAll={expandAll} />
+            <BugRow
+              key={bug.id}
+              bug={bug}
+              defaultOpen={shown.length === 1 && filters.query !== ''}
+            />
           ))}
-        </div>
+        </ul>
       )}
     </div>
   )
