@@ -20,10 +20,14 @@ One prompt, one report, finished by 16:00 IST. The building blocks keep their ow
 | 14:45 | Engine time exit, each strategy's own legs | signal_engine |
 | 14:55 | Square-off failsafe | Windows task `openAlgoSquareOff` |
 | 15:35 | Engine stopped | Windows task `breakingTradeAutoStop` |
-| 15:36 | **close-day**: backfill (bg), eod, execution_health, logs, weekly (Fri), value_areas, jobs, review, notify | cron, `close_day.sh` |
+| 15:36 | **close-day**: backfill (bg), eod, execution_health, logs, weekly (Fri), value_areas, jobs, track, review, notify | cron, `close_day.sh` |
 | ~15:50 | Report, tracker updates, the day's one Telegram line | `eod-<day>-claude-review.md` |
 | 15:58 | Hard deadline inside `close_day.sh` | |
 | 16:00 | OpenAlgo stopped | Windows task `openAlgoAutoStop` |
+| 08:56 | **overnight retry**: redoes the previous session's data download once if its latest backfill row failed; only before 09:10, never twice for a day, labelled automatic on `/logs/workflow` | cron, `ops/run_upkeep.sh retry-failed` |
+| 09:40, 16:20 | **dead-man**: one plain Telegram line when the 09:12/09:27 (09:40 run) or 15:36 (16:20 run) checkpoint left no status file; skips weekends and NSE holidays | cron, `ops/run_upkeep.sh deadman` |
+| 16:30 | **auto-fix (Tier 1)**: one low-risk bug fixed on a side branch `autofix/<BUG>`, never merged; no-op when none qualifies (`bug-tracker` skill) | cron, `analysis/autofix.sh` |
+| 18:35, 21:05 | **review catch-up**: reruns only the review (and sends the corrected Telegram line) when the day has no `close-day-verdict` block; a no-op otherwise | cron, `analysis/review_catchup.sh` |
 
 Every phase writes `signal_engine/reports/<phase>-<day>-status.tsv`; all of it is on `/logs/workflow`.
 
@@ -109,6 +113,23 @@ Same report and order, with these limits:
 - Time is bounded: if short, finish sections 1-3, the verdict block and the bug-tracker block first.
 - End with two blocks: `close-day-verdict` (JSON: verdict GREEN/AMBER/RED and one plain line for
   Telegram) and then the `bug-tracker` block. The `notify` step sends only that verdict line.
+
+## When the review fails (check this first when auditing the automation)
+
+- Audit order: cron service up, then each phase's `*-status.tsv` (a missing file for a trading day
+  means cron never fired, usually the PC or WSL was asleep or off), then `eod_claude_cron.log`,
+  then the review report. A report that starts with a usage-limit or sign-in message and has no
+  `close-day-verdict` block means the Claude account, not the engine, failed.
+- The review shares the Claude quota with interactive sessions, and the CLI sign-in expires
+  (the CLI prints the date in the report); an unattended job needs a `claude setup-token` token.
+- Failed checks do not depend on the review: the `track` step (`python -m signal_engine.ops track`)
+  records every FAIL in the tracker in plain code, once per finding and day. Keep it that way;
+  do not move tracker writes back behind the AI review.
+- A step re-run from `/logs/workflow` (or the overnight retry) appends a row to the day's status
+  file; the latest row per step is the truth, and a successful re-run also redoes the dependent
+  value-areas and scheduled-jobs checks. Read the whole file, not just the last line, when auditing.
+- A sleeping PC makes `timeout`-bounded steps fire late (wall clock jumps) and the broker session
+  is gone by the time the backfill resumes; look for a gap in `backfill_cron.log` timestamps.
 
 ## Telegram
 

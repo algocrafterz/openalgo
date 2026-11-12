@@ -71,12 +71,22 @@ occurrences. A RED alert that cannot wait until the close is recorded by `/open-
 7. **Ship it only when asked.** Commits go through `isolated-commit`; a running-code change needs
    OpenAlgo or the engine restarted (`openalgoctl.ps1 restart`), which is the owner's call.
 
+## Unattended Tier-1 auto-fix
+
+A cron job (`signal_engine/analysis/autofix.sh`) fixes one low-risk BUG/DATA entry per weekday on
+a side branch `autofix/BUG-nnn` and leaves the entry `in_progress` with the commit named. Merging
+and marking it `fixed` is the owner's step; HIGH bugs and anything near trading logic stay with
+this skill. Gates, pitfalls and test recipe: `references/unattended-autofix.md`.
+
 ## Report
 
 1. One line: the issue, the cause, fixed / not reproduced / needs a decision.
 2. Evidence before and after (the same query or report line).
 3. What changed (files, data with backup), the tests, and what is still unproven.
 4. In plain words for a trader: what was wrong, what it cost, what is different from the next session.
+   The owner wants this brief plain-terms summary at the end of every reply, not only the final one.
+5. Commit a completed, verified, atomic unit yourself (explicit paths, targeted tests green); never
+   push, merge or rewrite history unless told.
 
 Model: Sonnet by default; Opus only for order-lifecycle races or concurrency (ai-model-workflow).
 Words: sandbox (analyzer mode), never "paper trading". No emojis.

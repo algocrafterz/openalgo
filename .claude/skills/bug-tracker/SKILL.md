@@ -78,6 +78,41 @@ skill only owns the register and its rules. Two of them bind every fix:
 - An EXECUTION entry with no code fix closes as verified only after the symptom is absent for 5
   sessions in a row with the trigger present (for example, slow broker but no timeout fallout).
 
+## Automatic recording (no AI involved)
+
+`uv run python -m signal_engine.ops track --day D` (run by `run_phase.sh` after each morning check and
+by `close_day.sh` before the review) records every FAIL check and failed step of the day through
+`store.report` with the same `workflow-finding:<key>` as the page's "Report as bug". It is
+idempotent, always writes status `open`, severity MEDIUM (unreviewed default), and skips WARN
+results and the derived `phase *` summary rows. Reuse that key scheme for any new automatic
+writer, or the same problem gets two entries. Tests that exercise it must pass a temp `path`;
+a real run edits `bugs.json`, so `git checkout` that file after a manual trial.
+
+## Unattended auto-fix (Tier 1)
+
+`signal_engine/analysis/autofix.sh` (cron 16:30 weekdays, never during market hours) picks one open
+LOW or MEDIUM bug of kind BUG or DATA in area ops, data or signal_engine, and fixes it on a side
+branch `autofix/<BUG>` in a separate git worktree. Policy lives in `signal_engine/bugs/autofix.py`
+(eligibility, allowed paths, size limits) and is enforced on the resulting diff, never trusted from
+the model. Rules that bind any change to it:
+
+- Entries, exits, stops, sizing, order paths, `services/risk/`, config, migrations, broker code and
+  the core are never in scope; HIGH bugs and EXECUTION or TUNING-IDEA kinds are Tier 2 (`/resolve`).
+- Gates, in order: scope check; the new test must FAIL with the fix set aside and PASS with it;
+  ruff clean; main working tree unchanged. Any miss discards the branch, reopens the bug and notes
+  why (`autofix attempt` history lines cap it at two tries).
+- On success it commits on the side branch only and leaves the bug `in_progress` with the commit
+  named: an unmerged fix is not running code. The owner merges, then marks `fixed`.
+- Pipeline tests use a stand-in for `claude` (`AUTOFIX_CLAUDE_BIN`) and `AUTOFIX_NO_NOTIFY=1`,
+  `AUTOFIX_ANYTIME=1`; add bugs for them through the CLI and `git checkout` `bugs.json` after.
+- A worktree has no `.env` (git-ignored) and tests need it: symlink it in, and deny the model
+  Read/Edit on it. Tracker and Telegram helpers must run from the main checkout (`env -C`), not
+  with the worktree's `PYTHONPATH`, or they write a copy of `bugs.json` inside the worktree.
+- After `git stash pop` the restored fix is unstaged: `git add -A` again before committing.
+- Headless `claude -p` is given a minimal tool allowlist (`--allowedTools`, `--disallowedTools`),
+  not `--dangerously-skip-permissions`; an optional long-lived token is read from
+  `~/.config/openalgo/claude_token`.
+
 ## Unattended runs (the close-day review run by close_day.sh at 15:36)
 
 The run is read-only. Do not call `add`, `seen`, `note` or `update` yourself. End the response with
