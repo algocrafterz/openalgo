@@ -243,6 +243,7 @@ class TestPartialExitFlow:
             mock_pos.entry_price = 0.0
             mock_pos.tp = 0.0
             mock_pos.sl_order_id = ""
+            mock_pos.sl = 1010.0
             mock_tracker.find_position.return_value = mock_pos
             mock_tracker._time_exit_active = False
             mock_tracker._last_realised_pnl = 1000.0
@@ -257,7 +258,9 @@ class TestPartialExitFlow:
 
             mock_save.assert_called_once()
             saved_signal, _saved_order, saved_result = mock_save.call_args.args
-            assert saved_signal.context == {"pnl": 500.0, "exit_types": ["TP1"], "partial": True}
+            assert saved_signal.context == {
+                "pnl": 500.0, "exit_types": ["TP1"], "partial": True, "sl_after": 1010.0,
+            }
             assert saved_result.fill_price == 1027.5
 
 

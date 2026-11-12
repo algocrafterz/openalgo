@@ -1352,7 +1352,10 @@ async def _book_exit_result(
     trade_result.fill_price = approx_exit_price
     # "partial" tells db.fetch_day_trades() this row is one leg: the final close's pnl is
     # cumulative and already contains it, so the row must not be counted again.
-    signal.context = {"pnl": pnl_delta, "exit_types": [tp_level or "TP"], "partial": True}
+    # sl_after: the stop the runner now rests on, so a restart can put it back (E-12).
+    signal.context = {
+        "pnl": pnl_delta, "exit_types": [tp_level or "TP"], "partial": True, "sl_after": pos.sl,
+    }
     return True
 
 

@@ -284,6 +284,20 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
                 "broker has no record of it at all - cannot recover a P&L, leaving as-is"
             )
             continue
+        if sum(1 for other in locally_open if other["symbol"] == symbol) > 1:
+            # The broker's realised figure is for the whole symbol: with two strategies on it,
+            # booking it for each would count it twice and charge one with the other's result.
+            logger.critical(
+                f"Reconciliation: {symbol} is flat at the broker but {pos['strategy']} and at least "
+                "one other strategy both show it open in trades.db; the broker's P&L is for the "
+                "whole symbol, so no close is booked for it. Check the trade book."
+            )
+            await notifier.notify(
+                f"RESTART: {symbol} is flat at the broker, but more than one strategy shows it "
+                "open in the engine's records. The result cannot be split between them, so no "
+                "close was booked for it. Check the trade book and the risk counters."
+            )
+            continue
         pnl = float(broker_row.get("today_realized_pnl", broker_row.get("pnl", 0)) or 0)
         fill_price = float(broker_row.get("ltp", 0) or 0)
         note = (
@@ -303,7 +317,11 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
             note,
             sig_id=pos.get("sig_id"),
         )
-        risk_engine.record_close(pnl, strategy=pos["strategy"], symbol=symbol)
+        # The broker's figure includes the partial legs, which already reached the risk counters
+        # when they filled: book only what is left (the ledger row above keeps the full figure).
+        risk_engine.record_close(
+            pnl - pos.get("legs_pnl", 0.0), strategy=pos["strategy"], symbol=symbol
+        )
         try:
             await notifier.notify_position_closed(
                 symbol,
@@ -534,6 +552,26 @@ def _match_open_sl_orders(orderbook) -> dict:
     return matched
 
 
+def _prior_legs_kwargs(symbol: str, strategy: str, found: dict) -> dict:
+    """What the position had done before the restart, as TrackedPosition keywords.
+
+    Partial-leg P&L (already booked to risk), the exit labels so far, the runner stop the last
+    leg left, and the entry criteria context. Only values the trades.db rows actually carry are
+    set; everything else keeps the restored defaults.
+    """
+    from signal_engine import db
+
+    state = db.fetch_open_position_state(symbol, strategy)
+    out: dict = {"realized_pnl": state["pnl"]}
+    if state["sl"] > 0:
+        out["sl"] = state["sl"]
+    if state["exit_types"]:
+        out["exit_types"] = list(state["exit_types"])
+    if state["context"]:
+        out["context"] = state["context"]
+    return out
+
+
 def _entry_time_kwarg(found: dict) -> dict:
     """The position's real entry time from its trades.db row, as a TrackedPosition keyword.
 
@@ -603,6 +641,7 @@ def _restore_tracker_positions(
             # combined total.
             leg_qty = found["quantity"] if len(legs) > 1 else bqty
 
+            prior = _prior_legs_kwargs(bsymbol, strategy_for_pos, found)
             tracker.register(
                 TrackedPosition(
                     symbol=bsymbol,
@@ -611,7 +650,7 @@ def _restore_tracker_positions(
                     product=bprod,
                     entry_price=found["entry"],
                     quantity=leg_qty,
-                    sl=found["sl"],
+                    sl=prior.pop("sl", None) or found["sl"],
                     tp=found["tp"],
                     direction=bdir,
                     entry_order_id=found["order_id"],
@@ -625,7 +664,7 @@ def _restore_tracker_positions(
                     sig_id=found.get("sig_id", ""),
                     # Partial legs already booked to the risk counters: remembering them keeps
                     # the closing leg priced on its own (no second count of the legs).
-                    realized_pnl=db.fetch_open_position_leg_pnl(bsymbol, strategy_for_pos),
+                    **prior,
                     **_entry_time_kwarg(found),
                 )
             )

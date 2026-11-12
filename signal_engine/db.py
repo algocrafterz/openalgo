@@ -478,7 +478,7 @@ def fetch_all_open_positions() -> list:
         rows = conn.execute(
             """
             SELECT strategy, symbol, direction, entry, sl, tp, quantity, order_id, executed_at, sig_id,
-                   fill_price
+                   fill_price, context, message
             FROM trades
             WHERE status = 'SUCCESS' AND direction IN ('LONG', 'SHORT', 'EXIT')
               AND date(executed_at) = ?
@@ -491,7 +491,21 @@ def fetch_all_open_positions() -> list:
         return []
 
     latest = {}
-    for strategy, symbol, direction, entry, sl, tp, qty, order_id, executed_at, sig_id, fill in rows:
+    for (
+        strategy, symbol, direction, entry, sl, tp, qty, order_id, executed_at, sig_id, fill,
+        context, message,
+    ) in rows:
+        if direction == "EXIT" and (strategy, symbol) in latest:
+            try:
+                payload = json.loads(context) if context else {}
+            except (TypeError, ValueError):
+                payload = {}
+            if _is_partial_leg(payload, message):
+                # One leg of a position that is still open: it does not close it (E-13).
+                held = latest[(strategy, symbol)]
+                if held["direction"] in ("LONG", "SHORT"):
+                    held["legs_pnl"] += float(payload.get("pnl") or 0.0)
+                    continue
         latest[(strategy, symbol)] = {
             "strategy": strategy,
             "symbol": symbol,
@@ -504,6 +518,7 @@ def fetch_all_open_positions() -> list:
             "executed_at": str(executed_at or ""),
             "sig_id": str(sig_id or ""),
             "fill_price": float(fill or 0.0),
+            "legs_pnl": 0.0,
         }
     return [v for v in latest.values() if v["direction"] in ("LONG", "SHORT")]
 
@@ -925,29 +940,36 @@ def fetch_last_entry_trade(
         return None
 
 
-def fetch_open_position_leg_pnl(symbol: str, strategy: str) -> float:
-    """P&L already realised by partial exit legs of today's open position for symbol+strategy.
+def fetch_open_position_state(symbol: str, strategy: str) -> dict:
+    """What an open position had already done today, read back for a restart.
 
-    Sums the partial-leg EXIT rows written after the position's entry row. Used when the engine
-    restarts: those legs already reached the risk counters, and the position must remember them
-    so its closing leg is priced on its own and the legs are not counted a second time. Returns
-    0.0 when there are none or the table cannot be read.
+    Returns {"pnl", "sl", "exit_types", "context"}: the P&L of its partial exit legs (already
+    booked to the risk counters), the stop the last leg left on the runner (0.0 when none was
+    recorded), the exit labels so far, and the entry criteria context from the entry row. The
+    defaults (0.0, 0.0, [], {}) are returned when there is no entry or the table cannot be read.
     """
+    state: dict = {"pnl": 0.0, "sl": 0.0, "exit_types": [], "context": {}}
     try:
         today = datetime.now(IST).strftime("%Y-%m-%d")
         conn = _get_connection()
-        entry_id = conn.execute(
+        entry = conn.execute(
             """
-            SELECT max(id) FROM trades
+            SELECT id, context FROM trades
             WHERE upper(symbol) = upper(?) AND upper(strategy) = upper(?)
               AND status = 'SUCCESS' AND direction IN ('LONG', 'SHORT')
               AND date(executed_at) = ?
+            ORDER BY id DESC LIMIT 1
             """,
             (symbol, strategy, today),
-        ).fetchone()[0]
-        if entry_id is None:
-            return 0.0
-        total = 0.0
+        ).fetchone()
+        if entry is None:
+            return state
+        entry_id, entry_context = entry
+        try:
+            ctx = json.loads(entry_context) if entry_context else {}
+            state["context"] = ctx if isinstance(ctx, dict) else {}
+        except (TypeError, ValueError):
+            pass
         for context, message in conn.execute(
             """
             SELECT context, message FROM trades
@@ -964,11 +986,19 @@ def fetch_open_position_leg_pnl(symbol: str, strategy: str) -> float:
                 payload = {}
             if "pnl" not in payload or not _is_partial_leg(payload, message):
                 continue
-            total += float(payload.get("pnl") or 0.0)
-        return total
+            state["pnl"] += float(payload.get("pnl") or 0.0)
+            state["exit_types"].extend(str(t) for t in payload.get("exit_types") or [])
+            if float(payload.get("sl_after") or 0.0) > 0:
+                state["sl"] = float(payload["sl_after"])
+        return state
     except Exception as e:
-        logger.warning(f"fetch_open_position_leg_pnl failed for {symbol}:{strategy}: {e}")
-        return 0.0
+        logger.warning(f"fetch_open_position_state failed for {symbol}:{strategy}: {e}")
+        return {"pnl": 0.0, "sl": 0.0, "exit_types": [], "context": {}}
+
+
+def fetch_open_position_leg_pnl(symbol: str, strategy: str) -> float:
+    """P&L already realised by partial exit legs of today's open position (see the state read)."""
+    return float(fetch_open_position_state(symbol, strategy)["pnl"])
 
 
 def flag_data_quality(order_id: str, quality: str, reason: str = "") -> int:

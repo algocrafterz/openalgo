@@ -80,3 +80,22 @@ def test_restore_keeps_the_real_entry_time():
         startup._restore_tracker_positions(tracker, broker, "MIS")
     pos = tracker.find_position("SBIN", "BREAKOUT")
     assert pos.entry_time == when.replace(tzinfo=IST)
+
+
+def test_restore_puts_back_the_runner_stop_the_exit_labels_and_the_entry_context():
+    sig = make_signal(strategy="BREAKOUT", symbol="SBIN")
+    sig.context = {"orh": 2510.0}
+    db.save(sig, _order(Action.BUY), _ok("E1"))
+    leg = make_signal(strategy="BREAKOUT", symbol="SBIN", direction=Direction.EXIT)
+    leg.context = {"pnl": 500.0, "exit_types": ["TP1"], "partial": True, "sl_after": 2503.0}
+    db.save(leg, _order(Action.SELL), _ok("X1"))
+    tracker = PositionTracker(_make_engine())
+    cfg = SimpleNamespace(product="MIS", exchange="NSE", strategy_profiles={"BREAKOUT": {}})
+    broker = [{"symbol": "SBIN", "exchange": "NSE", "quantity": 5, "average_price": 2500.0}]
+    with patch.object(startup, "settings", cfg):
+        startup._restore_tracker_positions(tracker, broker, "MIS")
+    pos = tracker.find_position("SBIN", "BREAKOUT")
+    assert pos.sl == 2503.0
+    assert pos.exit_types == ["TP1"]
+    assert pos.context == {"orh": 2510.0}
+    assert pos.realized_pnl == 500.0
