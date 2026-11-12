@@ -19,6 +19,22 @@ ISOLATION FROM THE TRADING LISTENER
     when the connection ends. A failed backfill is logged and abandoned until the next
     reconnect. It is never raised into the listener.
 
+MARKET-HOURS WINDOW
+
+  * One scheduler task (started by register) sleeps to the next boundary: 09:00 to 15:45 IST
+    on regular NSE session days, as decided by pipeline.service.is_session_day (weekends,
+    holidays, mock and special sessions such as Muhurat are excluded). It sleeps at most an
+    hour at a time and re-reads the wall clock on every wake. It does not poll anything.
+  * At the open it attaches the live handlers and starts the backfill. At the close it detaches
+    the handlers, cancels and awaits the backfill, then closes the database file. Outside the
+    window nothing of ours is attached to the Telegram client.
+  * The Telegram connection itself belongs to the trading listener. The scheduler never
+    connects, disconnects or restarts it. Its only contact with the client is adding and
+    removing its own two handlers, which are always the last in Telethon's handler list.
+  * A connection that comes up outside the window starts nothing. One that comes up inside it
+    runs the backfill through listener._serve, and the scheduler and _serve never run two
+    backfills at once.
+
 STORAGE
 
   * One row per (channel_id, message_id). channel_id is Telegram's marked peer id (for a
@@ -38,11 +54,12 @@ import os
 import sqlite3
 import threading
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 from loguru import logger
 
 from signal_engine.config import settings
+from signal_engine.timeutils import IST
 
 INGEST_DB_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "data", "telegram_ingest.db"
@@ -54,6 +71,19 @@ BACKFILL_DAYS = 7
 #: A recovery backfill restarts this far BEFORE the watermark, so a message that Telegram
 #: delivered late, or edited after it was stored, is still picked up.
 BACKFILL_OVERLAP = timedelta(hours=2)
+
+#: Ingestion runs only inside this window (IST) on regular NSE session days. Outside it no
+#: handler is attached, no backfill runs and the database file is closed.
+WINDOW_START = time(9, 0)
+WINDOW_END = time(15, 45)
+
+#: The scheduler never sleeps longer than this. A monotonic timer stops while the host is
+#: suspended (WSL sleep), so one long sleep could wake hours late; the cap bounds the lateness.
+_MAX_SLEEP_SECONDS = 3600
+
+#: Pause after a scheduler error, and how far ahead the next session day is looked for.
+_SCHEDULER_RETRY_SECONDS = 60
+_LOOKAHEAD_DAYS = 14
 
 #: Safety stop on one backfill. A week of this channel is a few hundred messages.
 _MAX_BACKFILL_MESSAGES = 10000
@@ -261,6 +291,13 @@ def _default_peer_id(entity) -> int:
     return utils.get_peer_id(entity)
 
 
+def _default_session_day(day: date) -> bool:
+    """The runner's NSE calendar verdict, imported lazily to keep this module light."""
+    from signal_engine.pipeline.service import is_session_day
+
+    return is_session_day(day)
+
+
 class SourceIngester:
     """Records the configured source channels. See the module docstring for the guarantees."""
 
@@ -272,6 +309,7 @@ class SourceIngester:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         sleep: Callable = asyncio.sleep,
         peer_id_of: Callable = _default_peer_id,
+        session_day: Callable[[date], bool] | None = None,
         days: int = BACKFILL_DAYS,
         overlap: timedelta = BACKFILL_OVERLAP,
         max_messages: int = _MAX_BACKFILL_MESSAGES,
@@ -281,11 +319,18 @@ class SourceIngester:
         self._clock = clock
         self._sleep = sleep
         self._peer_id_of = peer_id_of
+        self._session_day_fn = session_day or _default_session_day
+        self._day_cache: dict[date, bool] = {}
+        self._cache_day: date | None = None
         self._days = days
         self._overlap = overlap
         self._max_messages = max_messages
         self._store: IngestStore | None = None
-        self._registered_on = None
+        self._client = None  # the trading listener's Telegram client; used only for handlers
+        self._served_client = None  # set while the listener holds a live connection
+        self._handlers_attached = False
+        self._window_open = False
+        self._scheduler: asyncio.Task | None = None
         self._task: asyncio.Task | None = None
         # chat id -> source name. A numeric id in config is known from the start; a username
         # is added once it has been resolved on a live connection.
@@ -303,10 +348,9 @@ class SourceIngester:
             self._store = IngestStore(self._db_path)
         return self._store
 
-    def close(self) -> None:
-        """Stop any backfill and close the database. Idempotent, never raises."""
-        self.stop_backfill(self._task)
-        self._task = None
+    def _close_store(self) -> None:
+        """Close the database file. store.close() takes the write lock, so a write that is
+        running in another thread finishes first. Never raises."""
         store, self._store = self._store, None
         if store is not None:
             try:
@@ -314,23 +358,149 @@ class SourceIngester:
             except Exception:  # noqa: BLE001 - teardown must not become a failure
                 pass
 
-    # ---- live path -------------------------------------------------------------------
+    def close(self) -> None:
+        """Stop the scheduler and any backfill, detach the handlers, close the database.
+        Idempotent, never raises."""
+        self.stop_backfill(self._scheduler)
+        self._scheduler = None
+        self.stop_backfill(self._task)
+        self._task = None
+        self._window_open = False
+        self._detach_handlers()
+        self._close_store()
+
+    # ---- window ----------------------------------------------------------------------
 
     def register(self, client) -> None:
-        """Attach the live handlers to the client. Once per client."""
-        if not self.active or self._registered_on is client:
+        """Remember the trading client and start the window scheduler. Once per client.
+
+        Nothing is attached to the client here; the handlers appear only while the window is
+        open. Needs a running event loop (start_listener provides one).
+        """
+        if not self.active or self._client is client:
+            return
+        self._client = client
+        if self._scheduler is None or self._scheduler.done():
+            self._scheduler = asyncio.create_task(self._schedule(), name="telegram-ingest-window")
+            self._scheduler.add_done_callback(self._log_scheduler_end)
+        names = ", ".join(s.name for s in self._sources)
+        logger.info(
+            f"Ingest: {names} is recorded {WINDOW_START:%H:%M}-{WINDOW_END:%H:%M} IST on NSE "
+            "session days (storage only, no trading)"
+        )
+
+    @staticmethod
+    def _log_scheduler_end(task: asyncio.Task) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            logger.opt(exception=task.exception()).error("Ingest: window scheduler ended")
+
+    def _ist_now(self) -> datetime:
+        return self._clock().astimezone(IST)
+
+    def _is_session_day(self, day: date) -> bool:
+        """The calendar verdict for a day, asked once per day and then remembered."""
+        today = self._ist_now().date()
+        if self._cache_day != today:
+            self._day_cache.clear()
+            self._cache_day = today
+        if day not in self._day_cache:
+            self._day_cache[day] = bool(self._session_day_fn(day))
+        return self._day_cache[day]
+
+    def _plan(self, now: datetime) -> tuple[bool, datetime]:
+        """(window is open now, when the state next changes). `now` is IST."""
+        today = now.date()
+        if self._is_session_day(today):
+            start = datetime.combine(today, WINDOW_START, tzinfo=IST)
+            end = datetime.combine(today, WINDOW_END, tzinfo=IST)
+            if now < start:
+                return False, start
+            if now < end:
+                return True, end
+        day = today
+        for _ in range(_LOOKAHEAD_DAYS):
+            day += timedelta(days=1)
+            if self._is_session_day(day):
+                return False, datetime.combine(day, WINDOW_START, tzinfo=IST)
+        return False, now + timedelta(days=1)
+
+    async def _schedule(self) -> None:
+        """Open and close the window for as long as the engine runs.
+
+        An error here is logged and retried; it can never reach the trading listener, and a
+        calendar failure cannot hold the window open past the close time.
+        """
+        while True:
+            wait = float(_SCHEDULER_RETRY_SECONDS)
+            try:
+                now = self._ist_now()
+                is_open, wake = self._plan(now)
+                await self._set_window(is_open)
+                wait = min(max((wake - now).total_seconds(), 1.0), float(_MAX_SLEEP_SECONDS))
+            except Exception:  # noqa: BLE001 - cancellation is a BaseException and passes
+                logger.exception("Ingest: window scheduler error; retrying shortly")
+                try:
+                    if self._window_open and self._ist_now().time() >= WINDOW_END:
+                        await self._set_window(False)
+                except Exception:  # noqa: BLE001
+                    logger.exception("Ingest: could not close the window after a scheduler error")
+            await self._sleep(wait)
+
+    async def _set_window(self, want_open: bool) -> None:
+        """Move to the requested state. Does nothing when already there."""
+        if want_open == self._window_open:
+            return
+        if want_open:
+            self._attach_handlers()
+            self._window_open = True
+            logger.info("Ingest: window open, recording")
+            if self._served_client is not None:
+                self._start_task(self._served_client)
+            return
+        # Closing. The flag goes first, so an event already queued for dispatch is ignored.
+        self._window_open = False
+        self._detach_handlers()
+        task, self._task = self._task, None
+        self.stop_backfill(task)
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        self._close_store()
+        logger.info("Ingest: window closed, inactive until the next session")
+
+    def _attach_handlers(self) -> None:
+        client = self._client
+        if client is None or self._handlers_attached:
             return
         from telethon import events
 
         client.add_event_handler(self._on_event, events.NewMessage())
-        client.add_event_handler(self._on_event, events.MessageEdited())
-        self._registered_on = client
-        names = ", ".join(s.name for s in self._sources)
-        logger.info(f"Ingest: recording messages from {names} (storage only, no trading)")
+        try:
+            client.add_event_handler(self._on_event, events.MessageEdited())
+        except Exception:
+            client.remove_event_handler(self._on_event, events.NewMessage)
+            raise
+        self._handlers_attached = True
+
+    def _detach_handlers(self) -> None:
+        """Remove our two handlers. Only callbacks equal to ours match, so the trading
+        handler is never touched. Never raises."""
+        client = self._client
+        if client is None or not self._handlers_attached:
+            return
+        self._handlers_attached = False
+        try:
+            from telethon import events
+
+            client.remove_event_handler(self._on_event, events.NewMessage)
+            client.remove_event_handler(self._on_event, events.MessageEdited)
+        except Exception:  # noqa: BLE001 - _on_event ignores events outside the window anyway
+            logger.exception("Ingest: could not detach the live handlers")
 
     async def _on_event(self, event) -> None:
         """Store a new or edited message from a source channel. Never raises."""
         try:
+            if not self._window_open:
+                return
             chat_id = getattr(event, "chat_id", None)
             name = self._channels.get(chat_id)
             if name is None:
@@ -345,18 +515,37 @@ class SourceIngester:
     # ---- backfill --------------------------------------------------------------------
 
     def start_backfill(self, client) -> asyncio.Task | None:
-        """Start the backfill for this connection as its own task. Never raises."""
+        """Called by listener._serve once a connection is up. Never raises.
+
+        Records the live connection, so the scheduler can start the backfill if the window
+        opens later. Starts the backfill now only if the window is open.
+        """
         if not self.active:
             return None
+        self._served_client = client
+        if not self._window_open:
+            return None
+        return self._start_task(client)
+
+    def _start_task(self, client) -> asyncio.Task | None:
+        """The one backfill task: a running one is reused, never doubled. Never raises."""
         try:
             asyncio.get_running_loop()  # no loop: nothing to start, and no coroutine is built
-            self.stop_backfill(self._task)
+            if self._task is not None and not self._task.done():
+                return self._task
             self._task = asyncio.create_task(self._run(client), name="telegram-ingest-backfill")
             self._task.add_done_callback(self._log_outcome)
             return self._task
         except Exception:  # noqa: BLE001 - the trading listener must not see this
             logger.exception("Ingest: could not start the backfill task")
             return None
+
+    def connection_ended(self, task: asyncio.Task | None) -> None:
+        """The listener's connection is gone: its backfill dies with it. Never raises."""
+        self.stop_backfill(task)
+        self.stop_backfill(self._task)
+        self._task = None
+        self._served_client = None
 
     @staticmethod
     def stop_backfill(task: asyncio.Task | None) -> None:
@@ -470,7 +659,7 @@ def _get_service() -> SourceIngester:
 
 
 def register(client) -> None:
-    """Attach the live handlers. Call once, after the trading handler is attached."""
+    """Hand over the client and start the market-hours scheduler. Attaches nothing itself."""
     try:
         _get_service().register(client)
     except Exception:  # noqa: BLE001
@@ -478,7 +667,7 @@ def register(client) -> None:
 
 
 def start_backfill(client) -> asyncio.Task | None:
-    """Start the per-connection backfill task, or return None when ingestion is off."""
+    """Note the live connection. Returns the backfill task, or None when the window is closed."""
     try:
         return _get_service().start_backfill(client)
     except Exception:  # noqa: BLE001
@@ -487,8 +676,14 @@ def start_backfill(client) -> asyncio.Task | None:
 
 
 def stop_backfill(task: asyncio.Task | None) -> None:
-    """Cancel the backfill task of a connection that has ended."""
-    SourceIngester.stop_backfill(task)
+    """The connection has ended: cancel its backfill and forget the connection."""
+    try:
+        if _service is not None:
+            _service.connection_ended(task)
+        else:
+            SourceIngester.stop_backfill(task)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def close() -> None:
