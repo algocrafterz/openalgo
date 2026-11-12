@@ -256,3 +256,55 @@ class TestTimeExit:
 
     def test_time_exit_without_a_ladder_is_a_no_op(self):
         driver(make_pos()).on_time_exit("TCS", 100.0)
+
+
+def _frame(*bars):
+    """bars: (hour, minute, open, high, low, close) rows indexed by bar open."""
+    return pd.DataFrame(
+        [{"Open": o, "High": h, "Low": low, "Close": c} for _h, _m, o, h, low, c in bars],
+        index=pd.DatetimeIndex([ts(b[0], b[1]) for b in bars]),
+    )
+
+
+class TestCatchUp:
+    """S-02: bars a symbol missed are stepped, in order, once."""
+
+    @pytest.mark.asyncio
+    async def test_a_target_traded_in_a_missed_bar_is_found(self):
+        d = driver(make_pos())
+        await d.on_bar("TCS", ts(10, 0), 100.5, 103.0, 99.0, 101.0)  # last stepped bar
+        frame = _frame(
+            (10, 0, 100.5, 103.0, 99.0, 101.0),
+            (10, 5, 101.0, 104.5, 100.8, 102.0),  # TP1 (104) traded here, bar was late
+            (10, 10, 102.0, 103.0, 101.0, 102.5),
+        )
+        sigs = await d.catch_up("TCS", frame, ts(10, 10))
+        assert [s.tp_level for s in sigs] == ["TP1"]
+
+    @pytest.mark.asyncio
+    async def test_no_gap_means_nothing_to_replay(self):
+        d = driver(make_pos())
+        await d.on_bar("TCS", ts(10, 0), 100.5, 103.0, 99.0, 101.0)
+        frame = _frame((10, 0, 100.5, 103.0, 99.0, 101.0), (10, 5, 101.0, 104.5, 100.8, 102.0))
+        assert await d.catch_up("TCS", frame, ts(10, 5)) == []
+
+    @pytest.mark.asyncio
+    async def test_a_fresh_ladder_is_not_replayed(self):
+        # A restart builds a new Ladder with nothing stepped yet: replaying would repeat exits
+        # that were already taken.
+        d = driver(make_pos())
+        frame = _frame((10, 0, 100.5, 104.5, 100.0, 102.0), (10, 5, 101.0, 103.0, 100.0, 102.0))
+        assert await d.catch_up("TCS", frame, ts(10, 5)) == []
+
+    @pytest.mark.asyncio
+    async def test_a_replayed_bar_is_not_stepped_again(self):
+        d = driver(make_pos())
+        await d.on_bar("TCS", ts(10, 0), 100.5, 103.0, 99.0, 101.0)
+        frame = _frame(
+            (10, 0, 100.5, 103.0, 99.0, 101.0),
+            (10, 5, 101.0, 104.5, 100.8, 102.0),
+            (10, 10, 102.0, 103.0, 101.0, 102.5),
+        )
+        first = await d.catch_up("TCS", frame, ts(10, 10))
+        again = await d.catch_up("TCS", frame, ts(10, 10))
+        assert len(first) == 1 and again == []

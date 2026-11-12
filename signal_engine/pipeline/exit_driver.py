@@ -61,6 +61,7 @@ class _State:
     stop_hit: bool = False
     bars_since_stop: int = 0
     safety_sent: bool = False
+    last_bar: pd.Timestamp | None = None  # the last closed bar this ladder was stepped with
 
 
 def _to_float(value) -> float | None:
@@ -144,9 +145,35 @@ class ExitDriver:
         state = self._ensure(symbol, pos, entry_time)
         if state is None:
             return []
+        state.last_bar = bar_open
         if state.ladder.done:
             return await self._after_done(symbol, pos, state)
         return self._step(symbol, pos, state, o, h, low, c)
+
+    async def catch_up(self, symbol: str, frame: pd.DataFrame, bar_open: pd.Timestamp) -> list[Signal]:
+        """Step the Ladder over closed bars it missed since its last step; return their EXIT signals.
+
+        A bar that was late for this symbol was skipped by its cycle, and the Ladder never saw it:
+        a target or stop traded in that bar went unnoticed (S-02). The missed bars are replayed in
+        order, once. Only a Ladder already running is caught up, from the bar it last stepped, so a
+        restart (which builds a fresh Ladder) never replays bars whose exits were already taken.
+        """
+        state = self._state.get(symbol)
+        if state is None or state.last_bar is None or frame is None:
+            return []
+        missed = sorted(ts for ts in frame.index if state.last_bar < ts < bar_open)
+        if not missed:
+            return []
+        logger.warning(
+            f"{symbol}: Ladder missed {len(missed)} bar(s) after {state.last_bar:%H:%M}; "
+            "stepping them now"
+        )
+        out: list[Signal] = []
+        for ts in missed:
+            row = frame.loc[ts]
+            o, h, low, c = (float(row[k]) for k in ("Open", "High", "Low", "Close"))
+            out.extend(await self.on_bar(symbol, ts, o, h, low, c))
+        return out
 
     # ---- internals ---------------------------------------------------------------------------
 

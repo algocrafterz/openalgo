@@ -2,7 +2,7 @@
 
 import asyncio
 import datetime as dt
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pandas as pd
 import pytest
@@ -234,6 +234,48 @@ class TestRunDays:
 
         asyncio.run(go())
         assert len(calls) >= 2
+
+
+class TestRunDaysSkipsExchangeHolidays:
+    """S-01: a weekday that is an NSE holiday gets no runner session."""
+
+    def test_dussehra_is_skipped_but_the_days_around_it_run(self):
+        ran = []
+
+        class R:
+            def __init__(self, day):
+                self.day = day
+
+            async def run(self, day):
+                ran.append(day)
+
+        clock = SimClock(t("09:00", "2026-10-19"))  # the Monday before Dussehra (Tuesday)
+
+        async def go():
+            task = asyncio.create_task(service.run_days(lambda d: R(d), clock))
+            await asyncio.sleep(0.1)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        asyncio.run(go())
+        days = set(ran)
+        assert dt.date(2026, 10, 19) in days
+        assert dt.date(2026, 10, 20) not in days
+        assert dt.date(2026, 10, 21) in days
+
+    def test_session_day_rules(self):
+        assert service.is_session_day(dt.date(2026, 10, 19)) is True
+        assert service.is_session_day(dt.date(2026, 10, 20)) is False  # Dussehra
+        assert service.is_session_day(dt.date(2026, 11, 10)) is False  # Diwali-Balipratipada
+        assert service.is_session_day(dt.date(2026, 10, 24)) is False  # Saturday
+
+    def test_an_unreadable_calendar_falls_back_to_the_weekday_rule(self):
+        with patch(
+            "signal_engine.backtest.data_readiness.calendar.load_calendar",
+            side_effect=RuntimeError("unreadable"),
+        ):
+            assert service.is_session_day(dt.date(2026, 10, 20)) is True
 
 
 class Loader:

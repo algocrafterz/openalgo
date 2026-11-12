@@ -211,3 +211,34 @@ class TestOneFailureDoesNotEndTheDay:
             runner_mod.run_cycle = real_run_cycle
             st.close()
         assert len(alerts) == 1
+
+
+class TestOverrun:
+    """S-03: a cycle that runs past the next bar boundary says which bars it skipped."""
+
+    def test_skipped_bars_are_logged(self, tmp_path):
+        from unittest.mock import patch
+
+        from loguru import logger
+
+        from signal_engine.pipeline.cycle import CycleReport
+
+        runner, st = make_runner(tmp_path, {"AAA": []})
+        runner.stop_after = t("10:00")
+        calls = []
+
+        async def slow_cycle(bar_close, deps):
+            calls.append(bar_close)
+            if len(calls) == 1:
+                await runner.clock.sleep_until(bar_close + pd.Timedelta(minutes=12))
+            return CycleReport(bar_close=bar_close)
+
+        lines = []
+        sink_id = logger.add(lambda m: lines.append(str(m)), level="WARNING")
+        try:
+            with patch("signal_engine.pipeline.runner.run_cycle", slow_cycle):
+                asyncio.run(runner.run(DAY))
+        finally:
+            logger.remove(sink_id)
+            st.close()
+        assert any("skipped by overrun" in ln for ln in lines)

@@ -280,6 +280,15 @@ async def _dispatch(fire: Fire, bar_open, deps: CycleDeps, report: CycleReport) 
 
 async def _manage_open_position(symbol, df, bar_open, deps: CycleDeps, report: CycleReport) -> bool:
     """Tell the sink about the closed bar, then step the exit driver. False = stop this symbol."""
+    if deps.exits is not None:
+        # Bars this symbol missed in earlier cycles are stepped first, in order (S-02).
+        for exit_signal in await deps.exits.catch_up(symbol, df, bar_open):
+            try:
+                await deps.sink.submit(exit_signal)
+            except Exception:  # noqa: BLE001 - a sink failure is reported, never swallowed
+                logger.exception(f"pipeline {symbol}: exit submit failed ({exit_signal.tp_level})")
+                report.skipped[symbol] = "exit submit error"
+                return False
     if bar_open not in df.index:
         _skip(report, bar_open, symbol, "closed bar missing from the frame")
         return False

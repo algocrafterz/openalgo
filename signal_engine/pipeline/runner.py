@@ -89,8 +89,21 @@ class Runner:
             await self._report_failure(f"warm-up failed ({exc}); the next cycle retries it")
         start, cutoff = self.strategy.entry_window_min
         interval = self.strategy.interval_min
+        previous_close = None
         while True:
             bar_close, run_at = next_cycle(self.clock.now(), interval, self.cfg.bar_delay_seconds)
+            if previous_close is not None and bar_close > previous_close + pd.Timedelta(minutes=interval):
+                # The last cycle ran past the next bar boundary, so that bar was never evaluated and
+                # its position steps never ran (S-03). Say so: it used to pass without a trace.
+                skipped = int((bar_close - previous_close) / pd.Timedelta(minutes=interval)) - 1
+                logger.warning(
+                    f"runner {self.strategy.name}: {skipped} bar(s) skipped by overrun after the "
+                    f"{previous_close:%H:%M} cycle; next cycle is {bar_close:%H:%M}"
+                )
+                await self._report_failure(
+                    f"{skipped} bar(s) skipped because the {previous_close:%H:%M} cycle ran long"
+                )
+            previous_close = bar_close
             bar_open = bar_close - pd.Timedelta(minutes=interval)
             minutes = bar_open.hour * 60 + bar_open.minute
             # Entries stop at the cutoff; with an exit driver the loop keeps stepping open

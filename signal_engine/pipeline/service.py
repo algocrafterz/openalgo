@@ -220,12 +220,38 @@ async def preflight(
 # ---- session loop ----------------------------------------------------------------------------
 
 
+def is_session_day(day: dt.date) -> bool:
+    """True when the runner should work today: a weekday that is a regular NSE session.
+
+    Exchange holidays, mock sessions and special sessions (Muhurat and the like, which the
+    runner's day-time entry windows do not describe) are skipped, so a holiday does not make
+    the runner re-request every symbol each bar (S-01). A day the calendar does not cover or
+    cannot be read for keeps the plain weekday rule and is logged loudly: the readiness check
+    and the warm-up already refuse a day the calendar does not cover.
+    """
+    if day.weekday() >= 5:
+        return False
+    from signal_engine.backtest.data_readiness.calendar import TRADING, UNKNOWN, load_calendar
+
+    try:
+        kind = load_calendar().classify(day)
+    except Exception:  # noqa: BLE001 - an unreadable calendar must not stop a normal day
+        logger.exception(f"runner: NSE calendar could not be read for {day}; using weekday rule")
+        return True
+    if kind in (TRADING, UNKNOWN):
+        if kind == UNKNOWN:
+            logger.warning(f"runner: {day} is not confirmed in the NSE calendar; treating it as a session")
+        return True
+    logger.info(f"runner: {day} is not a regular NSE session ({kind}); no cycles today")
+    return False
+
+
 async def run_days(make_runner: Callable[[dt.date], object], clock: Clock) -> None:
-    """One Runner per weekday, forever. A failing session is logged and the loop continues."""
+    """One Runner per NSE session day, forever. A failing session is logged and the loop continues."""
     while True:
         now = clock.now()
         day = now.date()
-        if day.weekday() < 5:
+        if is_session_day(day):
             try:
                 await make_runner(day).run(day)
             except asyncio.CancelledError:
