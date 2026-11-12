@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { seenPerDay, statusBreakdown } from '@/lib/bugCharts'
 import {
   type BugFilters,
   type BugSort,
@@ -390,6 +391,95 @@ function FilterSelect({
   )
 }
 
+const STATUS_FILL: Record<BugStatus, string> = {
+  open: 'bg-red-600',
+  in_progress: 'bg-blue-500',
+  fixed: 'bg-amber-500',
+  verified: 'bg-green-600',
+  wontfix: 'bg-muted-foreground/40',
+}
+
+/** Where every bug stands, and whether bugs are still happening day to day. */
+function Charts({ bugs }: { bugs: Bug[] }) {
+  const shares = statusBreakdown(bugs)
+  const today = new Date().toLocaleDateString('en-CA')
+  const days = seenPerDay(bugs, today, 14)
+  const tallest = Math.max(1, ...days.map((d) => d.count))
+  const total = days.reduce((n, d) => n + d.count, 0)
+  return (
+    <Card>
+      <CardContent className="grid gap-6 pt-5 md:grid-cols-2">
+        <div className="space-y-2">
+          <div className="text-[13px] font-semibold uppercase text-muted-foreground">
+            Progress, all {bugs.length} bugs
+          </div>
+          <div className="flex h-3 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+            {shares
+              .filter((r) => r.count > 0)
+              .map((r) => (
+                <div
+                  key={r.status}
+                  className={STATUS_FILL[r.status]}
+                  style={{ width: `${r.pct}%` }}
+                  title={`${STATUS_TEXT[r.status]}: ${r.count}`}
+                />
+              ))}
+          </div>
+          <ul className="flex flex-wrap gap-x-4 gap-y-1 text-[13px]">
+            {shares.map((r) => (
+              <li key={r.status} className="flex items-center gap-1.5">
+                <span className={`inline-block h-2.5 w-2.5 rounded-sm ${STATUS_FILL[r.status]}`} />
+                <span className="text-muted-foreground">{STATUS_TEXT[r.status]}</span>
+                <span className="font-semibold tabular-nums">{r.count}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-baseline justify-between">
+            <span className="text-[13px] font-semibold uppercase text-muted-foreground">
+              Bugs seen per day, last 14 days
+            </span>
+            <span className="text-[13px] text-muted-foreground">
+              {total === 0 ? 'none seen' : `${total} sightings`}
+            </span>
+          </div>
+          <div className="flex h-16 items-end gap-1">
+            {days.map((d) => (
+              <div
+                key={d.day}
+                className="flex h-full flex-1 flex-col justify-end"
+                title={`${d.day}: ${d.count} ${d.count === 1 ? 'bug' : 'bugs'} seen${
+                  d.high ? `, ${d.high} high risk` : ''
+                }`}
+              >
+                <div
+                  className={d.high ? 'rounded-sm bg-red-600' : 'rounded-sm bg-amber-500'}
+                  style={{ height: `${(d.count / tallest) * 100}%`, minHeight: d.count ? 3 : 0 }}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-between text-[13px] text-muted-foreground">
+            <span>{shortDate(days[0].day)}</span>
+            <span className="flex items-center gap-3">
+              <span className="flex items-center gap-1">
+                <span className="inline-block h-2.5 w-2.5 rounded-sm bg-red-600" />
+                includes high risk
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block h-2.5 w-2.5 rounded-sm bg-amber-500" />
+                other
+              </span>
+            </span>
+            <span>today</span>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 export default function BugTracker() {
   const [params, setParams] = useSearchParams()
   const [showFilters, setShowFilters] = useState(false)
@@ -493,6 +583,8 @@ export default function BugTracker() {
           </button>
         ))}
       </div>
+
+      {data && all.length > 0 && <Charts bugs={all} />}
 
       <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-2">

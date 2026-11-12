@@ -28,6 +28,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { type BugSummary, groupOfStatus, summarizeBugs } from '@/lib/bugModel'
 import { findingRef } from '@/lib/reportFinding'
 import { parseExecutionHealth } from '@/lib/reportParsers'
+import { dayBars, formatDuration, stepBars } from '@/lib/workflowCharts'
 import {
   ACTION_TEXT,
   buildFindings,
@@ -96,16 +97,6 @@ const HEALTH: Record<Health, { tone: Tone; label: string }> = {
   degraded: { tone: 'warn', label: 'Degraded' },
   critical: { tone: 'bad', label: 'Critical' },
   nodata: { tone: 'idle', label: 'No data' },
-}
-
-function seconds(hms: string): number {
-  const [h, m, s] = hms.split(':').map(Number)
-  return h * 3600 + m * 60 + s
-}
-
-function duration(step: WorkflowStep): string {
-  const total = Math.max(0, seconds(step.ended) - seconds(step.started))
-  return total >= 60 ? `${Math.floor(total / 60)}m ${total % 60}s` : `${total}s`
 }
 
 function phaseFindings(findings: Finding[], phase: PhaseKey): Finding[] {
@@ -181,7 +172,7 @@ function SessionOverview({
   )
 }
 
-/** The last few days as one cell each, so a bad day stands out without paging back. */
+/** The last days as stacked bars (failed on the bottom, warnings above), so a bad day stands out. */
 function Trend({
   days,
   current,
@@ -200,30 +191,64 @@ function Trend({
     })),
   })
   if (recent.length < 2) return null
+  const bars = dayBars(
+    recent.map((d, i) => {
+      const view = results[i]?.data?.data
+      const counts = view ? countSeverities(buildFindings(view)) : null
+      return {
+        day: d,
+        critical: counts?.critical ?? 0,
+        warning: counts?.warning ?? 0,
+        hasData: Boolean(view),
+      }
+    })
+  )
   return (
-    <div className="flex items-center gap-2 flex-wrap">
-      <span className="text-[13px] font-semibold uppercase text-muted-foreground">Last days</span>
-      {[...recent].reverse().map((d) => {
-        const view = results[recent.indexOf(d)]?.data?.data
-        const health = view ? HEALTH[healthOf(view, buildFindings(view))] : null
-        return (
-          <button
-            type="button"
-            key={d}
-            onClick={() => onSelect(d)}
-            title={`${d}: ${health?.label ?? 'No result'}${view?.verdict ? ` - ${view.verdict.line}` : ''}`}
-            className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-[13px] transition-colors ${
-              d === current
-                ? 'border-primary ring-1 ring-primary bg-primary/5'
-                : 'hover:bg-muted/50'
-            }`}
-          >
-            <ToneIcon tone={health?.tone ?? 'idle'} className="h-3 w-3" />
-            {d.slice(5)}
-          </button>
-        )
-      })}
-    </div>
+    <Card>
+      <CardContent className="pt-4 pb-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <span className="text-[13px] font-semibold uppercase text-muted-foreground">
+            Last {bars.length} days
+          </span>
+          <span className="flex items-center gap-3 text-[13px] text-muted-foreground">
+            <span className="flex items-center gap-1">
+              <span className="inline-block h-2.5 w-2.5 rounded-sm bg-red-600" />
+              failed
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block h-2.5 w-2.5 rounded-sm bg-amber-500" />
+              warnings
+            </span>
+          </span>
+        </div>
+        <div className="flex items-end gap-2">
+          {bars.map((b) => (
+            <button
+              type="button"
+              key={b.day}
+              onClick={() => onSelect(b.day)}
+              title={`${b.day}: ${b.hasData ? `${b.critical} failed, ${b.warning} warnings` : 'loading'}`}
+              className={`flex min-w-0 flex-1 flex-col items-center gap-1 rounded-md border px-1 pb-1 pt-2 transition-colors ${
+                b.day === current
+                  ? 'border-primary ring-1 ring-primary bg-primary/5'
+                  : 'hover:bg-muted/50'
+              }`}
+            >
+              <span className="flex h-14 w-full max-w-10 flex-col justify-end overflow-hidden rounded-sm bg-muted/40">
+                <span className="block bg-amber-500" style={{ height: `${b.warningPct}%` }} />
+                <span className="block bg-red-600" style={{ height: `${b.criticalPct}%` }} />
+              </span>
+              <span className="text-[13px] tabular-nums">{b.day.slice(5)}</span>
+              <span
+                className={`text-[13px] tabular-nums ${b.critical ? TONE_TEXT.bad : 'text-muted-foreground'}`}
+              >
+                {b.hasData ? (b.critical ? `${b.critical} failed` : 'clear') : '...'}
+              </span>
+            </button>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -415,35 +440,46 @@ function Steps({
       <p className="text-[15px] text-muted-foreground">This checkpoint did not run on this day.</p>
     )
   }
+  const bars = stepBars(steps)
   return (
     <ol className="space-y-2">
-      {steps.map((s) => (
-        <li key={s.step} className="flex items-start gap-3 rounded-md border p-2">
-          <ToneIcon
-            tone={s.exit === 0 ? 'good' : stepFailed(day, phase, s) ? 'bad' : 'warn'}
-            className="h-4 w-4 mt-0.5 shrink-0"
-          />
-          <div className="flex-1 min-w-0">
-            <div className="flex justify-between gap-2">
-              <span className="text-[15px] font-medium">{STEP_INFO[s.step] ?? s.step}</span>
-              <span className="text-[13px] text-muted-foreground whitespace-nowrap">
-                {s.reran ? 'run again, ' : ''}
-                {s.started} | {duration(s)}
-              </span>
+      {steps.map((s, i) => {
+        const failed = s.exit !== 0 && stepFailed(day, phase, s)
+        const tone: Tone = s.exit === 0 ? 'good' : failed ? 'bad' : 'warn'
+        const fill = { good: 'bg-green-600', bad: 'bg-red-600', warn: 'bg-amber-500' }[
+          tone as 'good' | 'bad' | 'warn'
+        ]
+        return (
+          <li key={s.step} className="flex items-start gap-3 rounded-md border bg-card p-2">
+            <ToneIcon tone={tone} className="h-4 w-4 mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="flex justify-between gap-2">
+                <span className="text-[15px] font-medium">{STEP_INFO[s.step] ?? s.step}</span>
+                <span className="text-[13px] text-muted-foreground whitespace-nowrap">
+                  {s.reran ? 'run again, ' : ''}
+                  {s.started.slice(0, 5)} | {formatDuration(bars[i].seconds)}
+                </span>
+              </div>
+              <div className="mt-1 h-1.5 rounded-full bg-muted" aria-hidden="true">
+                <div
+                  className={`h-1.5 rounded-full ${fill}`}
+                  style={{ width: `${bars[i].pct}%` }}
+                />
+              </div>
+              {s.exit !== 0 &&
+                (failed ? (
+                  <div className={`text-[13px] ${TONE_TEXT.bad}`}>
+                    {s.exit === 124 ? 'Stopped at the deadline' : `Failed (exit ${s.exit})`}
+                  </div>
+                ) : (
+                  <div className={`text-[13px] ${TONE_TEXT.warn}`}>
+                    Ran and reported RED. See the findings.
+                  </div>
+                ))}
             </div>
-            {s.exit !== 0 &&
-              (stepFailed(day, phase, s) ? (
-                <div className={`text-[13px] ${TONE_TEXT.bad}`}>
-                  {s.exit === 124 ? 'Stopped at the deadline' : `Failed (exit ${s.exit})`}
-                </div>
-              ) : (
-                <div className={`text-[13px] ${TONE_TEXT.warn}`}>
-                  Ran and reported RED. See the findings.
-                </div>
-              ))}
-          </div>
-        </li>
-      ))}
+          </li>
+        )
+      })}
     </ol>
   )
 }
