@@ -49,6 +49,9 @@ step() {
 
 echo "=== $PHASE $DAY $(date +%T) ==="
 step check env PYTHONPATH=. "$UV" run python -m signal_engine.ops "$PHASE" --day "$DAY"
+# Failed checks reach the bug tracker here, in plain code, so a day is recorded even when no AI
+# review runs. Safe to repeat: a finding is recorded once per day.
+step track env PYTHONPATH=. "$UV" run python -m signal_engine.ops track --day "$DAY"
 # Only a same-day run talks to Telegram; a re-run of an earlier day prints the message instead.
 NOTIFY_FLAG=""; [ "$DAY" = "$(date +%F)" ] || NOTIFY_FLAG="--dry-run"
 step notify env PYTHONPATH=. "$UV" run python -m signal_engine.ops notify "$PHASE" --day "$DAY" $NOTIFY_FLAG

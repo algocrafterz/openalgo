@@ -5,6 +5,7 @@
     uv run python -m signal_engine.ops logs [--day D]           error signatures vs the last 5 sessions
     uv run python -m signal_engine.ops jobs [--day D]           scheduled-job audit
     uv run python -m signal_engine.ops value-areas [--day D]    store the day's VAH/POC/VAL, check coverage
+    uv run python -m signal_engine.ops track [--day D]          record the day's FAIL checks in the bug tracker
     uv run python -m signal_engine.ops notify PHASE [--day D]   the one Telegram message for a phase
 
 Exit status: 0 GREEN or AMBER, 1 RED, so a phase status file shows a failed check as a failed step.
@@ -14,7 +15,7 @@ import argparse
 import sys
 from datetime import datetime
 
-from signal_engine.ops import jobs, logscan, readiness, value_areas, verdict
+from signal_engine.ops import autotrack, jobs, logscan, readiness, value_areas, verdict
 from signal_engine.ops.model import read_phase
 from signal_engine.timeutils import IST
 
@@ -22,7 +23,8 @@ from signal_engine.timeutils import IST
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="signal_engine.ops")
     parser.add_argument(
-        "command", choices=("open-day", "liveness", "logs", "jobs", "value-areas", "notify")
+        "command",
+        choices=("open-day", "liveness", "logs", "jobs", "value-areas", "notify", "track"),
     )
     parser.add_argument("phase", nargs="?", help="for notify: open-day, liveness or close-day")
     parser.add_argument("--day", default=datetime.now(IST).strftime("%Y-%m-%d"))
@@ -43,6 +45,13 @@ def main(argv=None) -> int:
         sent = verdict.send(args.phase, args.day)
         print(f"{'sent' if sent else 'NOT sent'}: {text}")
         return 0 if sent else 1
+
+    if args.command == "track":
+        lines = autotrack.record_failures(args.day)
+        print(f"track {args.day}: {len(lines)} failed check(s)")
+        for line in lines:
+            print(f"  {line}")
+        return 0
 
     if args.command == "open-day":
         path = readiness.open_day(args.day)

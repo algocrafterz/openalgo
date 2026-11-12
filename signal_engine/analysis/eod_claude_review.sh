@@ -61,7 +61,7 @@ fi
 # the review stops investigating at 15:55; a re-run of an earlier day gets the same 20 minutes
 # close_day.sh gives it. A model told only "hard time budget" stopped after about a minute with
 # thirteen unused (2026-11-02, 2026-11-03).
-if [ "$DAY" = "$(date +%F)" ]; then
+if [ "$DAY" = "$(date +%F)" ] && [ "$(date +%s)" -lt "$(date -d "$DAY 15:50" +%s)" ]; then
   HARD_END="$(date -d "$DAY 15:58" +%s)"
   STOP_AT="$(date -d "$DAY 15:55" +%H:%M)"
 else

@@ -13,6 +13,7 @@
 #   15:36  eod        eod.sh: tradebook snapshot, ledger, pages vs fills, regression check (< 1 min)
 #   15:37  execution_health, logs (error signatures), Fridays weekly (seconds each)
 #   ~15:43 backfill joined; value_areas (the day's VAH/POC/VAL rows); jobs (scheduled-job audit)
+#   ~15:43 track      the day's FAIL checks recorded in the bug tracker (plain code, seconds)
 #   ~15:43 review     Claude close-day review, report-only, reads every output above (2-10 minutes)
 #   ~15:50 notify     the day's single Telegram line (verdict); hard deadline 15:58
 #
@@ -114,6 +115,10 @@ wait "$BACKFILL_PID"
 step value_areas "${OPS[@]}" value-areas --day "$DAY" >> "$LOGS/ops_cron.log" 2>&1
 
 step jobs "${OPS[@]}" jobs --day "$DAY" >> "$LOGS/ops_cron.log" 2>&1
+
+# Record the day's failed checks in the bug tracker in plain code, before the AI review, so a
+# review that cannot run (usage limit, expired sign-in, deadline) loses no finding.
+step track "${OPS[@]}" track --day "$DAY" >> "$LOGS/ops_cron.log" 2>&1
 
 REVIEW_REPORT="$REPORTS/eod-$DAY-claude-review.md"
 if [ "$REVIEW" -eq 1 ]; then
