@@ -1,7 +1,7 @@
 """Inbound Telegram channel ingestion: record messages from a source channel, trade nothing.
 
 Stage 1 only. A source channel listed under `telegram.ingest_sources` in config.yaml has its
-messages written verbatim to signal_engine/data/telegram_ingest.db so they can be studied
+messages written verbatim to signal_engine/data/breakingtrade_channel.db so they can be studied
 later. Nothing here parses a message, produces a signal, calls the trading pipeline or reposts
 the content anywhere. The data stays on this machine, and a channel that restricts forwarding
 is read exactly as the logged-in account is allowed to read it.
@@ -62,7 +62,7 @@ from signal_engine.config import settings
 from signal_engine.timeutils import IST
 
 INGEST_DB_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "data", "telegram_ingest.db"
+    os.path.dirname(os.path.abspath(__file__)), "data", "breakingtrade_channel.db"
 )
 
 #: How far back the first backfill reaches, in calendar days.
