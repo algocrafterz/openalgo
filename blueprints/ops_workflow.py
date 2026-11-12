@@ -52,11 +52,16 @@ def _steps(phase: str, day: str, folder: str) -> list[dict] | None:
         return None
     with open(path, encoding="utf-8") as handle:
         rows = [line.rstrip("\n").split("\t") for line in handle][1:]
-    return [
-        {"step": r[0], "started": r[1], "ended": r[2], "exit": int(r[3])}
-        for r in rows
-        if len(r) == 4 and r[3].lstrip("-").isdigit()
-    ]
+    # A step run again from the page appends a new row: show the latest result of each step, in
+    # the order the steps first ran, and say it was run again.
+    latest: dict[str, dict] = {}
+    for r in rows:
+        if len(r) == 4 and r[3].lstrip("-").isdigit():
+            row = {"step": r[0], "started": r[1], "ended": r[2], "exit": int(r[3])}
+            if r[0] in latest:
+                row["reran"] = True
+            latest[r[0]] = row
+    return list(latest.values())
 
 
 def _checked(name: str, day: str, folder: str) -> dict | None:

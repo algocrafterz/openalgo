@@ -5,6 +5,8 @@ export interface WorkflowStep {
   started: string
   ended: string
   exit: number
+  /** True when the step was run again from the page; this is its latest result. */
+  reran?: boolean
 }
 
 export interface WorkflowPhase {

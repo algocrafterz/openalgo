@@ -6,6 +6,7 @@
     uv run python -m signal_engine.ops jobs [--day D]           scheduled-job audit
     uv run python -m signal_engine.ops value-areas [--day D]    store the day's VAH/POC/VAL, check coverage
     uv run python -m signal_engine.ops track [--day D]          record the day's FAIL checks in the bug tracker
+    uv run python -m signal_engine.ops run-action ACTION --day D --id RUN   run a step again (the page)
     uv run python -m signal_engine.ops notify PHASE [--day D]   the one Telegram message for a phase
 
 Exit status: 0 GREEN or AMBER, 1 RED, so a phase status file shows a failed check as a failed step.
@@ -15,7 +16,7 @@ import argparse
 import sys
 from datetime import datetime
 
-from signal_engine.ops import autotrack, jobs, logscan, readiness, value_areas, verdict
+from signal_engine.ops import actions, autotrack, jobs, logscan, readiness, value_areas, verdict
 from signal_engine.ops.model import read_phase
 from signal_engine.timeutils import IST
 
@@ -24,11 +25,21 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="signal_engine.ops")
     parser.add_argument(
         "command",
-        choices=("open-day", "liveness", "logs", "jobs", "value-areas", "notify", "track"),
+        choices=(
+            "open-day",
+            "liveness",
+            "logs",
+            "jobs",
+            "value-areas",
+            "notify",
+            "track",
+            "run-action",
+        ),
     )
     parser.add_argument("phase", nargs="?", help="for notify: open-day, liveness or close-day")
     parser.add_argument("--day", default=datetime.now(IST).strftime("%Y-%m-%d"))
     parser.add_argument("--at", help="liveness only: end of the window, HH:MM (default: now)")
+    parser.add_argument("--id", help="run-action only: the run id the page is watching")
     parser.add_argument("--dry-run", action="store_true", help="notify only: print, do not send")
     args = parser.parse_args(argv)
 
@@ -45,6 +56,11 @@ def main(argv=None) -> int:
         sent = verdict.send(args.phase, args.day)
         print(f"{'sent' if sent else 'NOT sent'}: {text}")
         return 0 if sent else 1
+
+    if args.command == "run-action":
+        if args.phase not in actions.ACTIONS or not actions.RUN_ID.match(args.id or ""):
+            parser.error("run-action needs a known action and --id")
+        return actions.run(args.phase, args.day, args.id)
 
     if args.command == "track":
         lines = autotrack.record_failures(args.day)

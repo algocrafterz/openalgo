@@ -13,6 +13,7 @@ import { bugsApi } from '@/api/bugs'
 import { type FindingLink, opsFindingsApi } from '@/api/opsFindings'
 import { opsWorkflowApi, type WorkflowDay, type WorkflowStep } from '@/api/opsWorkflow'
 import { ReportBugDialog } from '@/components/ops/ReportBugDialog'
+import { RemedyProvider, RunAgainButton, RunBanner } from '@/components/ops/RunAgain'
 import { StatusBadge, TONE_TEXT, type Tone, ToneIcon } from '@/components/ops/StatusBadge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -271,6 +272,7 @@ function FindingRow({
               Tracked as {bug.bug_id}
             </Link>
           )}
+          <RunAgainButton finding={finding} />
           <button
             type="button"
             aria-expanded={open}
@@ -425,6 +427,7 @@ function Steps({
             <div className="flex justify-between gap-2">
               <span className="text-[15px] font-medium">{STEP_INFO[s.step] ?? s.step}</span>
               <span className="text-[13px] text-muted-foreground whitespace-nowrap">
+                {s.reran ? 'run again, ' : ''}
                 {s.started} | {duration(s)}
               </span>
             </div>
@@ -716,41 +719,44 @@ export default function DailyWorkflow() {
         </Card>
       ) : (
         <FindingBugs.Provider value={bugContext}>
-          <SessionOverview day={view} findings={findings} bugs={bugSummary} />
-          <Trend days={days} current={view.day} onSelect={pick} />
-          <Attention
-            findings={findings}
-            hasData={healthOf(view, findings) !== 'nodata'}
-            onOpenReport={openReport}
-          />
-          <Card>
-            <CardHeader className="pb-0">
-              <CardTitle className="text-base">Checkpoints</CardTitle>
-            </CardHeader>
-            <CardContent className="pt-3">
-              <ol className="divide-y rounded-lg border">
-                {PHASES.map((p) => (
-                  <Checkpoint
-                    key={p.key}
-                    day={view}
-                    phase={p}
-                    findings={findings}
-                    open={openPhase === p.key}
-                    onToggle={() => setOpenPhase(openPhase === p.key ? null : p.key)}
-                  />
-                ))}
-              </ol>
-            </CardContent>
-          </Card>
-          <div ref={reportsRef} className="scroll-mt-4 space-y-3">
-            <Button variant="outline" size="sm" onClick={() => setShowReports(!showReports)}>
-              <FileText className="h-4 w-4 mr-2" />
-              {showReports ? 'Hide full reports' : 'Show full reports'}
-            </Button>
-            {showReports && (
-              <WorkflowReports key={view.day} day={view} selected={report} onSelect={setReport} />
-            )}
-          </div>
+          <RemedyProvider day={view.day}>
+            <SessionOverview day={view} findings={findings} bugs={bugSummary} />
+            <Trend days={days} current={view.day} onSelect={pick} />
+            <RunBanner />
+            <Attention
+              findings={findings}
+              hasData={healthOf(view, findings) !== 'nodata'}
+              onOpenReport={openReport}
+            />
+            <Card>
+              <CardHeader className="pb-0">
+                <CardTitle className="text-base">Checkpoints</CardTitle>
+              </CardHeader>
+              <CardContent className="pt-3">
+                <ol className="divide-y rounded-lg border">
+                  {PHASES.map((p) => (
+                    <Checkpoint
+                      key={p.key}
+                      day={view}
+                      phase={p}
+                      findings={findings}
+                      open={openPhase === p.key}
+                      onToggle={() => setOpenPhase(openPhase === p.key ? null : p.key)}
+                    />
+                  ))}
+                </ol>
+              </CardContent>
+            </Card>
+            <div ref={reportsRef} className="scroll-mt-4 space-y-3">
+              <Button variant="outline" size="sm" onClick={() => setShowReports(!showReports)}>
+                <FileText className="h-4 w-4 mr-2" />
+                {showReports ? 'Hide full reports' : 'Show full reports'}
+              </Button>
+              {showReports && (
+                <WorkflowReports key={view.day} day={view} selected={report} onSelect={setReport} />
+              )}
+            </div>
+          </RemedyProvider>
         </FindingBugs.Provider>
       )}
     </div>
