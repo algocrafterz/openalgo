@@ -333,3 +333,28 @@ class TestShadowRecording:
         assert deps.state.shadow_events(DAY, "BREAKOUT") == []
         assert "sig_id" in rep.skipped["AAA"]
         deps.state.close()
+
+
+class TestStaleBeforeSubmit:
+    """S-06: freshness is checked again right before the order, not only at the cycle start."""
+
+    def test_an_entry_dispatched_after_the_limit_is_skipped(self, make):
+        import asyncio
+
+        from signal_engine.pipeline.cycle import CycleReport, _dispatch
+
+        deps = make({"AAA": [fire(at="10:00")]}, now="10:07:00", stale=60.0)
+        report = CycleReport(bar_close=t("10:05:00"))
+        asyncio.run(_dispatch(fire(at="10:00"), t("10:00:00"), deps, report))
+        assert deps.sink.signals == []
+        assert "stale before submit" in report.skipped["AAA"]
+
+    def test_an_entry_dispatched_inside_the_limit_is_submitted(self, make):
+        import asyncio
+
+        from signal_engine.pipeline.cycle import CycleReport, _dispatch
+
+        deps = make({"AAA": [fire(at="10:00")]}, now="10:05:10", stale=60.0)
+        report = CycleReport(bar_close=t("10:05:00"))
+        asyncio.run(_dispatch(fire(at="10:00"), t("10:00:00"), deps, report))
+        assert len(deps.sink.signals) == 1

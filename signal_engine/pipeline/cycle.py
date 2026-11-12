@@ -251,6 +251,17 @@ async def _dispatch(fire: Fire, bar_open, deps: CycleDeps, report: CycleReport) 
     if deps.halted():
         _skip(report, bar_open, symbol, "engine halted", deps)
         return
+    # Checked again here, immediately before the order: the cycle's own check ran before the
+    # evaluation, and a slow cycle can pass the limit while it works (S-06). Entries only.
+    bar_close = bar_open + pd.Timedelta(minutes=deps.strategy.interval_min)
+    if pretrade.is_stale(bar_close, deps.clock.now(), deps.stale_limit_s):
+        late = (deps.clock.now() - bar_close).total_seconds()
+        _skip(
+            report, bar_open, symbol,
+            f"stale before submit ({late:.0f}s after the bar closed, limit {deps.stale_limit_s:.0f}s)",
+            deps,
+        )
+        return
     try:
         await deps.sink.submit(signal)
     except Exception:  # noqa: BLE001 - a sink failure is reported, never swallowed

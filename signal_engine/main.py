@@ -334,6 +334,8 @@ async def _handle_exit_locked(signal) -> None:
             "close it and the broker still holds it; close it by hand"
         )
         return
+    if await _late_exit_refused(signal, pos):
+        return
     if pos is not None:
         pos.exit_pending = True
 
@@ -422,6 +424,46 @@ def _exit_blocked_by_time_exit(signal) -> bool:
     logger.info(
         f"EXIT skipped for {signal.symbol}: time_exit_all() in progress, positions closing via time exit"
     )
+    return True
+
+
+async def _entry_stale_before_send(signal) -> bool:
+    """True if this entry has aged past the freshness limit while it waited to be sent."""
+    origin = freshness.current_origin()
+    if origin is None:
+        return False
+    age = freshness.stale_age(origin, settings.stale_signal_seconds)
+    if age is None:
+        return False
+    reason = f"stale by {age:.0f}s at send time (limit {settings.stale_signal_seconds}s)"
+    logger.warning(f"Refusing stale entry {signal.strategy} {signal.symbol}: {reason}")
+    await _decline(signal, stage="stale", reason=reason)
+    return True
+
+
+async def _late_exit_refused(signal, pos) -> bool:
+    """True if a late EXIT alert must not act on the position it finds.
+
+    An alert older than the freshness limit (a backlog after a Telegram outage) is processed,
+    but only against a position it can belong to: one that was already open when the alert was
+    sent. An alert sent before this position was entered belongs to an earlier position of the
+    same name, and with nothing tracked there is nothing to validate it against. Fresh alerts
+    are never judged here.
+    """
+    origin = freshness.current_origin()
+    if origin is None or freshness.stale_age(origin, settings.stale_signal_seconds) is None:
+        return False
+    if pos is None:
+        reason = "late EXIT alert and no tracked position to check it against"
+    elif origin < pos.entry_time:
+        reason = (
+            f"late EXIT alert was sent {origin.astimezone(IST):%H:%M:%S} IST, before this "
+            f"position was entered ({pos.entry_time:%H:%M:%S}); it belongs to an earlier position"
+        )
+    else:
+        return False
+    logger.warning(f"EXIT refused for {signal.symbol} [{signal.strategy}]: {reason}")
+    await _decline(signal, stage="late_exit", reason=reason)
     return True
 
 
@@ -1780,6 +1822,11 @@ async def _place_reserved_entry(signal) -> None:
 
     rr = _log_entry_sizing(signal, quantity, sizing_capital, risk_based_quantity)
     order = _build_entry_order(signal, quantity, is_analyze)
+
+    # Freshness again, immediately before the order (E-19): the check at dispatch ran before the
+    # capital, margin and sizing reads, which can take longer than the limit. Entries only.
+    if await _entry_stale_before_send(signal):
+        return
 
     # Send to OpenAlgo (routes to live broker or sandbox automatically)
     sent_at = datetime.now(IST).replace(microsecond=0)  # broker order stamps are whole seconds
