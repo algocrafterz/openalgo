@@ -534,6 +534,23 @@ def _match_open_sl_orders(orderbook) -> dict:
     return matched
 
 
+def _entry_time_kwarg(found: dict) -> dict:
+    """The position's real entry time from its trades.db row, as a TrackedPosition keyword.
+
+    Without it a restored position's age starts at the restart: its hold time, no-progress gates
+    and the late-EXIT check (an alert sent before the restart must still match the position)
+    would all measure from the wrong moment. An unreadable stamp leaves the default (now).
+    """
+    raw = str((found or {}).get("executed_at") or "")
+    try:
+        stamp = datetime.fromisoformat(raw)
+    except ValueError:
+        return {}
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=IST)
+    return {"entry_time": stamp}
+
+
 def _restore_tracker_positions(
     tracker, open_broker_positions, configured_product, sl_orders: dict = None,
     unmatched: list | None = None,
@@ -609,6 +626,7 @@ def _restore_tracker_positions(
                     # Partial legs already booked to the risk counters: remembering them keeps
                     # the closing leg priced on its own (no second count of the legs).
                     realized_pnl=db.fetch_open_position_leg_pnl(bsymbol, strategy_for_pos),
+                    **_entry_time_kwarg(found),
                 )
             )
             restored += 1

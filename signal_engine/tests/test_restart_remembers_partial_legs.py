@@ -63,3 +63,20 @@ def test_restore_sets_realized_pnl_from_the_legs():
         startup._restore_tracker_positions(tracker, broker, "MIS")
     pos = tracker.find_position("SBIN", "BREAKOUT")
     assert pos is not None and pos.realized_pnl == 500.0
+
+
+def test_restore_keeps_the_real_entry_time():
+    from datetime import datetime, timedelta
+
+    from signal_engine.timeutils import IST
+
+    when = (datetime.now(IST) - timedelta(hours=3)).replace(tzinfo=None, microsecond=0)
+    result = TradeResult(order_id="E1", status=OrderStatus.SUCCESS, message="success", timestamp=when)
+    db.save(make_signal(strategy="BREAKOUT", symbol="SBIN"), _order(Action.BUY), result)
+    tracker = PositionTracker(_make_engine())
+    cfg = SimpleNamespace(product="MIS", exchange="NSE", strategy_profiles={"BREAKOUT": {}})
+    broker = [{"symbol": "SBIN", "exchange": "NSE", "quantity": 10, "average_price": 2500.0}]
+    with patch.object(startup, "settings", cfg):
+        startup._restore_tracker_positions(tracker, broker, "MIS")
+    pos = tracker.find_position("SBIN", "BREAKOUT")
+    assert pos.entry_time == when.replace(tzinfo=IST)
