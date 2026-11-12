@@ -6,6 +6,8 @@
     uv run python -m signal_engine.ops jobs [--day D]           scheduled-job audit
     uv run python -m signal_engine.ops value-areas [--day D]    store the day's VAH/POC/VAL, check coverage
     uv run python -m signal_engine.ops track [--day D]          record the day's FAIL checks in the bug tracker
+    uv run python -m signal_engine.ops retry-failed             overnight retry of yesterday's failed backfill
+    uv run python -m signal_engine.ops deadman PHASE            alert when a checkpoint left no record
     uv run python -m signal_engine.ops run-action ACTION --day D --id RUN   run a step again (the page)
     uv run python -m signal_engine.ops notify PHASE [--day D]   the one Telegram message for a phase
 
@@ -16,7 +18,16 @@ import argparse
 import sys
 from datetime import datetime
 
-from signal_engine.ops import actions, autotrack, jobs, logscan, readiness, value_areas, verdict
+from signal_engine.ops import (
+    actions,
+    automation,
+    autotrack,
+    jobs,
+    logscan,
+    readiness,
+    value_areas,
+    verdict,
+)
 from signal_engine.ops.model import read_phase
 from signal_engine.timeutils import IST
 
@@ -34,6 +45,8 @@ def main(argv=None) -> int:
             "notify",
             "track",
             "run-action",
+            "retry-failed",
+            "deadman",
         ),
     )
     parser.add_argument("phase", nargs="?", help="for notify: open-day, liveness or close-day")
@@ -54,6 +67,27 @@ def main(argv=None) -> int:
             print(f"[dry-run] would send: {text}")
             return 0
         sent = verdict.send(args.phase, args.day)
+        print(f"{'sent' if sent else 'NOT sent'}: {text}")
+        return 0 if sent else 1
+
+    if args.command == "retry-failed":
+        for line in automation.retry_failed():
+            print(line)
+        return 0
+
+    if args.command == "deadman":
+        if args.phase not in automation.EXPECTED:
+            parser.error("deadman needs a phase: morning or close")
+        text = automation.deadman(args.phase, args.day)
+        if text is None:
+            print(f"deadman {args.phase} {args.day}: every expected checkpoint left a record")
+            return 0
+        if args.dry_run:
+            print(f"[dry-run] would send: {text}")
+            return 0
+        from signal_engine.analysis.eod_review import send_to_admin_channel
+
+        sent = send_to_admin_channel(text, verdict._phase())
         print(f"{'sent' if sent else 'NOT sent'}: {text}")
         return 0 if sent else 1
 

@@ -74,8 +74,27 @@ def test_a_successful_run_is_recorded_in_state_and_the_status_file(env, monkeypa
     assert state["outcome"] == "ok" and state["exit"] == 0
     assert "out" in state["tail"]
     rows = (env / f"close-day-{DAY}-status.tsv").read_text().splitlines()
-    assert rows[-1].split("\t")[0] == "backfill" and rows[-1].endswith("\t0")
-    assert len(rows) == 3  # the failed row is kept; the page shows the latest of each step
+    names = [r.split("\t")[0] for r in rows[1:]]
+    # the failed row is kept; the page shows the latest of each step. The backfill is followed by
+    # the value areas it feeds and the scheduled-jobs audit that reads every step.
+    assert names == ["backfill", "backfill", "value_areas", "jobs"]
+    assert rows[2].endswith("\t0")
+    assert "Also done" in state["message"]
+
+
+def test_follow_ups_run_only_after_success_and_never_for_the_audit_itself(env, monkeypatch):
+    _fake(monkeypatch, 3)
+    actions.run("backfill", DAY, "1762843508-backfill")
+    names = [
+        r.split("\t")[0] for r in (env / f"close-day-{DAY}-status.tsv").read_text().splitlines()
+    ]
+    assert names == ["step", "backfill", "backfill"]  # header, the old failure, the new failure
+    _fake(monkeypatch, 0)
+    actions.run("jobs", DAY, "1762843509-jobs")
+    names = [
+        r.split("\t")[0] for r in (env / f"close-day-{DAY}-status.tsv").read_text().splitlines()
+    ]
+    assert names.count("jobs") == 1  # the audit does not chain another audit
 
 
 def test_a_failed_run_is_reported_as_failed(env, monkeypatch):

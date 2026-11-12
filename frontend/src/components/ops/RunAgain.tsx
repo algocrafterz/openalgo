@@ -144,7 +144,8 @@ export function RunBanner() {
             <Loader2 className="h-4 w-4 animate-spin" />
             <span className="font-medium">Running: {run.label}</span>
             <span className="text-muted-foreground">
-              for {run.day}, started {run.started.slice(11, 16)}. This page updates when it ends.
+              for {run.day}, started {run.auto ? 'automatically' : ''} {run.started.slice(11, 16)}.
+              This page updates when it ends.
             </span>
           </>
         ) : (
@@ -153,6 +154,7 @@ export function RunBanner() {
               {run.outcome === 'ok' ? 'Done' : 'Did not finish'}
             </StatusBadge>
             <span className="font-medium">{run.label}</span>
+            {run.auto && <span className="text-muted-foreground">(started automatically)</span>}
             <span className={run.outcome === 'ok' ? '' : TONE_TEXT.bad}>{run.message}</span>
             <button
               type="button"

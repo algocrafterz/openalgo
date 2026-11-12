@@ -15,6 +15,8 @@ export interface OpsRun {
   day: string
   label: string
   started: string
+  /** True when the system started it on its own, not someone clicking. */
+  auto?: boolean
   ended?: string
   outcome?: 'ok' | 'failed'
   message?: string

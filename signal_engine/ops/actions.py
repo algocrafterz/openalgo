@@ -266,37 +266,37 @@ def _tail(path: str, limit: int = 1500) -> str:
         return ""
 
 
-def run(action: str, day: str, run_id: str, *, state_dir: str | None = None) -> int:
-    """Run one action to the end, recording progress in its state file. Returns the exit code."""
-    spec = ACTIONS[action]
-    cmd = command(action, day)
-    folder = state_dir or STATE_DIR
-    log = os.path.join(folder, f"{run_id}.log")
-    started = now_ist()
-    base = {
-        "id": run_id,
-        "action": action,
-        "day": day,
-        "label": spec.label,
-        "pid": os.getpid(),
-        "started": started.isoformat(timespec="seconds"),
-    }
-    write_state(run_id, base, folder)
+#: After a step succeeds, these are re-run so the page does not keep a finding the fix cleared.
+#: Each is a seconds-long read-only rebuild. The backfill feeds the value areas, and the
+#: scheduled-jobs audit reads every step's status, so it comes last.
+FOLLOW_UPS: dict[str, tuple[str, ...]] = {
+    "backfill": ("value_areas", "jobs"),
+    "eod": ("jobs",),
+    "execution_health": ("jobs",),
+    "logs": ("jobs",),
+    "value_areas": ("jobs",),
+    "review": ("jobs",),
+    "jobs": (),
+}
 
+
+def _run_one(action: str, day: str, log: str) -> tuple[int, bool, str, str]:
+    """Run one action's command once. Returns (exit code, timed out, started, ended) as HH:MM:SS."""
+    spec = ACTIONS[action]
+    started = now_ist().strftime("%H:%M:%S")
     env = {**os.environ, "PYTHONPATH": REPO}
     if action == "eod":
         env["EOD_TELEGRAM"] = "0"  # the digest goes into the report, not to Telegram
     report = os.path.join(REPORTS, f"execution-health-{day}.md")
-    rc = 1
-    timed_out = False
     out_path = report + ".part" if action == "execution_health" else None
+    rc, timed_out = 1, False
     try:
-        os.makedirs(folder, exist_ok=True)
+        os.makedirs(os.path.dirname(log), exist_ok=True)
         with open(log, "ab") as log_handle:
             stdout = open(out_path, "wb") if out_path else log_handle  # noqa: SIM115
             try:
                 proc = subprocess.run(  # noqa: S603 - fixed argv from command(), never a shell
-                    cmd,
+                    command(action, day),
                     cwd=REPO,
                     env=env,
                     stdout=stdout,
@@ -318,13 +318,57 @@ def run(action: str, day: str, run_id: str, *, state_dir: str | None = None) -> 
                 os.remove(out_path)
     except OSError:
         rc = 1
+    ended = now_ist().strftime("%H:%M:%S")
+    try:
+        append_step(day, spec.step, started, ended, rc)
+    except OSError:
+        pass
+    return rc, timed_out, started, ended
 
-    ended = now_ist()
+
+def _succeeded(action: str, rc: int) -> bool:
     # An ops check exits 1 by design when its own verdict is RED: it ran. Anything else non-zero
     # is a failure, the same reading the page applies to the cron run.
-    red_by_design = action in ("logs", "value_areas", "jobs") and rc == 1
-    ok = rc == 0 or red_by_design
-    outcome = "ok" if ok else "failed"
+    return rc == 0 or (action in ("logs", "value_areas", "jobs") and rc == 1)
+
+
+def run(
+    action: str,
+    day: str,
+    run_id: str,
+    *,
+    state_dir: str | None = None,
+    auto: bool = False,
+) -> int:
+    """Run one action to the end, then its follow-up re-checks. Returns 0 when the action worked.
+
+    Progress is in the run's state file. `auto` marks a run the system started on its own.
+    """
+    spec = ACTIONS[action]
+    command(action, day)  # refuse an unknown action or a bad day before anything is recorded
+    folder = state_dir or STATE_DIR
+    log = os.path.join(folder, f"{run_id}.log")
+    started = now_ist()
+    base = {
+        "id": run_id,
+        "action": action,
+        "day": day,
+        "label": spec.label,
+        "pid": os.getpid(),
+        "started": started.isoformat(timespec="seconds"),
+        "auto": auto,
+    }
+    write_state(run_id, base, folder)
+
+    rc, timed_out, _, _ = _run_one(action, day, log)
+    ok = _succeeded(action, rc)
+    followed: list[str] = []
+    if ok:
+        for follow in FOLLOW_UPS.get(action, ()):
+            follow_rc, _, _, _ = _run_one(follow, day, log)
+            followed.append(ACTIONS[follow].label if _succeeded(follow, follow_rc) else "")
+    followed = [name for name in followed if name]
+
     message = (
         "Done. The page now shows the new result."
         if ok
@@ -332,17 +376,15 @@ def run(action: str, day: str, run_id: str, *, state_dir: str | None = None) -> 
         if timed_out
         else "It did not finish cleanly."
     )
-    try:
-        append_step(day, spec.step, started.strftime("%H:%M:%S"), ended.strftime("%H:%M:%S"), rc)
-    except OSError:
-        pass
+    if ok and followed:
+        message += f" Also done: {', '.join(n[0].lower() + n[1:] for n in followed)}."
     write_state(
         run_id,
         {
             **base,
-            "ended": ended.isoformat(timespec="seconds"),
+            "ended": now_ist().isoformat(timespec="seconds"),
             "exit": rc,
-            "outcome": outcome,
+            "outcome": "ok" if ok else "failed",
             "message": message,
             "tail": _tail(log),
         },
