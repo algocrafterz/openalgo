@@ -157,3 +157,88 @@ Everything else in Phase 2 is implemented (section 1b).
   restart at 20:06 IST on 2026-11-12.
 - `signal_engine/bugs/bugs.json` and the BreakingTrade critical-alert files were modified by
   another session and are not part of this work.
+
+## 6. TODO checklist (audit stays open)
+
+Updated 2026-11-12 20:30 IST. Status of the audit: Phase 1 and most of Phase 2 done; the items
+below are open. Tick an item here when it is committed and verified.
+
+### Tomorrow (2026-11-13)
+
+- [ ] 09:12 readiness check is green (`/open-day`).
+- [ ] 09:27 liveness check is green: both runners (EVWAP-EARLY-PY, ORB-PY) started, tracker polling.
+- [ ] After the first trade of the day, read the log for the new paths: a partial exit books its leg
+      (`record_partial_close`), no dead-stop or late-exit surprises, no errors in `log/errors.jsonl`.
+
+### Required before live trading
+
+- [ ] E-17: filled quantity, not ordered quantity, drives tracking and stop size. Needs a real
+      partial fill to verify; test with a small live order first.
+- [ ] G8.1: flatten-all kill switch.
+- [ ] V-03: runtime promotion check (live requires an approved promotion record). Keep it minimal.
+
+### Needs an owner decision or approval
+
+- [ ] BUG-019, E-09: review the state transitions in `DESIGN-2026-11-UNCERTAIN-ORDER-RECOVERY.md`,
+      then implement.
+- [ ] Residual 1: Flattrade failed PositionBook read returned as an error, not an empty success
+      (`broker/flattrade/mapping/order_data.py:330-335`). Core change.
+- [ ] E-04 remainder: a core option to pin the order pipe (live or sandbox) from REST, so the 14:45
+      time exit and signal exits cannot follow a mid-session mode change.
+- [ ] I-01 origin: decide whether to investigate the `PORTFOLIO/live` weekend rows in `data/risk.db`.
+
+### Data and calendar
+
+- [ ] D-01: add the 2027 NSE holidays to `research/reference/nse_calendar.yaml` from the official
+      circular. Due before 1 December (the 09:12 check turns amber) and before the first 2027 session.
+
+### Gaps left inside implemented items
+
+- [ ] E-12: restore the break-even flag after a restart.
+- [ ] E-13: write a trades.db row for a partial exit confirmed late.
+- [ ] E-14: adopt a working untracked twin stop instead of placing a second one; size a re-placed stop
+      by the quantity left after a partial fill.
+- [ ] E-06: re-clear working orders after waiting on a held exit lock; cap the total wait across legs.
+- [ ] R-01: stop pricing a position with earlier legs from the broker's symbol total when the book has
+      no LTP.
+- [ ] S-03: hard deadline (`wait_for`) around the bar fetch.
+- [ ] Residual risks 2 to 10 in section 3 (stop id cleared on a late partial exit, orphan wait alert text,
+      zero-P&L sandbox close, shared-symbol exit-in-flight check, `canceled` spelling, not-sent message
+      wording, `last_poll_ok_at` meaning, awaited notices on the order path, Flattrade log evidence).
+
+### Phase 3: performance and resources
+
+- [ ] E-16: one orderbook read per poll; reuse the shared HTTP client for orders.
+- [ ] S-04: trailing-stop replay off the event loop (measure first).
+- [ ] I-06, I-08: lock or thread-local connections for `risk.db` and `runner_state.db`; retry and alert on a
+      failed `trades.db` write.
+- [ ] D-05: DuckDB lock wait for the runner warm-up read.
+
+### Phase 4: architecture and maintainability
+
+- [ ] One close authority taking the proof of flatness as an argument.
+- [ ] Split `main.py` along its existing seams, no behaviour change.
+- [ ] S-05: ORB-PY backtest adapter over `strategy_core/orb.py`; fix the docstring that claims it is shared.
+- [ ] One price-band helper; one reporting P&L function with gross and net labelled (M-04); config
+      unknown-key warnings (I-09); I-04 lock file descriptor not inherited; I-07 in-process
+      single-instance lock.
+- [ ] Correct stale docs: `ACCOUNTING-INVARIANTS.md` time-exit paragraph, `mode_guard.py` docstring,
+      scheduled-task times in the `.ps1` comments.
+
+### Phase 5: integration testing and production readiness
+
+- [ ] V-01, V-02, V-04: out-of-sample minimum and enforced window; promotion needs a passing reproduce
+      attempt; trial ledger records the cut.
+- [ ] B-01 to B-04: session-axis Sharpe; backtest stop floor bound to the live profile; same-day swing exits
+      priced as intraday; time exit at 14:45 by default. Each under a new version.
+- [ ] M-03 then the G7 evaluators: per-trade comparison of sandbox fills with backtest assumptions.
+- [ ] M-01, M-02, M-05: runner alert re-arm; narrow the sandbox reconcile suppression; floor the close-day
+      verdict with deterministic checks.
+- [ ] D-02, D-03, D-04: one bar-sanity predicate for live and backtest; ex-date guard at warm-up; native 5m
+      versus resampled 1m comparison.
+- [ ] Engine liveness in the heartbeat and the 09:27 check (after residual 8); automated backup of
+      `data/trades.db`; dead-man alert for missed cron runs.
+- [ ] Fault-injection fakes (broker timeout, 5xx, accept-then-reject, empty book, blocking notifier) on
+      `pipeline/sim_sink.py`.
+- [ ] Live broker evidence: confirm on a real session that every Phase 1 and Phase 2 fix behaved as tested
+      against mocks.
