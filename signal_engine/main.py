@@ -1295,6 +1295,9 @@ async def _book_exit_result(
         is_partial=True,
         new_realised_pnl=current_realised,
     )
+    # Each completed leg reaches the risk counters once, at its own P&L (the final close books
+    # only its own leg). The position stays open, so no slot is freed here.
+    risk_engine.record_partial_close(pnl_delta, strategy=pos.strategy)
     # A partial leg's row is written by the plain save() below, not book_close() - it is
     # the ONLY persisted row for this leg (see the comment in _handle_exit_locked). Without
     # this, that row carries the raw TP-HIT alert's own context (empty) and result.fill_price
@@ -1741,6 +1744,8 @@ async def _handle_entry(signal) -> None:
     """
     if await _entry_halted(signal):
         return
+    if await _entry_after_time_exit(signal):
+        return
     if await _entry_rejected_by_symbol_rules(signal):
         return
     if await _entry_rejected_by_trade_policy(signal):
@@ -1823,6 +1828,37 @@ async def _entry_halted(signal) -> bool:
     logger.critical(f"ENTRY REFUSED (engine halted), skipping {signal.symbol}: {reason}")
     await notifier.notify_risk_limit_hit(reason)
     await _decline(signal, stage="halted", reason=reason)
+    return True
+
+
+def _now_ist() -> datetime:
+    """The wall clock for the time-exit entry gate (one seam so tests can set the time)."""
+    return datetime.now(IST)
+
+
+async def _entry_after_time_exit(signal) -> bool:
+    """True if a new intraday (MIS) entry arrives while or after the time exit runs.
+
+    The time exit closes every MIS position at its configured time. A position opened after
+    that moment would have no exit scheduled and would be left to the broker's own square-off,
+    so the entry is declined. CNC entries are untouched (the time exit never closes them), and
+    so is off-hours testing, which runs outside market hours by design. EXIT signals never come
+    through here.
+    """
+    if not getattr(settings, "time_exit_enabled", False) or settings.allow_off_hours_testing:
+        return False
+    if (signal.product or settings.product) != "MIS":
+        return False
+    now = _now_ist()
+    boundary = (settings.time_exit_hour, settings.time_exit_minute)
+    if tracker._time_exit_active is not True and (now.hour, now.minute) < boundary:
+        return False
+    reason = (
+        f"the {boundary[0]:02d}:{boundary[1]:02d} time exit has started or passed; "
+        "a new intraday position would have no exit scheduled"
+    )
+    logger.warning(f"ENTRY REFUSED (after time exit), skipping {signal.symbol}: {reason}")
+    await _decline(signal, stage="time_exit", reason=reason)
     return True
 
 
@@ -2360,29 +2396,46 @@ _SWEEP_INTERVAL_SECONDS = 30.0
 _UNRESOLVED_ALERT_SECONDS = 600.0
 
 
-async def _apply_late_partial_exit(pos, pending) -> None:
+async def _apply_late_partial_exit(pos, pending, order_id: str = "") -> None:
     """A held PARTIAL exit was found filled: track the remaining shares and let the poll re-stop.
 
     Its order id is not the order that closes the position, so it is not filed as the stop id
     (the poll would skip the stop retry, and a later empty book would book the whole position
     closed). The quantity is reduced, the dead stop id and its retry counters are cleared so
     the poll's missing-stop retry places a stop for the remaining shares, and the operator is
-    told once. No P&L is booked here: partial-exit accounting is a separate item.
+    told once. The leg's P&L is booked from the order's own fill price, exactly as an on-time
+    partial exit is. When that price cannot be read, nothing is booked and the notice says so.
     """
-    remaining = pos.quantity - pending.quantity
+    exit_qty = pending.quantity
+    base_price = pos.fill_price or pos.entry_price
+    fill_price = await fetch_order_fill_price(order_id, pos.strategy) if order_id else None
+    leg = None
+    if fill_price and base_price:
+        leg = leg_pnl(pos.direction, base_price, fill_price, exit_qty)
+    remaining = pos.quantity - exit_qty
     pos.quantity = remaining
     pos.sl_order_id = ""
     pos.sl_retry_count = 0
     pos.last_sl_retry_at = None
+    if leg is not None:
+        _, current_realised = await _book_realised_pnl_delta()
+        pos.realized_pnl += leg
+        tracker.record_exit(pnl=leg, is_partial=True, new_realised_pnl=current_realised)
+        risk_engine.record_partial_close(leg, strategy=pos.strategy)
     logger.critical(
-        f"EXIT {pos.symbol} [{pos.strategy}]: a partial exit of {pending.quantity} completed late; "
+        f"EXIT {pos.symbol} [{pos.strategy}]: a partial exit of {exit_qty} completed late; "
         f"tracking {remaining} remaining, the poll re-places the stop"
+        + (f"; leg P&L {leg:,.2f} booked" if leg is not None else "; leg P&L not booked (no fill price)")
+    )
+    booked = (
+        f"Its result ({leg:,.2f}) is now in today's totals."
+        if leg is not None
+        else "This partial exit's result is not in today's totals yet: check it in the trade book."
     )
     await notifier.notify(
-        f"{pos.symbol} [{pos.strategy}]: a partial exit of {pending.quantity} shares was confirmed "
+        f"{pos.symbol} [{pos.strategy}]: a partial exit of {exit_qty} shares was confirmed "
         f"at the broker after a delay. The engine now tracks {remaining} remaining shares and is "
-        "placing their stop-loss. This partial exit's result is not in today's totals yet: check "
-        "it in the trade book."
+        f"placing their stop-loss. {booked}"
     )
 
 
@@ -2453,7 +2506,7 @@ async def sweep_unresolved_orders() -> None:
             if result.duplicate_ids:
                 await _handle_duplicate_exit_fills(pos, pending.action, pending.quantity, result)
             if partial:
-                await _apply_late_partial_exit(pos, pending)
+                await _apply_late_partial_exit(pos, pending, result.order_id)
             continue
         if pos is not None:
             pos.claimed_exit = ""  # the exit never reached the broker: the close is not its own

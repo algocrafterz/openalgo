@@ -553,6 +553,8 @@ def _restore_tracker_positions(
 
     Returns the number of positions restored.
     """
+    from signal_engine import db
+
     sl_orders = sl_orders or {}
     restored = 0
     for bp in open_broker_positions:
@@ -604,6 +606,9 @@ def _restore_tracker_positions(
                     or float(bp.get("average_price", 0) or 0),
                     ever_seen_nonzero_qty=True,
                     sig_id=found.get("sig_id", ""),
+                    # Partial legs already booked to the risk counters: remembering them keeps
+                    # the closing leg priced on its own (no second count of the legs).
+                    realized_pnl=db.fetch_open_position_leg_pnl(bsymbol, strategy_for_pos),
                 )
             )
             restored += 1

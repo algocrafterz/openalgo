@@ -118,6 +118,20 @@ async def _blocked_post(self, url, *_args, **_kwargs):
     )
 
 
+@pytest.fixture(autouse=True)
+def _entry_clock_is_mid_morning(monkeypatch):
+    """main._now_ist feeds the entry gate that declines MIS entries after the time exit. A test
+    must not depend on the hour it runs at: the clock reads 10:30 IST unless the test sets it."""
+    from datetime import datetime
+
+    from signal_engine.timeutils import IST
+
+    monkeypatch.setattr(
+        "signal_engine.main._now_ist",
+        lambda: datetime(2026, 11, 12, 10, 30, 0, tzinfo=IST),
+    )
+
+
 def _wipe_order_reconcile():
     """order_reconcile's uncertain-order registry is process-wide: an entry-timeout test that ends
     with a late-fill watch registered would otherwise hold the next test's entry for that symbol."""

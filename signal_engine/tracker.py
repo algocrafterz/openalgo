@@ -309,6 +309,7 @@ class TrackedPosition:
 
 #: Twin-stop audit of the order book: at most this often (one extra order-book read).
 _STOP_AUDIT_INTERVAL_S = 120.0
+_DEAD_STOP_STATUSES = frozenset({"rejected", "cancelled", "canceled", "cancel"})
 
 #: After the poll-loop SL re-attempts are exhausted, an unprotected position is reconciled and
 #: tried again on this slow cycle for as long as it stays open and unprotected.
@@ -375,6 +376,8 @@ def _mark_summary_sent(trade_count: int) -> None:
 
 
 #: Order statuses that mean the order can still execute (as executor._find_resting_sl_order).
+# How long the time exit waits for a signal exit already running on a leg (E-06).
+_EXIT_LOCK_WAIT_SECONDS = 45.0
 _WORKING_ORDER_STATUSES = ("trigger pending", "open", "pending")
 _BASELINE_READ_ATTEMPTS = 3  # startup reads of the day's realised P&L before giving up
 _BASELINE_RETRY_SECONDS = 2.0
@@ -1232,6 +1235,52 @@ class PositionTracker:
         }
         for key in flag_duplicate_stop_groups(book, keep_ids=tracked):
             logger.warning(f"Duplicate protective stops found on the order book for {key[1]} [{key[0]}]")
+        await self._release_dead_stops(book)
+
+    async def _release_dead_stops(self, book: list) -> None:
+        """A tracked stop the broker shows rejected or cancelled protects nothing (E-14).
+
+        The stop id is cleared so the missing-stop retry places a new one on its next pass, and
+        the operator is told. Acts only on an explicit rejected / cancelled row for the tracked
+        order id: a stop absent from the book, or complete (it filled, so the close detection
+        owns it), is left alone. A position with an exit running is skipped, because the exit
+        cancels its own stop on purpose.
+        """
+        status_by_id: dict[str, str] = {}
+        for row in book or []:
+            if isinstance(row, dict):
+                oid = str(row.get("orderid") or row.get("order_id") or "")
+                if oid:
+                    status_by_id[oid] = str(
+                        row.get("order_status") or row.get("status") or ""
+                    ).strip().lower()
+        for key, pos in list(self._positions.items()):
+            if not pos.sl_order_id or pos.exit_pending or pos.claimed_exit:
+                continue
+            if pos.time_exit_left_open or key in self._square_off_orders:
+                # The time exit cancelled this stop on purpose and its close may still land: a
+                # new stop beside that close could open a reversed position.
+                continue
+            if order_reconcile.get_uncertain(pos.strategy, pos.symbol) is not None:
+                continue
+            status = status_by_id.get(pos.sl_order_id, "")
+            if status not in _DEAD_STOP_STATUSES:
+                continue
+            logger.critical(
+                f"{key}: its stop {pos.sl_order_id} is {status} at the broker; the position has "
+                "no working stop, so a new one will be placed"
+            )
+            pos.sl_order_id = ""
+            pos.sl_retry_count = 0
+            pos.last_sl_retry_at = None
+            try:
+                await notifier.notify(
+                    f"{pos.symbol} [{pos.strategy}]: the broker {'rejected' if status == 'rejected' else 'cancelled'} "
+                    "the stop-loss order after it was placed, so the position had no stop. "
+                    "The engine is placing a new stop-loss now."
+                )
+            except Exception:  # noqa: BLE001 - the alert must not stop the repair
+                logger.exception(f"{key}: could not send the dead-stop alert")
 
     async def _retry_missing_sl(self, book_data: dict, _settings) -> None:
         """Re-attempt SL placement for positions whose initial bracket exhausted.
@@ -1482,7 +1531,13 @@ class PositionTracker:
             return _FILL_ORPHANED
 
         if status_lower in ("complete", "filled"):
-            # order traded, position now closed (e.g. instant SL) — normal close processing
+            # order traded, position now closed (e.g. instant SL) — normal close processing.
+            # Record the fill so Guard 3 does not read a break-even close (zero P&L) as an orphan.
+            if pos.fill_price == 0.0:
+                pos.fill_price = (
+                    await fetch_order_fill_price(pos.entry_order_id, pos.strategy, max_attempts=1)
+                    or pos.entry_price
+                )
             return _FILL_PROCEED
 
         if age < timedelta(minutes=_settings.tracker_guard2_timeout_minutes):
@@ -2345,36 +2400,63 @@ class PositionTracker:
         BREAKINGTRADE-RI's ANGELONE leg and three EVWAP-EARLY-PY positions, none of them booked.
         """
         # Imported here: main imports tracker, not the reverse.
-        from signal_engine.main import _send_exit_with_retries
+        from signal_engine.main import _get_exit_lock, _send_exit_with_retries
 
         for key, pos in list(self._positions.items()):
             if pos.strategy != strategy or pos.symbol not in symbols or pos.product != "MIS":
                 continue
-            qty = await self._own_close_qty(key, pos)
-            if qty <= 0:
+            # A signal exit may be mid-flight for this leg (it holds the leg's exit lock while it
+            # cancels, sends and books). Selling beside it can sell the position twice and leave
+            # a reversed one the engine does not track (E-06), so wait for it, then look again.
+            lock = _get_exit_lock(pos.symbol, pos.strategy)
+            try:
+                await asyncio.wait_for(lock.acquire(), timeout=_EXIT_LOCK_WAIT_SECONDS)
+            except TimeoutError:
                 logger.critical(
-                    f"Time exit: {key} - the broker position leaves nothing for this leg to "
-                    f"close (tracked {pos.quantity}); no order sent"
+                    f"Time exit: {key} - an exit is still in progress after "
+                    f"{_EXIT_LOCK_WAIT_SECONDS:.0f}s; no second order sent"
                 )
                 await notifier.notify(
-                    f"TIME EXIT: {pos.symbol} [{strategy}] was not closed. The broker position "
-                    f"does not hold this strategy's {pos.quantity} shares. Check the position "
-                    "book before the broker square-off."
+                    f"TIME EXIT: {pos.symbol} [{strategy}] was not closed by the time exit because "
+                    "an exit for it is still running. Check the position book before the broker "
+                    "square-off."
                 )
                 continue
-            order = build_exit_order(
-                symbol=pos.symbol,
-                exchange=pos.exchange,
-                quantity=qty,
-                product=pos.product,
-                strategy_tag=pos.strategy,
-                direction=pos.direction,
+            try:
+                if self._positions.get(key) is not pos:
+                    logger.info(f"Time exit: {key} was closed by the exit that was running; skipped")
+                    continue
+                await self._close_one_leg(key, pos, strategy, _send_exit_with_retries)
+            finally:
+                lock.release()
+
+    async def _close_one_leg(self, key: str, pos, strategy: str, send_exit) -> None:
+        """Send the time exit's market close for one leg (its exit lock is held by the caller)."""
+        qty = await self._own_close_qty(key, pos)
+        if qty <= 0:
+            logger.critical(
+                f"Time exit: {key} - the broker position leaves nothing for this leg to "
+                f"close (tracked {pos.quantity}); no order sent"
             )
-            result = await _send_exit_with_retries(order, pos)
-            if result.status == OrderStatus.SUCCESS:
-                self._square_off_orders[key] = result.order_id
-            else:
-                logger.error(f"Time exit: close order for {key} not confirmed: {result.message}")
+            await notifier.notify(
+                f"TIME EXIT: {pos.symbol} [{strategy}] was not closed. The broker position "
+                f"does not hold this strategy's {pos.quantity} shares. Check the position "
+                "book before the broker square-off."
+            )
+            return
+        order = build_exit_order(
+            symbol=pos.symbol,
+            exchange=pos.exchange,
+            quantity=qty,
+            product=pos.product,
+            strategy_tag=pos.strategy,
+            direction=pos.direction,
+        )
+        result = await send_exit(order, pos)
+        if result.status == OrderStatus.SUCCESS:
+            self._square_off_orders[key] = result.order_id
+        else:
+            logger.error(f"Time exit: close order for {key} not confirmed: {result.message}")
 
     async def _own_close_qty(self, key: str, pos) -> int:
         """Shares to close for this leg: its tracked quantity, capped by what the broker's net
@@ -2759,7 +2841,8 @@ class PositionTracker:
                 "exit_fill": exit_fill,
             },
         )
-        self._risk_engine.record_close(pnl=total_pnl, strategy=pos.strategy, symbol=pos.symbol)
+        # The risk counters take this closing leg only: earlier legs were booked when they filled.
+        self._risk_engine.record_close(pnl=per_pos_pnl, strategy=pos.strategy, symbol=pos.symbol)
         self._day_trades += 1
         self._day_time_exits += 1
         try:

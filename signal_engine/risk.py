@@ -886,6 +886,21 @@ class RiskEngine:
         state = self._state(strategy)
         state.open_positions = max(0, state.open_positions - 1)
         self._adjust_concentration(strategy, symbol, -1)
+        self._book_leg_pnl(state, pnl, strategy)
+        self._persist(strategy)
+
+    def record_partial_close(self, pnl: float, strategy: str) -> None:
+        """Book the P&L of a partial exit leg. The position stays open, so no slot is freed.
+
+        One rule on every close path: each completed exit leg reaches the counters once, at its
+        own P&L. The final close then books only its own leg.
+        """
+        self._book_leg_pnl(self._state(strategy), pnl, strategy)
+        self._persist(strategy)
+
+    @staticmethod
+    def _book_leg_pnl(state, pnl: float, strategy: str) -> None:
+        """Add one exit leg's P&L to the day, week and month counters (no persistence)."""
         # NET counters take every close, both signs — these are what the weekly/monthly
         # drawdown limits measure. The gross counters below stay losses-only for the daily
         # loss-streak gate and for reporting.
@@ -900,4 +915,3 @@ class RiskEngine:
             logger.info(f"[{strategy}] Position closed with loss: {realized_loss:,.2f}")
         else:
             logger.info(f"[{strategy}] Position closed with profit: {pnl:,.2f}")
-        self._persist(strategy)

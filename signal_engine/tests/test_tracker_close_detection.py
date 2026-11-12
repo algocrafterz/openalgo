@@ -484,12 +484,13 @@ class TestOrphanSlCancel:
 
     @pytest.mark.asyncio
     async def test_guard3_zero_pnl_cancels_sl(self):
-        """Guard 3: zero PnL with unconfirmed fill -> orphan released AND orphaned SL cancelled."""
+        """Guard 3: zero PnL with a fill nothing can confirm (no entry order id to ask about)
+        -> orphan released AND orphaned SL cancelled."""
         engine = _make_engine()
         engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker._last_realised_pnl = 0.0
-        pos = _make_position(fill_price=0.0, entry_order_id="ENTRY_G3")
+        pos = _make_position(fill_price=0.0, entry_order_id="")
         pos.sl_order_id = "SL_ORPHAN_G3"
         tracker.register(pos)
 
@@ -504,6 +505,33 @@ class TestOrphanSlCancel:
 
         assert tracker.tracked_count == 0
         mock_cancel.assert_awaited_once_with("SL_ORPHAN_G3", pos.strategy)
+
+    @pytest.mark.asyncio
+    async def test_a_complete_entry_closed_at_break_even_is_not_an_orphan(self):
+        """E-20: an entry the broker reports complete did fill. A zero-P&L close (break-even
+        stop-out) is a real close, not a rejected order: the risk slot is not released as a
+        rejection and the position is not flagged as an execution issue."""
+        engine = _make_engine()
+        engine._state(ORB).open_positions = 1
+        tracker = PositionTracker(engine)
+        tracker._last_realised_pnl = 0.0
+        pos = _make_position(fill_price=0.0, entry_order_id="ENTRY_BE")
+        pos.sl_order_id = "SL_BE"
+        tracker.register(pos)
+
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value="complete"),
+            patch("signal_engine.tracker.fetch_order_fill_price", new_callable=AsyncMock, return_value=None),
+            patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
+            patch("signal_engine.tracker.notifier.notify_orphaned_position", new_callable=AsyncMock) as orphan,
+        ):
+            await tracker.check_positions()
+
+        orphan.assert_not_awaited()
+        assert tracker.tracked_count == 0  # booked as a real close
+        assert pos.fill_price == pos.entry_price
 
     @pytest.mark.asyncio
     async def test_no_sl_order_id_no_cancel_on_orphan(self):

@@ -19,7 +19,7 @@ from signal_engine.tests.test_main_characterization import harness
 from signal_engine.timeutils import IST
 
 
-async def _held_partial():
+async def _held_partial(sweep_fill=2500.0):
     """Partial exit (25 of 50) accepted, status unreadable, no proof: held. Then the sweeper finds
     the exit FILLED on the order book."""
     h, tracker, pos = await _exit(status="", own=50, exit_qty_pct=0.5)
@@ -32,7 +32,11 @@ async def _held_partial():
             "timestamp": pending.since.strftime("%Y-%m-%d %H:%M:%S"),
         }
     ]
-    h2 = harness(tracker=tracker, fetch_orderbook=AsyncMock(return_value=book))
+    h2 = harness(
+        tracker=tracker,
+        fetch_orderbook=AsyncMock(return_value=book),
+        fetch_order_fill_price=AsyncMock(return_value=sweep_fill),
+    )
     with h2.stack:
         await sweep_unresolved_orders()
     return h2, tracker, pos
@@ -51,7 +55,7 @@ async def test_a_late_filled_partial_exit_reduces_the_quantity_and_clears_the_st
     assert len([t for t in texts if "partial exit of 25 shares" in t]) == 1
     text = next(t for t in texts if "partial exit of 25 shares" in t)
     assert "RELIANCE [ORB]" in text and "tracks 25 remaining shares" in text
-    assert "check it in the trade book" in text
+    assert "now in today's totals" in text
 
 
 @pytest.mark.asyncio
@@ -94,3 +98,23 @@ async def test_a_late_filled_full_exit_is_still_filed_as_the_closing_order():
         await sweep_unresolved_orders()
     assert pos.sl_order_id == "EX1"
     assert pos.quantity == 50
+
+
+@pytest.mark.asyncio
+async def test_a_late_filled_partial_exit_books_its_own_leg_once():
+    # 25 shares bought at 2500 and sold at 2520: +500 for the leg.
+    h2, tracker, pos = await _held_partial(sweep_fill=2520.0)
+    assert pos.realized_pnl == 500.0
+    h2.risk.record_partial_close.assert_called_once_with(500.0, strategy="ORB")
+    h2.risk.record_close.assert_not_called()  # the position is still open: no slot freed
+    assert tracker._day_pnl == 500.0
+    assert tracker._day_trades == 0  # a leg is not a completed trade
+
+
+@pytest.mark.asyncio
+async def test_a_late_filled_partial_exit_with_no_readable_price_books_nothing():
+    h2, tracker, pos = await _held_partial(sweep_fill=None)
+    assert pos.realized_pnl == 0.0
+    h2.risk.record_partial_close.assert_not_called()
+    texts = [c.args[0] for c in h2.notifier.notify.await_args_list]
+    assert any("check it in the trade book" in t for t in texts)

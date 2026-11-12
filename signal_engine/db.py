@@ -925,6 +925,52 @@ def fetch_last_entry_trade(
         return None
 
 
+def fetch_open_position_leg_pnl(symbol: str, strategy: str) -> float:
+    """P&L already realised by partial exit legs of today's open position for symbol+strategy.
+
+    Sums the partial-leg EXIT rows written after the position's entry row. Used when the engine
+    restarts: those legs already reached the risk counters, and the position must remember them
+    so its closing leg is priced on its own and the legs are not counted a second time. Returns
+    0.0 when there are none or the table cannot be read.
+    """
+    try:
+        today = datetime.now(IST).strftime("%Y-%m-%d")
+        conn = _get_connection()
+        entry_id = conn.execute(
+            """
+            SELECT max(id) FROM trades
+            WHERE upper(symbol) = upper(?) AND upper(strategy) = upper(?)
+              AND status = 'SUCCESS' AND direction IN ('LONG', 'SHORT')
+              AND date(executed_at) = ?
+            """,
+            (symbol, strategy, today),
+        ).fetchone()[0]
+        if entry_id is None:
+            return 0.0
+        total = 0.0
+        for context, message in conn.execute(
+            """
+            SELECT context, message FROM trades
+            WHERE upper(symbol) = upper(?) AND upper(strategy) = upper(?)
+              AND status = 'SUCCESS' AND direction = 'EXIT'
+              AND date(executed_at) = ? AND id > ?
+            ORDER BY id
+            """,
+            (symbol, strategy, today, entry_id),
+        ):
+            try:
+                payload = json.loads(context) if context else {}
+            except (TypeError, ValueError):
+                payload = {}
+            if "pnl" not in payload or not _is_partial_leg(payload, message):
+                continue
+            total += float(payload.get("pnl") or 0.0)
+        return total
+    except Exception as e:
+        logger.warning(f"fetch_open_position_leg_pnl failed for {symbol}:{strategy}: {e}")
+        return 0.0
+
+
 def flag_data_quality(order_id: str, quality: str, reason: str = "") -> int:
     """Mark every trades.db row for `order_id` (entry and any partial/full exits share it) as
     not trustworthy for performance analysis, without deleting or altering the row itself - the
