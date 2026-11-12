@@ -52,6 +52,11 @@ if [ "$DOW" -gt 5 ]; then
 fi
 
 CLAUDE_BIN="$(command -v claude || echo /home/anand/.local/bin/claude)"
+# An unattended job outlives an interactive sign-in. If the owner saved a long-lived token from
+# `claude setup-token` in this file (mode 600, outside the repo), use it. It is never printed.
+TOKEN_FILE="${CLAUDE_TOKEN_FILE:-$HOME/.config/openalgo/claude_token}"
+if [ -r "$TOKEN_FILE" ]; then CLAUDE_CODE_OAUTH_TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"; export CLAUDE_CODE_OAUTH_TOKEN; fi
+
 if [ ! -x "$CLAUDE_BIN" ]; then
   echo "FATAL: claude CLI not found"
   exit 1
