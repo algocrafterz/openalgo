@@ -2,17 +2,16 @@
 
 A routine poller message is one line among many. A problem that stops the strategy getting
 data (sign-in lost, page reshaped, delivery figure gone, no fresh poll) is sent in a loud
-banner, repeated every REPEAT_MINUTES until it is cleared, and followed by a RECOVERED message
-when it is. Plain text only: the banner is capital letters and rules, no icons.
+banner, sent once per issue per day (the first occurrence), and followed by a RECOVERED message
+when it clears. Plain text only: the banner is capital letters and rules, no icons.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from loguru import logger
 
-REPEAT_MINUTES = 30
 _RULE = "!" * 34
 
 
@@ -28,7 +27,7 @@ def format_critical(title: str, detail: str, action: str, repeats: bool = True) 
         f"ACTION NEEDED: {action.strip()}",
     ]
     if repeats:
-        lines.append(f"(repeats every {REPEAT_MINUTES} min until fixed)")
+        lines.append("(sent once per day; later failures today are in the poller log)")
     lines.append(_RULE)
     return "\n".join(lines)
 
@@ -44,16 +43,17 @@ class CriticalNotifier:
     def __init__(self, deliver=_deliver, clock=datetime.now):
         self._deliver = deliver
         self._clock = clock
-        self._last_sent: dict = {}
+        self._last_sent: dict = {}  # key -> date its banner was last sent
+        self._open: set = set()  # keys whose banner went out and have not recovered
 
     def raise_issue(self, key: str, title: str, detail: str, action: str) -> bool:
-        """Send the banner now, or again when the repeat interval has passed. True if sent."""
-        now = self._clock()
-        last = self._last_sent.get(key)
-        if last is not None and now - last < timedelta(minutes=REPEAT_MINUTES):
-            return False
-        self._last_sent[key] = now
+        """Send the banner on the first occurrence of the day only. True if sent."""
+        today = self._clock().date()
         logger.error(f"CRITICAL {title}: {detail}")
+        if self._last_sent.get(key) == today:
+            return False
+        self._last_sent[key] = today
+        self._open.add(key)
         try:
             self._deliver(format_critical(title, detail, action))
         except Exception:
@@ -61,9 +61,10 @@ class CriticalNotifier:
         return True
 
     def clear(self, key: str, what: str) -> bool:
-        """Say the problem is over, once, if it had been reported."""
-        if self._last_sent.pop(key, None) is None:
+        """Say the problem is over, once, if its banner had been sent."""
+        if key not in self._open:
             return False
+        self._open.discard(key)
         logger.info(f"critical issue cleared: {what}")
         try:
             self._deliver(f"RECOVERED - BREAKINGTRADE DATA: {what}")
@@ -72,7 +73,7 @@ class CriticalNotifier:
         return True
 
     def active(self) -> list:
-        return sorted(self._last_sent)
+        return sorted(self._open)
 
 
 notifier = CriticalNotifier()

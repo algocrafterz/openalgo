@@ -1,11 +1,10 @@
-"""Critical data problems are loud, repeat until fixed, and announce recovery once."""
+"""Critical data problems are loud, sent once per day, and announce recovery once."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 
 from signal_engine.analysis.breakingtrade.critical import (
-    REPEAT_MINUTES,
     CriticalNotifier,
     format_critical,
 )
@@ -35,14 +34,27 @@ def test_banner_is_unmissable_and_plain_text():
     assert text.isascii()
 
 
-def test_first_issue_sends_and_repeats_only_after_interval():
+def test_issue_sends_once_per_day_then_again_next_day():
     notifier, sent, clock = _notifier()
     assert notifier.raise_issue("login", "t", "d", "a") is True
-    clock.advance(REPEAT_MINUTES - 1)
+    clock.advance(60)
     assert notifier.raise_issue("login", "t", "d", "a") is False
-    clock.advance(2)
+    clock.advance(5 * 60)  # still 2026-11-11
+    assert notifier.raise_issue("login", "t", "d", "a") is False
+    assert len(sent) == 1
+    clock.advance(24 * 60)  # next day
     assert notifier.raise_issue("login", "t", "d", "a") is True
     assert len(sent) == 2
+
+
+def test_flapping_issue_stays_quiet_after_first_alert_of_the_day():
+    notifier, sent, clock = _notifier()
+    notifier.raise_issue("login", "t", "d", "a")
+    assert notifier.clear("login", "back") is True
+    clock.advance(30)
+    assert notifier.raise_issue("login", "t", "d", "a") is False
+    assert notifier.clear("login", "back") is False  # no alert was sent, so no recovery
+    assert len(sent) == 2  # banner + one RECOVERED
 
 
 def test_different_issues_do_not_suppress_each_other():
