@@ -309,6 +309,8 @@ class TrackedPosition:
 
 #: Twin-stop audit of the order book: at most this often (one extra order-book read).
 _STOP_AUDIT_INTERVAL_S = 120.0
+#: A leg that shares its symbol with another is checked for a filled stop at most this often (E-08).
+_SHARED_STOP_CHECK_S = 20.0
 _DEAD_STOP_STATUSES = frozenset({"rejected", "cancelled", "canceled", "cancel"})
 
 #: After the poll-loop SL re-attempts are exhausted, an unprotected position is reconciled and
@@ -411,6 +413,7 @@ class PositionTracker:
         # tracked key -> id of the MARKET order the square-off sent to close that leg
         self._square_off_orders: dict[str, str] = {}
         self._last_stop_audit: float | None = None  # time.monotonic() of the last twin-stop audit
+        self._shared_stop_checked: dict[str, float] = {}
         # Day summary counters (reset at midnight via TimeExitScheduler)
         self._day_trades: int = 0
         self._day_wins: int = 0
@@ -1413,7 +1416,7 @@ class PositionTracker:
         if qty != 0:
             if not pos.ever_seen_nonzero_qty:
                 pos.ever_seen_nonzero_qty = True
-            return False
+            return await self._book_shared_symbol_stop_fill(key, pos, entry, _settings)
 
         age = datetime.now(IST) - pos.entry_time
         if self._position_too_young(key, age, _settings):
@@ -1447,6 +1450,46 @@ class PositionTracker:
             if closed:
                 # Remove it now, not after the whole poll loop: a time exit or a signal exit
                 # starting in between must not find a booked position still registered.
+                self._positions.pop(key, None)
+            else:
+                pos.exit_pending = False
+
+    async def _book_shared_symbol_stop_fill(self, key: str, pos, entry, _settings) -> bool:
+        """Book a leg whose own stop filled although the symbol's net quantity is not zero (E-08).
+
+        Two strategies holding one symbol share one broker row, so one leg's stop filling leaves
+        the row non-zero and the quantity test above never sees the close. Here the stop's own
+        status decides, read at most every _SHARED_STOP_CHECK_S per leg. Only a stop that is
+        complete with a readable fill books; the leg's P&L then comes from that fill, never from
+        the shared row. True if the tracker entry should be removed.
+        """
+        if not pos.sl_order_id or pos.exit_pending or pos.quantity <= 0:
+            return False
+        if not any(
+            other is not pos
+            and (other.symbol, other.exchange, other.product)
+            == (pos.symbol, pos.exchange, pos.product)
+            for other in self._positions.values()
+        ):
+            return False
+        now = time.monotonic()
+        last = self._shared_stop_checked.get(key)
+        if last is not None and now - last < _SHARED_STOP_CHECK_S:
+            return False
+        self._shared_stop_checked[key] = now
+        if await fetch_order_fill_price(pos.sl_order_id, pos.strategy, max_attempts=1) is None:
+            return False
+        if self._positions.get(key) is not pos or pos.exit_pending:
+            return False
+        pos.exit_pending = True
+        closed = False
+        try:
+            age = datetime.now(IST) - pos.entry_time
+            logger.info(f"{key}: its stop {pos.sl_order_id} filled while another strategy still holds the symbol")
+            closed = await self._book_broker_close(key, pos, age, _settings, entry)
+            return closed
+        finally:
+            if closed:
                 self._positions.pop(key, None)
             else:
                 pos.exit_pending = False
