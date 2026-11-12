@@ -326,6 +326,10 @@ class Settings:
     no_progress_loss_cut_min_age_minutes: int
     no_progress_loss_cut_progress_threshold: float  # negative, e.g. -0.80
 
+    #: Telegram channels the engine only RECORDS (signal_engine/ingest.py). Never traded from,
+    #: never reposted. Empty by default, so a Settings built without the key ingests nothing.
+    ingest_sources: tuple[TelegramChannel, ...] = ()
+
 
 def _parse_no_progress(cfg: dict) -> dict:
     """Parse the no_progress config section into Settings keyword args."""
@@ -649,6 +653,9 @@ def _telegram_fields(telegram: dict) -> dict:
         "telegram_channels": tuple(_parse_channel(ch) for ch in telegram.get("channels", [])),
         "notify_channel": _parse_phase_channels(telegram.get("notify_channel")),
         "notify_level": str(telegram.get("notify_level", "normal")).strip().lower(),
+        "ingest_sources": tuple(
+            _parse_channel(ch) for ch in (telegram.get("ingest_sources") or [])
+        ),
         "breakingtrade_btst_channels": _parse_phase_channels(
             telegram.get("breakingtrade_btst_channels")
         ),

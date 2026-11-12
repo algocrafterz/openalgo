@@ -186,6 +186,15 @@ telegram:
       name: "intraday-breakingtrade-btst-live"
       id: -1003965775886
 
+  # Channels the engine only RECORDS (signal_engine/ingest.py): every message is stored in
+  # data/telegram_ingest.db and nothing else happens to it - no signal, no order, no repost.
+  # `id` is a numeric chat id or a public username. Deliberately NOT part of `channels:` above,
+  # which is the list the engine trades from. `enabled: false` stops recording.
+  ingest_sources:
+    - name: "breakingtrade-rajat"
+      id: "BreakingTrade_rajat"
+      enabled: true
+
   # [tune] How much routine traffic reaches notify_channel.
   #   alerts  - failures and operational alerts only; no outcomes, no day summary (both are on
   #             the OpenAlgo Strategy P&L pages). Also stops outcome mirrors to strategy channels.

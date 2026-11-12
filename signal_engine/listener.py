@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from loguru import logger
 
-from signal_engine import freshness, mode_guard, notifier
+from signal_engine import freshness, ingest, mode_guard, notifier
 from signal_engine.config import settings
 
 # Check the connection every 90s so a stale one is noticed (common in WSL2, where TCP
@@ -124,6 +124,19 @@ def _is_stale(msg) -> float | None:
     return freshness.stale_age(_origin_time(msg), settings.stale_signal_seconds)
 
 
+def _is_exit_text(text: str) -> bool:
+    """True when the message parses as an EXIT alert (TP HIT, SL HIT, EXIT)."""
+    try:
+        from signal_engine.models import Direction
+        from signal_engine.parser import parse
+
+        signal = parse(text)
+        return signal is not None and signal.direction == Direction.EXIT
+    except Exception as e:  # noqa: BLE001 - an unreadable message is simply not an exit
+        logger.debug(f"Could not classify a stale message: {e}")
+        return False
+
+
 def _record_phase_decline(text: str, source: str, reason: str) -> None:
     """Write a DECLINED row for a signal refused before it ever reached the pipeline.
 
@@ -174,6 +187,14 @@ def _make_handler(on_message, channel_names: dict):
         source = channel_names.get(chat_id, channel_names.get(str(chat_id), str(chat_id)))
 
         stale_age = _is_stale(msg)
+        if stale_age is not None and _is_exit_text(msg.text):
+            # A late EXIT is not dropped (E-15): closing risk must stay possible, and the exit
+            # path checks the alert against the position it would close before acting.
+            logger.warning(
+                f"[{source}] Late EXIT alert ({stale_age:.0f}s old, limit "
+                f"{settings.stale_signal_seconds}s): processing it against the current position"
+            )
+            stale_age = None
         if stale_age is not None:
             # WARNING, not DEBUG, and recorded: after the 2026-09-08 Telegram outage there
             # was no way to answer "what did we miss" — the drops left no trace at all.
@@ -343,10 +364,14 @@ async def _connect(client) -> None:
 async def _serve(client) -> None:
     """Hold a connected session open until Telegram drops it."""
     keepalive_task = asyncio.create_task(_keepalive(client))
+    # Ingestion is storage only and fully isolated: start_backfill never raises, and the task
+    # is cancelled with the connection. See ingest.py.
+    ingest_task = ingest.start_backfill(client)
     try:
         await client.run_until_disconnected()
     finally:
         keepalive_task.cancel()
+        ingest.stop_backfill(ingest_task)
 
 
 async def start_listener(
@@ -374,6 +399,9 @@ async def start_listener(
     client.on(events.NewMessage(chats=chat_ids))(
         _make_handler(on_message, channel_names)
     )
+    # Registered after the trading handler, with its own error handling. Records a source
+    # channel to a database and never touches on_message.
+    ingest.register(client)
 
     flood_error = _flood_wait_error()
     retries = 0
@@ -390,6 +418,7 @@ async def start_listener(
             await client.disconnect()
         except Exception as e:  # noqa: BLE001 - teardown must not become the failure
             logger.debug(f"Listener: client disconnect on shutdown failed: {e}")
+        ingest.close()
 
     logger.critical(
         "Telegram listener giving up: FLOOD_WAIT budget spent "
