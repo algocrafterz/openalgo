@@ -1013,7 +1013,15 @@ class PositionTracker:
             losses[pos.strategy] += loss
         self._leg_loss = leg_loss
 
+        # update_unrealised replaces the stored figure. In live mode every strategy shares one
+        # bucket, so reporting them one by one left only the last strategy's loss (R-02): sum the
+        # losses per bucket first.
+        by_bucket: dict[str, tuple[str, float]] = {}
         for strategy, loss in losses.items():
+            bucket = self._risk_engine.bucket_for(strategy)
+            first, total = by_bucket.get(bucket, (strategy, 0.0))
+            by_bucket[bucket] = (first, total + loss)
+        for strategy, loss in by_bucket.values():
             self._risk_engine.update_unrealised(loss, strategy)
         self._reported_unrealised = {
             s for s in losses if s in {p.strategy for p in self._positions.values()}

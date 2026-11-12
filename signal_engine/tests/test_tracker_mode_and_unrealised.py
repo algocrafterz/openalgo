@@ -59,6 +59,7 @@ class TestUnrealisedIsPushedToTheRiskEngine:
 
     def test_losses_are_summed_per_strategy(self):
         risk = MagicMock()
+        risk.bucket_for.side_effect = lambda strategy: strategy  # analyze mode: one bucket each
         tracker = PositionTracker(risk)
         tracker.register(_pos(symbol="SBIN", strategy="ORB", qty=100, fill=800.0))
         tracker.register(_pos(symbol="TCS", strategy="ORB", qty=10, fill=4000.0))
@@ -109,3 +110,37 @@ class TestModeFlipIsNoticedByThePollLoop:
             await tracker._check_mode_flip()
         notify.assert_awaited_once()
         assert notify.await_args.args[0] == "mode_flip_halt"
+
+
+class TestUnrealisedIsSummedPerRiskBucket:
+    """R-02: in live mode every strategy shares one counter bucket, and update_unrealised
+    replaces the figure, so reporting strategies one by one kept only the last."""
+
+    def _two_losing(self):
+        from signal_engine.risk import RiskEngine
+
+        engine = RiskEngine(
+            risk_per_trade=0.01, sizing_mode="fixed_fractional", pct_of_capital=0.05,
+            daily_loss_limit=0.03, weekly_loss_limit=0.06, monthly_loss_limit=0.10,
+            max_open_positions=3, max_trades_per_day=5, min_entry_price=0, max_entry_price=0,
+            trade_mode=self.mode,
+        )
+        tracker = PositionTracker(engine)
+        tracker.register(_pos(symbol="SBIN", strategy="ORB", qty=100, fill=800.0))
+        tracker.register(_pos(symbol="TCS", strategy="BREAKOUT", qty=10, fill=4000.0))
+        tracker._push_unrealised(
+            {"SBIN": BookEntry(100, 790.0), "TCS": BookEntry(10, 3950.0)}  # -1,000 and -500
+        )
+        return engine
+
+    mode = "live"
+
+    def test_live_mode_sums_both_strategies(self):
+        engine = self._two_losing()
+        assert engine._state("ORB").unrealised_loss == 1500.0
+
+    def test_analyze_mode_keeps_each_strategy_separate(self):
+        self.mode = "analyze"
+        engine = self._two_losing()
+        assert engine._state("ORB").unrealised_loss == 1000.0
+        assert engine._state("BREAKOUT").unrealised_loss == 500.0

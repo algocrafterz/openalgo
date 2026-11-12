@@ -479,6 +479,10 @@ class RiskEngine:
         state = self._state(strategy)
         return self._effective_max_open_positions(self._limit_capital(state), strategy)
 
+    def bucket_for(self, strategy: str) -> str:
+        """The counter bucket this strategy's figures land in (one shared bucket in live mode)."""
+        return self._key(strategy)
+
     def update_unrealised(self, loss: float, strategy: str) -> None:
         """Update mark-to-market unrealised loss for this strategy (replace, not accumulate)."""
         self._state(strategy).unrealised_loss = loss
