@@ -885,6 +885,9 @@ def _watch(args) -> int:
                     )
                 except Exception as exc:
                     logger.exception(f"poll {pending:%H:%M} FAILED: {type(exc).__name__}: {exc}")
+                    for scanner, note in getattr(session, "api_notes", {}).items():
+                        if note:
+                            logger.error(f"JSON path not used for {scanner}: {note}")
                     if isinstance(exc, SnapshotFormatError):
                         # The vendor changed the page. Say so at once instead of waiting for the
                         # heartbeat: no scan or trigger is valid until it is mapped.
