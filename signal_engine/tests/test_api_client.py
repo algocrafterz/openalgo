@@ -16,6 +16,18 @@ from signal_engine.api_client import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _instant_retry_backoff():
+    """Make the retry backoff instant; the HTTP call under test still runs."""
+    recorded: list[float] = []
+
+    async def _fake_sleep(delay, *args, **kwargs):
+        recorded.append(delay)
+
+    with patch("signal_engine.api_client.asyncio.sleep", _fake_sleep):
+        yield recorded
+
+
 def _mock_client(response_data, status_code=200):
     mock_response = MagicMock()
     mock_response.status_code = status_code

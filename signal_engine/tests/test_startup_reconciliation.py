@@ -12,7 +12,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from signal_engine.startup import reconcile_open_positions
+from signal_engine.tests.instant_backoff import instant_backoff  # noqa: F401
 from signal_engine.tests.risk_fixtures import _engine
+
+pytestmark = pytest.mark.usefixtures("instant_backoff")
 
 
 def _engine_with_open(open_positions: int, **overrides):

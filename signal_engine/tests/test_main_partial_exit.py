@@ -17,8 +17,11 @@ from signal_engine.models import (
     ValidationResult,
     ValidationStatus,
 )
+from signal_engine.tests.instant_backoff import instant_backoff  # noqa: F401
 from signal_engine.tests.pipeline_fixtures import tracker_mock
 from signal_engine.tracker import TrackedPosition
+
+pytestmark = pytest.mark.usefixtures("instant_backoff")
 
 
 @pytest.fixture(autouse=True)

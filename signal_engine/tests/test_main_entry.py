@@ -12,12 +12,15 @@ from signal_engine.models import (
     ValidationResult,
     ValidationStatus,
 )
+from signal_engine.tests.instant_backoff import instant_backoff  # noqa: F401
 from signal_engine.tests.pipeline_fixtures import (
     _bracket_trade_results,
     _mock_signal,
     _valid_message,
     tracker_mock,
 )
+
+pytestmark = pytest.mark.usefixtures("instant_backoff")
 
 
 class TestPipelineFlow:

@@ -288,7 +288,10 @@ class TestPlaceSlOrderAmbiguousTimeout:
             "orderid": "RECOVERED_SL1",
         }
         test_settings = dataclasses.replace(
-            _real_settings, bracket_max_sl_retries=5, bracket_retry_delay=0.0
+            _real_settings,
+            bracket_max_sl_retries=5,
+            bracket_retry_delay=0.0,
+            sl_timeout_settle_seconds=0.0,
         )
         with (
             patch("signal_engine.executor.send_order", send_mock),
@@ -327,7 +330,10 @@ class TestPlaceSlOrderAmbiguousTimeout:
         timeout_result = TradeResult(status=OrderStatus.TIMEOUT, message="Request timed out")
         send_mock = AsyncMock(return_value=timeout_result)
         test_settings = dataclasses.replace(
-            _real_settings, bracket_max_sl_retries=3, bracket_retry_delay=0.0
+            _real_settings,
+            bracket_max_sl_retries=3,
+            bracket_retry_delay=0.0,
+            sl_timeout_settle_seconds=0.0,
         )
         with (
             patch("signal_engine.executor.send_order", send_mock),
@@ -362,7 +368,10 @@ class TestPlaceSlOrderAmbiguousTimeout:
             "orderid": "NOT_THIS_ONE",
         }
         test_settings = dataclasses.replace(
-            _real_settings, bracket_max_sl_retries=2, bracket_retry_delay=0.0
+            _real_settings,
+            bracket_max_sl_retries=2,
+            bracket_retry_delay=0.0,
+            sl_timeout_settle_seconds=0.0,
         )
         with (
             patch("signal_engine.executor.send_order", send_mock),
@@ -392,6 +401,10 @@ class TestSendBracketLegs:
     def _failure_result(self):
         return MagicMock(status=OrderStatus.REJECTED, order_id="")
 
+    def _no_retry_wait_settings(self):
+        """Real settings, only the pause between SL attempts removed; the retry count is unchanged."""
+        return dataclasses.replace(_real_settings, bracket_retry_delay=0.0)
+
     @pytest.mark.asyncio
     async def test_sl_placed_tp_always_none(self):
         """send_bracket_legs places SL only. TP is handled by the tracker via LTP monitoring."""
@@ -413,7 +426,10 @@ class TestSendBracketLegs:
         signal = _make_signal()
         failure = self._failure_result()
 
-        with patch("signal_engine.executor.send_order", new_callable=AsyncMock) as mock_send:
+        with (
+            patch("signal_engine.executor.send_order", new_callable=AsyncMock) as mock_send,
+            patch("signal_engine.executor.settings", self._no_retry_wait_settings()),
+        ):
             mock_send.return_value = failure
             result_sl, result_tp = await send_bracket_legs(
                 signal, quantity=10, entry_order_id="E001"
@@ -429,7 +445,10 @@ class TestSendBracketLegs:
         signal = _make_signal()
         failure = self._failure_result()
 
-        with patch("signal_engine.executor.send_order", new_callable=AsyncMock) as mock_send:
+        with (
+            patch("signal_engine.executor.send_order", new_callable=AsyncMock) as mock_send,
+            patch("signal_engine.executor.settings", self._no_retry_wait_settings()),
+        ):
             mock_send.return_value = failure
             result_sl, result_tp = await send_bracket_legs(
                 signal, quantity=10, entry_order_id="E001"

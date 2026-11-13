@@ -16,6 +16,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from signal_engine import startup
+from signal_engine.tests.instant_backoff import instant_backoff  # noqa: F401
+
+pytestmark = pytest.mark.usefixtures("instant_backoff")
 
 
 def _settings(product="MIS", strategy_profiles=None):
