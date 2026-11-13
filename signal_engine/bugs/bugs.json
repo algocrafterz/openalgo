@@ -1163,6 +1163,43 @@
       ],
       "created_at": "2026-11-04T21:16:47+05:30",
       "updated_at": "2026-11-04T21:16:47+05:30"
+    },
+    {
+      "id": "BUG-022",
+      "title": "TrailExitDriver has no catch_up, so every trail-strategy symbol fails to evaluate each cycle",
+      "plain": "A change made on 2026-11-12 added a catch_up call to the shared cycle but only the target-exit driver got the method. The trail driver raised AttributeError for every symbol.",
+      "kind": "BUG",
+      "severity": "HIGH",
+      "status": "in_progress",
+      "area": "signal_engine",
+      "strategies": [
+        "EVWAP-EARLY-PY"
+      ],
+      "first_seen": "2026-11-13",
+      "last_seen": "2026-11-13",
+      "occurrences": [
+        "2026-11-13"
+      ],
+      "impact": "From the 09:25 cycle on 2026-11-13 the runner evaluated 0 of 40 symbols: no entries and no exit management for trail strategies until the engine restarts on fixed code.",
+      "evidence": [
+        "signal_engine_analyze_2026-11-13.log: 80x 'evaluate failed' AttributeError: 'TrailExitDriver' object has no attribute 'catch_up' (cycle.py:285); cycle 09:25 and 09:30 'evaluated 0 ... skipped 40'; earlier days evaluated 40 skipped 0"
+      ],
+      "root_cause": "Commit 39763de6b (S-02) added deps.exits.catch_up in pipeline/cycle.py and ExitDriver.catch_up, not TrailExitDriver.catch_up. Liveness _first_cycle also passed OK on 'evaluated 0, skipped 40'.",
+      "fix": "",
+      "fix_commit": "",
+      "verification": "",
+      "sources": [
+        "open-day-investigation:2026-11-13"
+      ],
+      "history": [
+        {
+          "at": "2026-11-13T09:35:12+05:30",
+          "status": "in_progress",
+          "note": "recorded"
+        }
+      ],
+      "created_at": "2026-11-13T09:35:12+05:30",
+      "updated_at": "2026-11-13T09:35:12+05:30"
     }
   ]
 }

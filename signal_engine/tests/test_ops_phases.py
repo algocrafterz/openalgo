@@ -5,6 +5,8 @@ import json
 import os
 from collections import Counter
 
+import pytest
+
 from signal_engine.ops import jobs, logs, logscan, verdict
 from signal_engine.ops.model import FAIL, OK, WARN, Check, read_phase, write_phase
 
@@ -232,3 +234,21 @@ def test_health_fail_503_and_no_answer_stay_failures(monkeypatch):
     err = urllib.error.HTTPError("u", 503, "Service Unavailable", {}, None)
     assert _health_with(monkeypatch, error=err).status == FAIL
     assert _health_with(monkeypatch, error=urllib.error.URLError("refused")).status == FAIL
+
+
+@pytest.mark.parametrize(
+    ("line", "status"),
+    [
+        # healthy baseline on 2026-11-02..05 and 11-12
+        ("pipeline cycle 09:25: evaluated 40, fires 2, submitted 2, skipped 0, late 0 in 14.66s", OK),
+        # 2026-11-13: every symbol raised, the cycle still logged its summary
+        ("pipeline cycle 09:25: evaluated 0, fires 0, submitted 0, skipped 40, late 0 in 7.79s", FAIL),
+        ("pipeline cycle 09:25: evaluated 38, fires 0, submitted 0, skipped 2, late 0 in 9.00s", WARN),
+        ("pipeline cycle 09:25: evaluated 39, fires 0, submitted 0, skipped 0, late 1 in 9.00s", WARN),
+    ],
+)
+def test_first_runner_cycle_fails_when_nothing_was_evaluated(monkeypatch, line, status):
+    from signal_engine.ops import readiness
+
+    monkeypatch.setattr(readiness.logs, "engine_lines", lambda day, a, b: [f"2026-11-13 09:25:10 | INFO | {line}"])
+    assert readiness._first_cycle("2026-11-13").status == status

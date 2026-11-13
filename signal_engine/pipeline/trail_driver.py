@@ -211,6 +211,17 @@ class TrailExitDriver:
     def on_time_exit(self, symbol: str, price: float) -> None:
         """The tracker's time exit closes the position; nothing to keep in step here."""
 
+    async def catch_up(
+        self, symbol: str, frame: pd.DataFrame, bar_open: pd.Timestamp
+    ) -> list[Signal]:
+        """Nothing to replay: on_bar re-runs the whole trail from the fill bar on every call.
+
+        The shared cycle calls this before on_bar for every symbol (S-02). A bar a cycle skipped
+        is already covered by the next on_bar, so a missed bar needs no separate replay here.
+        Without this method every symbol raised AttributeError and none was evaluated (2026-11-13).
+        """
+        return []
+
     async def on_bar(
         self,
         symbol: str,

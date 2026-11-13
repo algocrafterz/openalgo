@@ -309,8 +309,15 @@ def _first_cycle(day: str) -> Check:
     match = re.search(
         r"evaluated (\d+), fires (\d+), submitted (\d+), skipped (\d+), late (\d+)", lines[0]
     )
-    late = int(match.group(5)) if match else 0
-    return Check("first runner cycle", WARN if late else OK, lines[0].split("|")[-1].strip()[:120])
+    evidence = lines[0].split("|")[-1].strip()[:120]
+    if not match:
+        return Check("first runner cycle", OK, evidence)
+    evaluated, skipped, late = int(match.group(1)), int(match.group(4)), int(match.group(5))
+    # A cycle that evaluated nothing and skipped symbols did not trade, even though it logged
+    # its summary line. 2026-11-13: every symbol raised, "evaluated 0 ... skipped 40".
+    if evaluated == 0 and skipped:
+        return Check("first runner cycle", FAIL, evidence)
+    return Check("first runner cycle", WARN if (late or skipped) else OK, evidence)
 
 
 def _first_poll(day: str) -> Check:
