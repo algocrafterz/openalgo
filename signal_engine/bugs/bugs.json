@@ -1165,6 +1165,60 @@
       "updated_at": "2026-11-04T21:16:47+05:30"
     },
     {
+      "id": "BUG-021",
+      "title": "The scanner's first scan failed or is missing. (BreakingTrade first scan)",
+      "plain": "The scanner's first scan failed or is missing.",
+      "kind": "EXECUTION",
+      "severity": "MEDIUM",
+      "status": "in_progress",
+      "area": "ops",
+      "strategies": [],
+      "first_seen": "2026-11-12",
+      "last_seen": "2026-11-13",
+      "occurrences": [
+        "2026-11-12",
+        "2026-11-13"
+      ],
+      "impact": "Recorded automatically from a failed daily check. The risk level is a default and has not been reviewed.",
+      "evidence": [
+        "Recorded automatically: After the open checkpoint on 2026-11-12 at 09:27:04; BreakingTrade first scan: 09:20:48 | ERROR   | poll 09:20 FAILED: SnapshotFormatError: market_profile columns parsed empty on ",
+        "Recorded automatically: After the open checkpoint on 2026-11-13 at 09:27:01; BreakingTrade first scan: 09:20:42 | ERROR   | poll 09:20 FAILED: SnapshotFormatError: market_profile columns parsed empty on "
+      ],
+      "root_cause": "The market_profile TPO Pos field shows relative-to-open text (for example 'N TPO above open , up', 'N TPO below open , down', 'N TPO above open And M TPO below open') from about 09:15 to 09:45, and value-area wording from about 09:46. This is expected intraday behaviour of the same field, seen daily since at least 2026-09-07. It is not a new vendor format break. The canary added on 2026-11-11 (check_populated on tpo_pos) turned it into a rejection of the early polls. None of 40 sampled early rows in data/breakingtrade_debug/format_market_profile_api.json match a value-area class, so tpo_pos parsed empty and SnapshotFormatError ['tpo_pos'] was raised. The vendor legend is not documented publicly. It is to be read at the next permitted sign-in. Questions: is the relative-to-open wording shown only before a value area exists; when exactly does it switch; did the meanings of In VA / Near VA Hi/Lo / Above-Below VA / N TPO up High change since 2026-11-10; what does 'N TPO above open And M TPO below open' count.",
+      "fix": "Owner-approved Option B (uncommitted): tpo_pos removed from extractor._ALWAYS_POPULATED so early polls are accepted and stored. The 9 scans that need tpo_pos are disabled only while the whole tpo_pos column is empty (status DISABLED, reason 'tpo_pos not yet classified (vendor shows relative-to-open text until about 09:45)'): The Runaway, The Breakdown, Value Migration Up/Down, The Gap-Up Trap, Neutral Day Resolution Up/Down, Live Print in Formation Up/Down. The scans resume automatically when classes appear; a partly filled column runs them on the filled rows. The disabled notice is logged once when the state switches, with an INFO line when classes return. One alert per day if tpo_pos is still empty after 10:00 IST. Emerging picks return nothing while the column is empty. Scorer TPO Pos leg contributes 0 then (max score 2.5 lower); scoring display unchanged. Relative-to-open text is NOT mapped to value-area classes. Option B loads into the poller at the 2026-11-14 start, not before.",
+      "fix_commit": "",
+      "verification": "",
+      "sources": [
+        "workflow-finding:liveness:liveness:breakingtrade first scan",
+        "signal_engine/reports/liveness-2026-11-12.md",
+        "signal_engine/reports/liveness-2026-11-13.md"
+      ],
+      "history": [
+        {
+          "at": "2026-11-12T15:43:40+05:30",
+          "status": "open",
+          "note": "recorded"
+        },
+        {
+          "at": "2026-11-13T09:27:03+05:30",
+          "status": "open",
+          "note": "seen on 2026-11-13"
+        },
+        {
+          "at": "2026-11-13T09:44:53+05:30",
+          "status": "in_progress",
+          "note": "Option B applied in working tree, not committed. Limitation: 9 scans, emerging picks and the TPO Pos score leg are off. Option C (alternative value-area source) is a separate follow-up."
+        },
+        {
+          "at": "2026-11-13T10:57:50+05:30",
+          "status": "in_progress",
+          "note": "Option B follow-up edits applied in working tree, not committed: wording, state-change logging, post-10:00 alert, new tests. Vendor legend questions recorded in root cause for the next permitted sign-in."
+        }
+      ],
+      "created_at": "2026-11-12T15:43:40+05:30",
+      "updated_at": "2026-11-13T10:57:50+05:30"
+    },
+    {
       "id": "BUG-022",
       "title": "TrailExitDriver has no catch_up, so every trail-strategy symbol fails to evaluate each cycle",
       "plain": "A change made on 2026-11-12 added a catch_up call to the shared cycle but only the target-exit driver got the method. The trail driver raised AttributeError for every symbol.",

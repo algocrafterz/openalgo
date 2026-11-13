@@ -37,7 +37,7 @@ from signal_engine.analysis.breakingtrade.extractor import (
     discover_latest,
     load_snapshot,
 )
-from signal_engine.analysis.breakingtrade.scans import run_scans
+from signal_engine.analysis.breakingtrade.scans import run_scans, tpo_pos_available
 from signal_engine.analysis.breakingtrade.scorer import rank
 from signal_engine.timeutils import IST
 
@@ -136,6 +136,9 @@ def _print_scans(market_profile, volume, captured_at) -> None:
         scan = result.scan
         header = f"=== {scan.name} ({scan.direction}) [{result.status}] - {scan.description} ==="
         print(header)
+        if result.disabled_reason:
+            print(f"(disabled - {result.disabled_reason})")
+            continue
         if scan.mirrored:
             print("(mirrored from the vendor's bullish-only listing - see scans.py docstring)")
         if result.matches.empty:
@@ -289,6 +292,29 @@ def _btst_window_disabled(captured_at) -> None:
         print(f"  intraday EOD summary failed: {type(exc).__name__}: {exc}")
 
 
+#: From this time the vendor should show value-area classes. An empty tpo_pos column after it is
+#: a problem worth a message (BUG-021, Option B). Before it, an empty column is expected.
+TPO_POS_EXPECTED_BY = time(10, 0)
+
+
+def _tpo_pos_watch(market_profile, captured_at) -> None:
+    """Tell the trader once a day if the value-area column is still empty after 10:00."""
+    if captured_at.time() < TPO_POS_EXPECTED_BY:
+        return
+    if tpo_pos_available(market_profile):
+        critical.notifier.clear(
+            "tpo_pos", "BreakingTrade: the scans that need the value area are back on."
+        )
+        return
+    critical.notifier.raise_issue(
+        "tpo_pos",
+        "value area not showing",
+        "BreakingTrade: the site is still not showing where price sits against today's value "
+        "area after 10:00. 9 of the 12 scans are off until it does. Other scans are working.",
+        "none from you. The scans turn back on by themselves when the site shows it.",
+    )
+
+
 def _fetch_and_report(
     store_it: bool, want_volume: bool, debug_dir, btst_mode: bool = False, session=None
 ) -> None:
@@ -321,6 +347,8 @@ def _fetch_and_report(
         volume=vol_snapshot.frame if vol_snapshot else None,
         captured_at=captured_at,
     )
+    if store_it:
+        _tpo_pos_watch(mp_snapshot.frame, captured_at)
 
     # A market holiday looks exactly like a trading day to a clock: the vendor keeps serving the
     # last session's table. If this snapshot is identical to the previous stored one, it carries

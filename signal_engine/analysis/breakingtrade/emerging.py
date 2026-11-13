@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from signal_engine.analysis.breakingtrade.scans import pace_adjusted_surge
+from signal_engine.analysis.breakingtrade.scans import pace_adjusted_surge, tpo_pos_available
 
 # Directional day types only. Neutral and Normal are the cheat sheet's fade days and Non-Trend
 # is its "don't trade" - none is a statement that one side is winning.
@@ -83,6 +83,23 @@ ALREADY_MOVED_QUANTILE = 0.80
 
 # Volume bar as a percentile of the day's own cross-section - see candidates().
 VOLUME_PERCENTILE = 0.75
+
+
+_PICK_COLUMNS = (
+    "symbol",
+    "sector",
+    "direction",
+    "price",
+    "change_pct",
+    "day_type",
+    "open_type",
+    "tpo_pos",
+    "tpo_pos_count",
+    "ib_pct",
+    "confirmations",
+    "pace_surge",
+    "quality",
+)
 
 
 def _direction_of(row) -> str | None:
@@ -166,6 +183,11 @@ def candidates(
     confirm it here" - using the pace-adjusted volume factor, since a raw factor read at 10:30
     always understates.
     """
+    if not tpo_pos_available(market_profile):
+        # Every pick needs a fresh-position tpo_pos reading (BUG-021, Option B). The disabled
+        # notice is logged once per state change by scans.run_scans, not here.
+        return pd.DataFrame(columns=_PICK_COLUMNS)
+
     frame = market_profile.copy()
     if volume is not None:
         frame = frame.merge(volume[["symbol", "surge_x", "delivery_pct"]], on="symbol", how="left")
@@ -203,25 +225,7 @@ def candidates(
         + picked["confirmations"].apply(lambda c: 0 if c == "-" else len(c.split(",")))
     )
 
-    columns = [
-        c
-        for c in (
-            "symbol",
-            "sector",
-            "direction",
-            "price",
-            "change_pct",
-            "day_type",
-            "open_type",
-            "tpo_pos",
-            "tpo_pos_count",
-            "ib_pct",
-            "confirmations",
-            "pace_surge",
-            "quality",
-        )
-        if c in picked.columns
-    ]
+    columns = [c for c in _PICK_COLUMNS if c in picked.columns]
     return picked.sort_values(["quality", "change_pct"], ascending=[False, True])[
         columns
     ].reset_index(drop=True)

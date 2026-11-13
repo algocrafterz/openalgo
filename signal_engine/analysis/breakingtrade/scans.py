@@ -34,6 +34,62 @@ from datetime import datetime, time
 
 import pandas as pd
 
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+#: Shown wherever a scan or score leg is switched off because tpo_pos is empty. The vendor shows
+#: relative-to-open text in that field until about 09:45, so the value-area classes do not exist
+#: yet; they are not mapped from that text (BUG-021, Option B).
+TPO_POS_DISABLED_REASON = (
+    "tpo_pos not yet classified (vendor shows relative-to-open text until about 09:45)"
+)
+
+#: Last state run_scans reported: None before the first call, then True (classified) or False
+#: (whole column empty). It only gates log lines, so a race could at worst repeat or drop one
+#: line. The poller runs run_scans from its one loop thread, so no lock is needed. If a second
+#: thread ever calls it, guard this with utils.real_threading.Lock (CLAUDE.md, eventlet rules).
+_tpo_state: bool | None = None
+
+
+def tpo_pos_populated(market_profile: pd.DataFrame) -> tuple[int, int]:
+    """(rows with a parsed tpo_pos, total rows)."""
+    total = len(market_profile)
+    if "tpo_pos" not in market_profile.columns:
+        return 0, total
+    return int(market_profile["tpo_pos"].notna().sum()), total
+
+
+def tpo_pos_available(market_profile: pd.DataFrame) -> bool:
+    """True when at least one row carries a parsed tpo_pos value."""
+    return tpo_pos_populated(market_profile)[0] > 0
+
+
+def _note_tpo_state(market_profile: pd.DataFrame) -> None:
+    """Log when tpo_pos switches between empty and classified, not on every poll."""
+    global _tpo_state
+    populated, total = tpo_pos_populated(market_profile)
+    available = populated > 0
+    names = [s.name for s in SCANS if s.needs_tpo_pos]
+    if not available and _tpo_state is not False:
+        logger.warning(
+            "BreakingTrade scans disabled (%d): %s. tpo_pos populated on %d/%d rows. Scans: %s",
+            len(names),
+            TPO_POS_DISABLED_REASON,
+            populated,
+            total,
+            ", ".join(names),
+        )
+    elif available and _tpo_state is False:
+        logger.info(
+            "BreakingTrade tpo_pos classified again on %d/%d rows; %d scans re-enabled",
+            populated,
+            total,
+            len(names),
+        )
+    _tpo_state = available
+
+
 # ---------------------------------------------------------------------------
 # Volume Scanner reference numbers (Full Reference docx, "Live Volume Scanner")
 # ---------------------------------------------------------------------------
@@ -122,6 +178,7 @@ class ScanDef:
     predicate: Callable[[pd.Series], bool]
     sort_ib_ascending: bool = False
     mirrored: bool = False
+    needs_tpo_pos: bool = False
 
 
 def _the_runaway(row) -> bool:
@@ -241,6 +298,7 @@ SCANS = [
         "Gap Up + Open Drive up + TPO Pos Above VA, sort IB% ascending",
         _the_runaway,
         sort_ib_ascending=True,
+        needs_tpo_pos=True,
     ),
     ScanDef(
         "The Breakdown",
@@ -249,6 +307,7 @@ SCANS = [
         "Gap Down + Open Drive down + TPO Pos Below VA, sort IB% ascending",
         _the_breakdown,
         sort_ib_ascending=True,
+        needs_tpo_pos=True,
     ),
     ScanDef(
         "Breakaway Above PDH",
@@ -271,6 +330,7 @@ SCANS = [
         (time(10, 30), time(14, 0)),
         "TPO Pos (Prev) Above PDH [proxy] + Day Type Double Distribution up + TPO Pos Above VA",
         _value_migration_up,
+        needs_tpo_pos=True,
     ),
     ScanDef(
         "Value Migration Down",
@@ -280,6 +340,7 @@ SCANS = [
         "+ TPO Pos Below VA",
         _value_migration_down,
         mirrored=True,
+        needs_tpo_pos=True,
     ),
     ScanDef(
         "The Gap-Up Trap",
@@ -287,6 +348,7 @@ SCANS = [
         (time(9, 30), time(11, 30)),
         "Gap Up + Rejection down + TPO Pos Below VA (failed gap resolving lower)",
         _gap_up_trap,
+        needs_tpo_pos=True,
     ),
     ScanDef(
         "Gap-Down Rescue",
@@ -301,6 +363,7 @@ SCANS = [
         (time(14, 0), time(15, 15)),
         "Day Type Neutral Ext up + TPO Pos Above VA (late resolution, carries to next open)",
         _neutral_resolution_up,
+        needs_tpo_pos=True,
     ),
     ScanDef(
         "Neutral Day Resolution Down",
@@ -308,6 +371,7 @@ SCANS = [
         (time(14, 0), time(15, 15)),
         "Day Type Neutral Ext down + TPO Pos Below VA (the guide's stated short mirror)",
         _neutral_resolution_down,
+        needs_tpo_pos=True,
     ),
     ScanDef(
         "Live Print in Formation Up",
@@ -315,6 +379,7 @@ SCANS = [
         _ANY_TIME,
         "3+ TPO extension above Day's High + Day Type Trend up",
         _live_print_up,
+        needs_tpo_pos=True,
     ),
     ScanDef(
         "Live Print in Formation Down",
@@ -323,6 +388,7 @@ SCANS = [
         "(mirrored) 3+ TPO extension below Day's Low + Day Type Trend down",
         _live_print_down,
         mirrored=True,
+        needs_tpo_pos=True,
     ),
 ]
 
@@ -358,6 +424,7 @@ class ScanResult:
     scan: ScanDef
     status: str
     matches: pd.DataFrame
+    disabled_reason: str | None = None
 
 
 def run_scans(
@@ -373,8 +440,22 @@ def run_scans(
     """
     at = captured_at.time() if captured_at else None
     results = []
+    tpo_ok = tpo_pos_available(market_profile)
+    _note_tpo_state(market_profile)
 
     for scan in SCANS:
+        if scan.needs_tpo_pos and not tpo_ok:
+            results.append(
+                ScanResult(
+                    scan=scan,
+                    status="DISABLED",
+                    matches=market_profile.iloc[0:0][
+                        [c for c in _MATCH_COLUMNS if c in market_profile.columns]
+                    ].reset_index(drop=True),
+                    disabled_reason=TPO_POS_DISABLED_REASON,
+                )
+            )
+            continue
         mask = market_profile.apply(scan.predicate, axis=1)
         matched = market_profile[mask]
         if scan.sort_ib_ascending and "ib_pct" in matched.columns:

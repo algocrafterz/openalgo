@@ -107,7 +107,10 @@ _KNOWN_OTHER_COLUMNS = {"#", "Name", "Sector", "Price", "Change%", "Change %", "
 #: Market Profile fields that are filled on essentially every row. A vendor wording change that
 #: no keyword matches turns a whole column into None without any error, which is how a silent
 #: break would look. The poor-high/low and open-type columns are sparse by nature and excluded.
-_ALWAYS_POPULATED = ("opening", "day_type", "tpo_pos", "tpo_pos_prev", "ib_pct", "price")
+#: tpo_pos is deliberately absent: the vendor field shows relative-to-open text until about
+#: 09:45, so the early polls parse it empty and that is expected (BUG-021, Option B). The scans
+#: that need it switch themselves off until classes appear - see scans.TPO_POS_DISABLED_REASON.
+_ALWAYS_POPULATED = ("opening", "day_type", "tpo_pos_prev", "ib_pct", "price")
 _MIN_ROWS_FOR_CANARY = 20
 _MAX_EMPTY_SHARE = 0.9
 

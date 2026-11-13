@@ -28,9 +28,16 @@ def test_real_capture_passes_canary():
     assert normalize_table(_frame()).kind == "market_profile"
 
 
-def test_reworded_cells_are_refused():
+def test_reworded_tpo_pos_alone_is_accepted():
+    """BUG-021 Option B: tpo_pos is no longer a required column, so its rewording is tolerated."""
     frame = _frame()
     frame["TPO Pos"] = "some new wording nobody maps"
+    assert normalize_table(frame).kind == "market_profile"
+
+
+def test_reworded_cells_are_refused():
+    frame = _frame()
+    frame["TPO Pos (Prev)"] = "some new wording nobody maps"
     frame["Day Type"] = "new day type wording"
     with pytest.raises(SnapshotFormatError, match="parsed empty"):
         normalize_table(frame)

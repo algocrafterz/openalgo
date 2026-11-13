@@ -130,6 +130,9 @@ def _score_row(row: pd.Series) -> pd.Series:
     elif poor_hl == "poor_low":
         contributions.append(-0.5)
 
+    # Before about 09:45 the vendor shows relative-to-open text and tpo_pos is empty (BUG-021,
+    # Option B): this leg then contributes nothing, and the maximum possible score drops by 2.5
+    # points. run_scans logs the state change; scoring itself is unchanged.
     tpo_pos = row.get("tpo_pos")
     if tpo_pos in _TPO_POS_DIRECTION:
         direction, weight = _TPO_POS_DIRECTION[tpo_pos]
