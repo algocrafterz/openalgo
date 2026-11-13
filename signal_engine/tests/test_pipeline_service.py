@@ -185,6 +185,18 @@ class TestPreflight:
         assert any("runner warm-up finished" in ln for ln in lines)
 
 
+async def until(predicate, timeout=30.0):
+    """Wait for a condition the run_days loop must reach, not for a fixed slice of wall time.
+
+    Each session day re-reads the NSE calendar (about 30 ms), so a fixed 50 ms sleep raced the loop.
+    The timeout is only a stop for a loop that never reaches the condition.
+    """
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        assert asyncio.get_running_loop().time() < deadline, "run_days did not reach the expected state"
+        await asyncio.sleep(0.005)
+
+
 class TestRunDays:
     def test_one_runner_per_weekday_and_weekends_are_skipped(self):
         ran = []
@@ -200,7 +212,7 @@ class TestRunDays:
 
         async def go():
             task = asyncio.create_task(service.run_days(lambda d: R(d), clock))
-            await asyncio.sleep(0.05)
+            await until(lambda: dt.date(2026, 9, 28) in ran)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
@@ -227,7 +239,7 @@ class TestRunDays:
 
         async def go():
             task = asyncio.create_task(service.run_days(lambda d: R(d), clock))
-            await asyncio.sleep(0.05)
+            await until(lambda: len(calls) >= 2)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
@@ -253,7 +265,7 @@ class TestRunDaysSkipsExchangeHolidays:
 
         async def go():
             task = asyncio.create_task(service.run_days(lambda d: R(d), clock))
-            await asyncio.sleep(0.1)
+            await until(lambda: dt.date(2026, 10, 21) in ran)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
