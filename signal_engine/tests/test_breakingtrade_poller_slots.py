@@ -19,6 +19,8 @@ from argparse import Namespace
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
+import pytest
+
 from signal_engine.analysis.breakingtrade import __main__ as poller
 from signal_engine.analysis.breakingtrade import alerts, fetcher, review, tp_watch
 
@@ -43,6 +45,15 @@ class _FakeSession:
         return False
 
 
+@pytest.fixture(autouse=True)
+def _own_instance_lock(monkeypatch, tmp_path):
+    """_watch takes flock(LOCK_EX | LOCK_NB) on _INSTANCE_LOCK_PATH and keeps the fd in a module
+    global. A shared path (the old /dev/null) is one machine-wide file, so a second pytest
+    process holding it made this process's _watch exit with 0 fetches. Every test gets its own
+    lock file; a test that sets its own path (test_breakingtrade_login_guard.py) overrides it."""
+    monkeypatch.setattr(poller, "_INSTANCE_LOCK_PATH", str(tmp_path / "poller.lock"))
+
+
 class _Run:
     """Drives `_watch` over a scripted clock; one loop iteration per clock tick."""
 
@@ -57,7 +68,6 @@ class _Run:
         self.stopped_alert = MagicMock()
         self.mode_check = MagicMock(return_value=("analyze", True))
 
-        monkeypatch.setattr(poller, "_INSTANCE_LOCK_PATH", "/dev/null")
         monkeypatch.setattr(poller, "_ist_now", lambda: self.ticks[self.index])
         monkeypatch.setattr(poller.signal, "signal", lambda *a, **k: None)
         monkeypatch.setattr(poller, "_setup_logging", lambda: MagicMock())

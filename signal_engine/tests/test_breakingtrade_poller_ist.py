@@ -48,6 +48,15 @@ def _host_clock(instant: datetime, host_tz: str):
     return HostDatetime
 
 
+@pytest.fixture(autouse=True)
+def _own_instance_lock(monkeypatch, tmp_path):
+    """_watch takes flock(LOCK_EX | LOCK_NB) on _INSTANCE_LOCK_PATH and keeps the fd in a module
+    global. A shared path (the old /dev/null) is one machine-wide file, so a second pytest
+    process holding it made this process's _watch exit with 0 fetches. Every test gets its own
+    lock file."""
+    monkeypatch.setattr(poller, "_INSTANCE_LOCK_PATH", str(tmp_path / "poller.lock"))
+
+
 class _Scenario:
     """Runs one poller iteration at `instant` and records which decisions it made."""
 
@@ -58,7 +67,6 @@ class _Scenario:
         self.stopped_alert = False
 
         monkeypatch.setattr(datetime_module, "datetime", _host_clock(instant, host_tz))
-        monkeypatch.setattr(poller, "_INSTANCE_LOCK_PATH", "/dev/null")
         monkeypatch.setattr(poller.signal, "signal", lambda *a, **k: None)
         monkeypatch.setattr(poller, "_setup_logging", lambda: MagicMock())
         monkeypatch.setattr(poller, "_stored_polls", lambda day: set())

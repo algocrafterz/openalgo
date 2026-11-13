@@ -194,7 +194,14 @@ class TestMppFallback:
         from broker.flattrade.mapping.transform_data import transform_data
 
         data = _make_order_data(pricetype="SL-M", action="SELL", trigger_price=200.9)
-        result = transform_data(data, token="3787", auth_token=None)
+        # tick_size comes from SymToken (0.05 for WIPRO on NSE). Supply it here so the test does
+        # not depend on the checkout's database holding the master contract.
+        with patch(
+            "broker.flattrade.mapping.transform_data.get_symbol_info",
+            return_value=MagicMock(tick_size=0.05),
+        ) as mock_info:
+            result = transform_data(data, token="3787", auth_token=None)
+        mock_info.assert_called_once_with("WIPRO", "NSE")
 
         assert result["prctyp"] == "SL-LMT"
         # Caller trigger is preserved; SELL limit sits below it so it can fill.

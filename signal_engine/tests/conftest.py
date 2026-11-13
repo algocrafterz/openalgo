@@ -132,6 +132,16 @@ def _entry_clock_is_mid_morning(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _fresh_shared_api_client(monkeypatch):
+    """api_client._client is a lazily cached httpx.AsyncClient. A test that reaches the real
+    _get_client() (even through the blocked-POST guard) leaves it cached, and a later test that
+    patches httpx.AsyncClient would get that stale client instead of its mock. Each test starts
+    with no cached client; monkeypatch restores the previous value afterwards. The value is set
+    to None, not closed: an unused client holds no connection, and close_client() is async."""
+    monkeypatch.setattr("signal_engine.api_client._client", None)
+
+
 def _wipe_order_reconcile():
     """order_reconcile's uncertain-order registry is process-wide: an entry-timeout test that ends
     with a late-fill watch registered would otherwise hold the next test's entry for that symbol."""
