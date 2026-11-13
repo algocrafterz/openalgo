@@ -12,7 +12,14 @@ import pytest
 from signal_engine.backtest.data_readiness import audit
 from signal_engine.backtest.data_readiness import policy as pol
 from signal_engine.backtest.data_readiness.calendar import CalendarError, NseCalendar
-from signal_engine.tests.dq_fixtures import clean_daily, daily, make_store, minute, weekdays
+from signal_engine.tests.dq_fixtures import (
+    bulk_insert,
+    clean_daily,
+    daily,
+    make_store,
+    minute,
+    weekdays,
+)
 
 POLICY = pol.load_policy(Path(__file__).resolve().parents[1] / "research" / "data_policy.yaml")
 DAYS = weekdays("2026-01-05", "2026-01-30")
@@ -167,8 +174,12 @@ def test_a_skipped_applicable_rule_is_not_a_pass(tmp_path):
     con.execute("CREATE TABLE market_data (symbol VARCHAR, exchange VARCHAR, interval VARCHAR, "
                 "timestamp BIGINT, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, "
                 "volume BIGINT, oi BIGINT)")
-    con.executemany("INSERT INTO market_data VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    [r[:10] for r in clean_daily("A", DAYS)])
+    bulk_insert(
+        con,
+        "market_data",
+        ["symbol", "exchange", "interval", "timestamp", "open", "high", "low", "close", "volume", "oi"],
+        [r[:10] for r in clean_daily("A", DAYS)],
+    )
     con.close()
     report = _audit(path, tmp_path / "out")
     blk = report["intervals"]["D"]

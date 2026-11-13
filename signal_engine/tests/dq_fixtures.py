@@ -19,6 +19,8 @@ COLUMNS = (
     "high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT, oi BIGINT, created_at TIMESTAMP"
 )
 
+_COLUMN_NAMES = [c.split()[0] for c in COLUMNS.split(", ")]
+
 
 def ts(day: str, hhmm: str) -> int:
     """Epoch seconds of an IST wall-clock time."""
@@ -38,13 +40,29 @@ def minute(symbol, day, hhmm, o=100.0, h=100.5, lo=99.5, c=100.2, v=10, exchange
             datetime.fromisoformat(f"{day} 16:00"))
 
 
+def bulk_insert(con, table: str, columns: list[str], rows: list[tuple], chunk: int = 500) -> None:
+    """Insert `rows` with multi-row `VALUES` statements, `chunk` rows per statement.
+
+    `executemany` costs 3 to 9 ms per row in DuckDB; this loads the same rows far faster.
+    Python None stays NULL and float nan/inf are kept, which a DataFrame insert would not do.
+    Columns are named, so the order is exactly `columns`. Stays far below the parameter limit.
+    """
+    if not rows:
+        return
+    names = ", ".join(columns)
+    one = "(" + ",".join("?" * len(columns)) + ")"
+    for i in range(0, len(rows), chunk):
+        part = rows[i : i + chunk]
+        flat = [v for row in part for v in row]
+        con.execute(f"INSERT INTO {table} ({names}) VALUES " + ",".join([one] * len(part)), flat)
+
+
 def make_store(path: Path, rows: list[tuple]) -> Path:
     """Create a DuckDB file with a `market_data` table holding `rows`."""
     con = duckdb.connect(str(path))
     try:
         con.execute(f"CREATE TABLE market_data ({COLUMNS})")
-        if rows:
-            con.executemany("INSERT INTO market_data VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
+        bulk_insert(con, "market_data", _COLUMN_NAMES, rows)
     finally:
         con.close()
     return path

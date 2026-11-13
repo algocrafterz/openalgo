@@ -26,6 +26,7 @@ from signal_engine.backtest.types import EntrySignal
 from signal_engine.research import build_registry as br
 from signal_engine.research.intake import trials as trials_mod
 from signal_engine.tests import test_record_run as base
+from signal_engine.tests.dq_fixtures import bulk_insert
 from signal_engine.tests.intake_fixtures import make_spec
 from signal_engine.tests.test_backtest_ledgers import SwingScript
 from signal_engine.tests.test_data_session_integration import (  # noqa: F401
@@ -835,7 +836,12 @@ def swing_db(tmp_path_factory):
         for k, sym in enumerate(("AAA", "BBB", "CCC", "DDD", "EEE")):
             for d, (o, h, lo, cl) in enumerate(_swing_rows(k)):
                 rows.append((sym, "D", EPOCH0 + d * 86400, o, h, lo, cl, 1000))
-        con.executemany("INSERT INTO market_data VALUES (?,?,?,?,?,?,?,?)", rows)
+        bulk_insert(
+            con,
+            "market_data",
+            ["symbol", "interval", "timestamp", "open", "high", "low", "close", "volume"],
+            rows,
+        )
     finally:
         con.close()
     return db

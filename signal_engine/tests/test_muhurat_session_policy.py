@@ -19,6 +19,7 @@ from signal_engine.backtest.data_collect import DataCollector
 from signal_engine.features.session import drop_special_sessions, special_sessions
 from signal_engine.features.value_area import prev_session_value_area
 from signal_engine.pipeline.context import HistorifyLoader
+from signal_engine.tests.dq_fixtures import bulk_insert
 
 IST = "Asia/Kolkata"
 D = dt.date
@@ -47,7 +48,12 @@ def store(tmp_path):
             for ts, r in f.iterrows():
                 rows.append((symbol, "NSE", "1m", int(ts.timestamp()), r.Open, r.High, r.Low, r.Close, int(r.Volume)))
         c = duckdb.connect(path)
-        c.executemany("INSERT INTO market_data VALUES (?,?,?,?,?,?,?,?,?)", rows)
+        bulk_insert(
+            c,
+            "market_data",
+            ["symbol", "exchange", "interval", "timestamp", "open", "high", "low", "close", "volume"],
+            rows,
+        )
         c.close()
 
     return path, put

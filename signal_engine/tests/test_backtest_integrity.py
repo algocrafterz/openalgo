@@ -17,6 +17,7 @@ from signal_engine.backtest import data, metrics
 from signal_engine.backtest.engine import simulate
 from signal_engine.backtest.strategies.base import Strategy
 from signal_engine.backtest.types import Ctx, EntrySignal, RunConfig, india_intraday_bps
+from signal_engine.tests.dq_fixtures import bulk_insert
 
 IST = "Asia/Kolkata"
 
@@ -321,8 +322,12 @@ class TestFromHistorifyDaily:
                 open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT, oi BIGINT
             )
         """)
-        con.executemany(
-            "INSERT INTO market_data VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
+        bulk_insert(
+            con,
+            "market_data",
+            ["symbol", "exchange", "interval", "timestamp", "open", "high", "low", "close", "volume", "oi"],
+            rows,
+        )
         con.close()
         return db_path
 

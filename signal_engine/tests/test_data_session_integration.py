@@ -38,6 +38,7 @@ from signal_engine.backtest.types import Ctx, RunConfig
 from signal_engine.tests import test_evidence_ledgers as tel
 from signal_engine.tests import test_record_run as base
 from signal_engine.tests import test_run_artifact_write as raw
+from signal_engine.tests.dq_fixtures import bulk_insert
 from signal_engine.tests.test_backtest_ledgers import (
     FLAT,
     RUN,
@@ -536,7 +537,12 @@ class TestSwingPath:
                 for d in range(SWING_DAYS)
             ]
             rows += [("AAA", "D", EPOCH0 + 3 * 86400, 100.0, 101.0, 99.5, 100.0, 5)]  # duplicate
-            con.executemany("INSERT INTO market_data VALUES (?,?,?,?,?,?,?,?)", rows)
+            bulk_insert(
+                con,
+                "market_data",
+                ["symbol", "interval", "timestamp", "open", "high", "low", "close", "volume"],
+                rows,
+            )
         finally:
             con.close()
         real = data.from_historify_daily
