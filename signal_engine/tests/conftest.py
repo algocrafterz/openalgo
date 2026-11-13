@@ -253,3 +253,107 @@ def _never_touch_operational_state_files(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(bug_store, "TRACKER_PATH", str(tmp_path / "bugs.json"))
     monkeypatch.setattr(shadow_store, "DATA_DIR", tmp_path / "shadow")
+
+
+_TELEGRAM_HOST = "api.telegram.org"
+
+
+def _is_telegram_url(url) -> bool:
+    """True when `url` (str, httpx.URL, urllib Request) targets the Telegram Bot API host."""
+    from urllib.parse import urlparse
+
+    target = getattr(url, "full_url", url)
+    host = getattr(target, "host", None) or urlparse(str(target)).hostname
+    return (host or "").lower() == _TELEGRAM_HOST
+
+
+def _telegram_refused(url) -> RuntimeError:
+    return RuntimeError(
+        f"A test tried to reach {_TELEGRAM_HOST} ({str(url)!r}), which would send a REAL Telegram "
+        "message. Patch the sender at its call site (alerts.send, critical.notifier or the "
+        "module's own alert function). 2026-11-11 to 2026-11-13: unmocked BreakingTrade critical "
+        "alerts from test_breakingtrade_login_guard.py reached the live channel about 56 times."
+    )
+
+
+@pytest.fixture(autouse=True)
+def _block_real_telegram_sends(monkeypatch):
+    """Make a real Telegram message impossible from a test, on every outbound path.
+
+    The synchronous counterpart to _block_real_openalgo_api_calls, which blocks only
+    httpx.AsyncClient.post. alerts.send() uses the synchronous httpx.post, so a test that ran the
+    real BreakingTrade poller loop sent real CRITICAL banners to the trader's channel. Only
+    requests whose host is api.telegram.org are refused; every other URL behaves as before. The
+    telethon (MTProto) send methods are refused too. The live-session tests in
+    test_telegram_integration.py only connect and read, so they are unaffected.
+    """
+    import urllib.request
+
+    original_post = httpx.post
+    original_client_post = httpx.Client.post
+    original_client_send = httpx.Client.send
+    original_async_send = httpx.AsyncClient.send
+    original_urlopen = urllib.request.urlopen
+
+    def guarded_post(url, *args, **kwargs):
+        if _is_telegram_url(url):
+            raise _telegram_refused(url)
+        return original_post(url, *args, **kwargs)
+
+    def guarded_client_post(self, url, *args, **kwargs):
+        if _is_telegram_url(url):
+            raise _telegram_refused(url)
+        return original_client_post(self, url, *args, **kwargs)
+
+    def guarded_client_send(self, request, *args, **kwargs):
+        if _is_telegram_url(request.url):
+            raise _telegram_refused(request.url)
+        return original_client_send(self, request, *args, **kwargs)
+
+    async def guarded_async_send(self, request, *args, **kwargs):
+        if _is_telegram_url(request.url):
+            raise _telegram_refused(request.url)
+        return await original_async_send(self, request, *args, **kwargs)
+
+    def guarded_urlopen(url, *args, **kwargs):
+        if _is_telegram_url(url):
+            raise _telegram_refused(getattr(url, "full_url", url))
+        return original_urlopen(url, *args, **kwargs)
+
+    monkeypatch.setattr(httpx, "post", guarded_post)
+    monkeypatch.setattr(httpx.Client, "post", guarded_client_post)
+    monkeypatch.setattr(httpx.Client, "send", guarded_client_send)
+    monkeypatch.setattr(httpx.AsyncClient, "send", guarded_async_send)
+    monkeypatch.setattr(urllib.request, "urlopen", guarded_urlopen)
+
+    async def refused_telethon_send(self, *args, **kwargs):
+        raise _telegram_refused("telethon TelegramClient send")
+
+    try:
+        from telethon import TelegramClient
+    except ImportError:  # pragma: no cover - telethon is a project dependency
+        return
+    monkeypatch.setattr(TelegramClient, "send_message", refused_telethon_send)
+    monkeypatch.setattr(TelegramClient, "send_file", refused_telethon_send)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_breakingtrade_alert_state(tmp_path, monkeypatch):
+    """BreakingTrade alert rows and the critical-alert latch must not outlive or escape a test.
+
+    alerts.record() writes through store._DB_PATH, so a test that did not redirect it (the
+    poller-loop tests) wrote its alert rows into the real signal_engine/data/breakingtrade.db.
+    Tests that redirect it themselves override this later in the same test.
+
+    critical.notifier is a module-level object that other modules reach as critical.notifier, so
+    its dicts are cleared in place (not replaced): the once-per-day latch otherwise leaks from
+    one test into the next and decides whether a later test's banner is raised.
+    """
+    from signal_engine.analysis.breakingtrade import critical, store
+
+    monkeypatch.setattr(store, "_DB_PATH", str(tmp_path / "breakingtrade.db"))
+    critical.notifier._last_sent.clear()
+    critical.notifier._open.clear()
+    yield
+    critical.notifier._last_sent.clear()
+    critical.notifier._open.clear()
