@@ -25,6 +25,7 @@ describes a problem's whole life: first seen, every day seen again, cause, fix, 
   The page's "Report as bug" action writes through the store, not the CLI binary; any new writer
   must follow that skill's `references/tracker-write-path.md`.
 - **CLI**: `uv run python -m signal_engine.bugs <list|show|add|seen|update|note|apply>`; `--help`
+- **Lifecycle** (enforced in `store.update`): open→in_progress|wontfix; in_progress→open|fixed|wontfix; fixed→verified|open|in_progress; verified→open; wontfix→open. Reopening or `wontfix` needs `--note` (the reason); `fixed` needs `--fix`; `verified` needs `--verification`. Old fixes with no commit: `--fix-explanation`, never an invented SHA. `--owner` is free text. A recurrence via `seen` reopens automatically (history says recurrence). `store.age_days/is_overdue/awaiting_verification` are computed (HIGH open/in_progress older than 3 days = overdue); `list --json` adds them.
   on each.
 
 ## Lifecycle
@@ -140,3 +141,10 @@ one fenced block, info string `bug-tracker`, holding a JSON list; the cron scrip
 - Fixed for more than 5 sessions and never exercised: say so, so the owner decides whether to
   force the path in a test or accept it.
 - New entries for anything the daily reviews described but did not record.
+
+## Known limitations
+
+- The bug-alert state file `reports/bug-alert-state.json` is read-modify-write without a lock. Two simultaneous `track` runs could both send an alert. The RED cooldown in `alerts.deliver` softens this.
+- New and reopened bug alerts count only on the day the event happens. An alert over the cap of 5, or one whose send failed, is lost after midnight.
+- The app sets no `MAX_CONTENT_LENGTH`, so request bodies are parsed before the 4000-character field check. This applies app-wide.
+- The alert state key trim keeps the alphabetically-last keys. This is harmless because keys carry a day or week.

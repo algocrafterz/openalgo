@@ -5,7 +5,7 @@
     uv run python -m signal_engine.ops logs [--day D]           error signatures vs the last 5 sessions
     uv run python -m signal_engine.ops jobs [--day D]           scheduled-job audit
     uv run python -m signal_engine.ops value-areas [--day D]    store the day's VAH/POC/VAL, check coverage
-    uv run python -m signal_engine.ops track [--day D]          record the day's FAIL checks in the bug tracker
+    uv run python -m signal_engine.ops track [--day D] [--logs [--write]] [--bug-alerts]   record FAIL checks; alerts/log bugs dry-run unless flagged
     uv run python -m signal_engine.ops retry-failed             overnight retry of yesterday's failed backfill (installed 08:56 line)
     uv run python -m signal_engine.ops recover                  08:36: retry only the open steps of the previous trading day
     uv run python -m signal_engine.ops close-day-retry [--day D] 16:01: retry only the open steps of today (close_day.sh --retry)
@@ -25,6 +25,7 @@ from signal_engine.ops import (
     alerts,
     automation,
     autotrack,
+    bugalerts,
     jobs,
     logscan,
     readiness,
@@ -77,6 +78,9 @@ def main(argv=None) -> int:
     parser.add_argument("--day", default=datetime.now(IST).strftime("%Y-%m-%d"))
     parser.add_argument("--at", help="liveness only: end of the window, HH:MM (default: now)")
     parser.add_argument("--id", help="run-action only: the run id the page is watching")
+    parser.add_argument("--bug-alerts", action="store_true", help="track only: send bug alerts")
+    parser.add_argument("--logs", action="store_true", help="track only: detect recurring errors")
+    parser.add_argument("--write", action="store_true", help="track --logs only: write the bugs")
     parser.add_argument("--dry-run", action="store_true", help="notify only: print, do not send")
     args = parser.parse_args(argv)
 
@@ -143,6 +147,12 @@ def main(argv=None) -> int:
         lines = autotrack.record_failures(args.day)
         print(f"track {args.day}: {len(lines)} failed check(s)")
         for line in lines:
+            print(f"  {line}")
+        if args.logs:
+            for line in logscan.detect(args.day, dry_run=not args.write):
+                print(f"  {line}")
+        # Alerts print only, until the owner enables sending with --bug-alerts.
+        for line in bugalerts.run(args.day, dry_run=args.dry_run or not args.bug_alerts):
             print(f"  {line}")
         return 0
 
