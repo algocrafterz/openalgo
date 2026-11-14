@@ -43,6 +43,47 @@ export interface WorkflowReview {
   note: string
 }
 
+/** One expected phase. `state` is a manifest state or a reader-derived one (see workflow_status.py). */
+export interface WorkflowRunStatus {
+  phase: 'open-day' | 'liveness' | 'close-day'
+  due: string
+  state: string
+  /** Started after its due time plus the margin. */
+  late: boolean
+  started_at: string | null
+  ended_at: string | null
+  note: string
+}
+
+export interface WorkflowRecurrenceItem {
+  group: string
+  name: string
+  count: number
+  first: string
+  last: string
+  failing_today: boolean
+}
+
+export interface WorkflowRecurrence {
+  /** Sessions looked at (at most 10). */
+  window: number
+  items: WorkflowRecurrenceItem[]
+}
+
+/** Last alert and recovery. Never holds a token, chat id or message body. */
+export interface WorkflowNotifications {
+  available: boolean
+  reason?: string
+  last_attempt_at?: string | null
+  last_result?: string | null
+  last_key?: string | null
+  last_sent_at?: string | null
+  last_sent_key?: string | null
+  open_red?: string[]
+  last_recovery_at?: string | null
+  last_recovery_key?: string | null
+}
+
 export interface WorkflowDay {
   day: string
   phases: WorkflowPhase[]
@@ -51,6 +92,10 @@ export interface WorkflowDay {
   verdict: WorkflowVerdict | null
   /** Absent in an older server response: the exit code then decides, as before. */
   review?: WorkflowReview
+  /** The three fields below are absent in an older server response. */
+  run_status?: WorkflowRunStatus[]
+  recurrence?: WorkflowRecurrence
+  notifications?: WorkflowNotifications
 }
 
 interface WorkflowResponse {

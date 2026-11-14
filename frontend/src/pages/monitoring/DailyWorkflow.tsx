@@ -46,7 +46,20 @@ import {
   sortFindings,
   stepFailed,
 } from '@/lib/workflowFindings'
+import {
+  noticeLines,
+  noticeNeedsLook,
+  type RunTone,
+  recurrenceOf,
+  recurrenceText,
+  recurringFailures,
+  runFor,
+  runLabel,
+  summarizeRuns,
+} from '@/lib/workflowStatus'
 import { type ReportKey, reportFile, WorkflowReports } from './WorkflowReports'
+
+const CurrentDay = createContext<WorkflowDay | null>(null)
 
 const PHASES: { key: PhaseKey; title: string; when: string; duty: string }[] = [
   { key: 'open-day', title: 'Open', when: '09:12', duty: 'Is the stack ready to trade' },
@@ -268,6 +281,11 @@ function FindingRow({
   const [open, setOpen] = useState(false)
   const [reporting, setReporting] = useState(false)
   const { day, links } = useContext(FindingBugs)
+  const workflowDay = useContext(CurrentDay)
+  const repeat =
+    workflowDay && finding.severity === 'critical'
+      ? recurrenceOf(workflowDay, finding.group, finding.name)
+      : undefined
   const bug = links.get(findingRef(finding))
   const phase = PHASES.find((p) => p.key === finding.phase)
   const category = CATEGORIES.find((c) => c.key === finding.category)?.label
@@ -286,6 +304,14 @@ function FindingRow({
               {ACTION_TEXT[finding.severity]}
             </span>
           </div>
+          {repeat && workflowDay?.recurrence && (
+            <div
+              className={`text-[13px] ${repeat.count >= 2 ? TONE_TEXT.warn : 'text-muted-foreground'}`}
+            >
+              {repeat.count >= 2 ? 'Recurring: ' : ''}
+              {recurrenceText(repeat, workflowDay.recurrence.window)}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-3 text-[13px]">
           {bug && (
@@ -340,6 +366,106 @@ function FindingRow({
         <ReportBugDialog finding={finding} day={day} onClose={() => setReporting(false)} />
       )}
     </li>
+  )
+}
+
+const RUN_TONE: Record<RunTone, Tone> = { good: 'good', warn: 'warn', bad: 'bad', idle: 'idle' }
+
+/** Expected versus completed runs: one line, then the phases that did not run cleanly. */
+function RunsCard({ day }: { day: WorkflowDay }) {
+  const summary = summarizeRuns(day.run_status)
+  if (!summary) return null
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">Expected runs</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <p className="text-[15px]">{summary.text}</p>
+        <ul className="grid gap-2 sm:grid-cols-3">
+          {(day.run_status ?? []).map((r) => {
+            const l = runLabel(r)
+            const title = PHASES.find((p) => p.key === r.phase)
+            return (
+              <li key={r.phase} className="rounded-md border px-3 py-2">
+                <div className="text-[13px] text-muted-foreground">
+                  {title?.title} | due {r.due}
+                  {r.started_at ? `, started ${r.started_at.slice(11, 16)}` : ''}
+                </div>
+                {l && <StatusBadge tone={RUN_TONE[l.tone]}>{l.label}</StatusBadge>}
+                {r.note && <div className="mt-1 text-[13px] text-muted-foreground">{r.note}</div>}
+              </li>
+            )
+          })}
+        </ul>
+      </CardContent>
+    </Card>
+  )
+}
+
+/** Checks that failed on 2 or more of the last sessions. Hidden when there are none. */
+function RecurringCard({ day }: { day: WorkflowDay }) {
+  const items = recurringFailures(day)
+  if (!day.recurrence) return null
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">
+          Recurring failures{' '}
+          <span className="font-normal text-muted-foreground">
+            (last {day.recurrence.window} sessions)
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {items.length === 0 ? (
+          <p className="text-[15px] text-muted-foreground">No check failed more than once.</p>
+        ) : (
+          <ul className="divide-y rounded-lg border">
+            {items.map((i) => (
+              <li key={`${i.group}|${i.name}`} className="px-4 py-2 text-[15px]">
+                <span className="break-words">{i.name}</span>
+                <div className="text-[13px] text-muted-foreground">
+                  {recurrenceText(i, day.recurrence?.window ?? 0)}
+                  {i.failing_today ? ' | failing on this day' : ''}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+/** Last alert sent and last recovery, from the alert state file. No message text is shown. */
+function NoticeCard({ day }: { day: WorkflowDay }) {
+  const lines = noticeLines(day.notifications)
+  if (!lines) return null
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">Last alert and recovery</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <dl className="grid gap-x-4 gap-y-1 text-[15px] sm:grid-cols-[12rem_1fr]">
+          {lines.map((l) => (
+            <div key={l.label} className="contents">
+              <dt className="text-muted-foreground">{l.label}</dt>
+              <dd
+                className={`break-words ${
+                  l.label === 'Open red alerts' && noticeNeedsLook(day.notifications)
+                    ? TONE_TEXT.bad
+                    : ''
+                }`}
+              >
+                {l.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -538,9 +664,12 @@ function Checkpoint({
   const steps = day.phases.find((p) => p.phase === phase.key)?.steps
   const counts = countSeverities(phaseFindings(findings, phase.key))
   const completed = phaseCompleted(day, phase.key)
+  const run = runLabel(runFor(day, phase.key))
   const tone: Tone =
     completed === null
-      ? 'idle'
+      ? run?.tone === 'bad'
+        ? 'bad'
+        : 'idle'
       : counts.critical
         ? 'bad'
         : counts.warning
@@ -551,7 +680,7 @@ function Checkpoint({
   const results = PHASE_CHECKS[phase.key].filter((k) => day.checks[k])
   const status =
     completed === null
-      ? 'Did not run'
+      ? (run?.label ?? 'Did not run')
       : [
           counts.critical && `${counts.critical} failed`,
           counts.warning && `${counts.warning} ${counts.warning === 1 ? 'warning' : 'warnings'}`,
@@ -579,6 +708,7 @@ function Checkpoint({
         <span className={`text-[15px] ${tone === 'bad' ? TONE_TEXT.bad : TONE_TEXT[tone]}`}>
           {status}
           {completed === false ? ' | a step failed' : ''}
+          {completed !== null && run?.problem ? ` | ${run.label}` : ''}
         </span>
         <ChevronDown
           className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`}
@@ -758,42 +888,52 @@ export default function DailyWorkflow() {
       ) : (
         <FindingBugs.Provider value={bugContext}>
           <RemedyProvider day={view.day}>
-            <SessionOverview day={view} findings={findings} bugs={bugSummary} />
-            <Trend days={days} current={view.day} onSelect={pick} />
-            <RunBanner />
-            <Attention
-              findings={findings}
-              hasData={healthOf(view, findings) !== 'nodata'}
-              onOpenReport={openReport}
-            />
-            <Card>
-              <CardHeader className="pb-0">
-                <CardTitle className="text-base">Checkpoints</CardTitle>
-              </CardHeader>
-              <CardContent className="pt-3">
-                <ol className="divide-y rounded-lg border">
-                  {PHASES.map((p) => (
-                    <Checkpoint
-                      key={p.key}
-                      day={view}
-                      phase={p}
-                      findings={findings}
-                      open={openPhase === p.key}
-                      onToggle={() => setOpenPhase(openPhase === p.key ? null : p.key)}
-                    />
-                  ))}
-                </ol>
-              </CardContent>
-            </Card>
-            <div ref={reportsRef} className="scroll-mt-4 space-y-3">
-              <Button variant="outline" size="sm" onClick={() => setShowReports(!showReports)}>
-                <FileText className="h-4 w-4 mr-2" />
-                {showReports ? 'Hide full reports' : 'Show full reports'}
-              </Button>
-              {showReports && (
-                <WorkflowReports key={view.day} day={view} selected={report} onSelect={setReport} />
-              )}
-            </div>
+            <CurrentDay.Provider value={view}>
+              <SessionOverview day={view} findings={findings} bugs={bugSummary} />
+              <RunsCard day={view} />
+              <Trend days={days} current={view.day} onSelect={pick} />
+              <RunBanner />
+              <Attention
+                findings={findings}
+                hasData={healthOf(view, findings) !== 'nodata'}
+                onOpenReport={openReport}
+              />
+              <RecurringCard day={view} />
+              <NoticeCard day={view} />
+              <Card>
+                <CardHeader className="pb-0">
+                  <CardTitle className="text-base">Checkpoints</CardTitle>
+                </CardHeader>
+                <CardContent className="pt-3">
+                  <ol className="divide-y rounded-lg border">
+                    {PHASES.map((p) => (
+                      <Checkpoint
+                        key={p.key}
+                        day={view}
+                        phase={p}
+                        findings={findings}
+                        open={openPhase === p.key}
+                        onToggle={() => setOpenPhase(openPhase === p.key ? null : p.key)}
+                      />
+                    ))}
+                  </ol>
+                </CardContent>
+              </Card>
+              <div ref={reportsRef} className="scroll-mt-4 space-y-3">
+                <Button variant="outline" size="sm" onClick={() => setShowReports(!showReports)}>
+                  <FileText className="h-4 w-4 mr-2" />
+                  {showReports ? 'Hide full reports' : 'Show full reports'}
+                </Button>
+                {showReports && (
+                  <WorkflowReports
+                    key={view.day}
+                    day={view}
+                    selected={report}
+                    onSelect={setReport}
+                  />
+                )}
+              </div>
+            </CurrentDay.Provider>
           </RemedyProvider>
         </FindingBugs.Provider>
       )}

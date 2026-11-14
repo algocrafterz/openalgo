@@ -13,6 +13,7 @@ import re
 from flask import Blueprint, jsonify, request
 
 from limiter import limiter
+from signal_engine.ops import workflow_status
 from signal_engine.ops.model import read_run
 from signal_engine.ops.verdict import review_outcome
 from utils.logging import get_logger
@@ -101,7 +102,7 @@ def _run_summary(phase: str, day: str, folder: str) -> dict:
     }
 
 
-def day_view(day: str, folder: str = REPORTS_DIR) -> dict:
+def day_view(day: str, folder: str = REPORTS_DIR, now=None) -> dict:
     phases = [{"phase": p, "steps": _steps(p, day, folder)} for p in PHASES]
     checks = {name: data for name in CHECKED if (data := _checked(name, day, folder))}
     reports = (
@@ -131,6 +132,10 @@ def day_view(day: str, folder: str = REPORTS_DIR) -> dict:
             "note": review["note"],
         },
         "runs": {p: _run_summary(p, day, folder) for p in PHASES},
+        # Added fields (R4.1): expected-versus-completed runs, recurring failures, last alert.
+        "run_status": workflow_status.run_status(day, folder, now),
+        "recurrence": workflow_status.recurrence(day, folder),
+        "notifications": workflow_status.notifications(folder),
     }
 
 
@@ -159,7 +164,14 @@ def workflow():
         data = (
             day_view(day)
             if day
-            else {"day": "", "phases": [], "checks": {}, "reports": [], "verdict": None}
+            else {
+                "day": "",
+                "phases": [],
+                "checks": {},
+                "reports": [],
+                "verdict": None,
+                "notifications": workflow_status.notifications(REPORTS_DIR),
+            }
         )
         return jsonify({"status": "success", "days": days, "data": data}), 200
     except Exception:
