@@ -262,6 +262,7 @@ def test_report_creates_then_is_idempotent_for_the_same_day(path):
 
 def test_report_adds_a_new_day_with_the_seen_rule_and_reopens_only_after_the_fix(path):
     _report(path)
+    store.update("BUG-001", status="in_progress", path=path)
     store.update("BUG-001", status="fixed", fix="changed", note="fixed", path=path)
     fixed_day = time.strftime("%Y-%m-%d")
     same = _report(path, day=fixed_day)

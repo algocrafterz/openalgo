@@ -37,6 +37,19 @@ STATUSES = ("open", "in_progress", "fixed", "verified", "wontfix")
 #: A status that no longer needs work. "fixed" is not one: a fix is proven only by a clean session.
 CLOSED_STATUSES = ("verified", "wontfix")
 
+#: The only status changes update() accepts. A recurrence reopening a bug goes through
+#: _record_seen, not this table. Reopening or won't-fixing by hand needs a written reason.
+TRANSITIONS = {
+    "open": ("in_progress", "wontfix"),
+    "in_progress": ("open", "fixed", "wontfix"),
+    "fixed": ("verified", "open", "in_progress"),
+    "verified": ("open",),
+    "wontfix": ("open",),
+}
+#: Statuses a bug may be created in. Later states are reached only through update().
+NEW_STATUSES = ("open", "in_progress")
+OVERDUE_DAYS = 3
+
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -194,12 +207,39 @@ def _next_id(data: dict) -> str:
     return f"BUG-{(max(numbers) + 1) if numbers else 1:03d}"
 
 
+def _day(value) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
+def age_days(bug: dict, today) -> int:
+    """Whole days from first_seen to `today` (a date or YYYY-MM-DD). Computed, never stored."""
+    return (_day(today) - _day(bug["first_seen"])).days
+
+
+def is_overdue(bug: dict, today) -> bool:
+    """A HIGH bug still open or in progress more than OVERDUE_DAYS days after first seen."""
+    return (
+        bug.get("severity") == "HIGH"
+        and bug.get("status") in ("open", "in_progress")
+        and age_days(bug, today) > OVERDUE_DAYS
+    )
+
+
+def awaiting_verification(bug: dict) -> bool:
+    """A fixed bug waits for a person to verify it."""
+    return bug.get("status") == "fixed"
+
+
 def _validate_new(*, title, kind, severity, status, seen, impact) -> None:
     if not title.strip() or not impact.strip():
         raise TrackerError("title and impact are required")
     _check_choice("kind", kind, KINDS)
     _check_choice("severity", severity, SEVERITIES)
-    _check_choice("status", status, STATUSES)
+    _check_choice("status", status, NEW_STATUSES)
     _check_date(seen)
 
 
@@ -218,6 +258,7 @@ def _append_bug(
     sources: list[str] | None,
     status: str,
     plain: str,
+    owner: str = "",
 ) -> dict:
     """Add a new bug to the loaded tracker, refusing a title an open bug already has. Not saved."""
     for bug in data["bugs"]:
@@ -237,6 +278,7 @@ def _append_bug(
         "kind": kind,
         "severity": severity,
         "status": status,
+        "owner": owner.strip(),
         "area": area.strip(),
         "strategies": sorted(set(strategies or [])),
         "first_seen": seen,
@@ -247,6 +289,7 @@ def _append_bug(
         "root_cause": root_cause.strip(),
         "fix": "",
         "fix_commit": "",
+        "fix_explanation": "",
         "verification": "",
         "sources": list(sources or []),
         "history": [{"at": now, "status": status, "note": "recorded"}],
@@ -271,6 +314,7 @@ def add(
     sources: list[str] | None = None,
     status: str = "open",
     plain: str = "",
+    owner: str = "",
     path: str | None = None,
 ) -> dict:
     """Record a new bug and return it. Refuses a title that an open bug already has."""
@@ -294,22 +338,36 @@ def add(
             sources=sources,
             status=status,
             plain=plain,
+            owner=owner,
         )
         _save(data, path)
     return bug
 
 
-def _fixed_on(bug: dict) -> str | None:
-    """IST date of the latest change to fixed, from the history; None when never fixed."""
-    days = [h["at"][:10] for h in bug.get("history", []) if h.get("status") == "fixed"]
-    return max(days) if days else None
+def fixed_since(bug: dict) -> str | None:
+    """IST date the bug last changed INTO fixed; None when it was never fixed.
+
+    Notes, "stays fixed" sightings and field edits also write history entries with status fixed, so
+    the latest such entry is not the fix. This takes the latest contiguous run of fixed entries
+    and returns the date of its first entry.
+    """
+    history = [h for h in bug.get("history", []) if h.get("at")]
+    last = next(
+        (i for i in range(len(history) - 1, -1, -1) if history[i].get("status") == "fixed"), None
+    )
+    if last is None:
+        return None
+    first = last
+    while first > 0 and history[first - 1].get("status") == "fixed":
+        first -= 1
+    return history[first]["at"][:10]
 
 
 def _record_seen(
     data: dict, bug: dict, day: str, evidence: list[str] | None, sources: list[str] | None
 ) -> None:
     """Record that `bug` happened again on `day` in the loaded tracker. Not saved."""
-    fixed_on = _fixed_on(bug)
+    fixed_on = fixed_since(bug)
     if day not in bug["occurrences"]:
         bug["occurrences"] = sorted([*bug["occurrences"], day])
     bug["last_seen"] = max(bug["occurrences"])
@@ -319,7 +377,7 @@ def _record_seen(
     note = f"seen on {day}"
     if bug["status"] in ("fixed", "verified"):
         if fixed_on is None or day > fixed_on:
-            note += f": recurred after being {bug['status']}, reopened"
+            note += f": recurrence after being {bug['status']}, reopened automatically"
             bug["status"] = "open"
         else:
             note += f": on or before the fix ({fixed_on}), stays {bug['status']}"
@@ -431,20 +489,30 @@ def report(
         return {"created": True, "recorded": True, "bug": bug}
 
 
+#: Fields whose change is worth its own line in the history.
+_TRACKED = ("severity", "owner", "fix", "fix_commit", "fix_explanation", "verification")
+
+
 def update(
     bug_id: str, *, status: str | None = None, note: str = "", path: str | None = None, **fields
 ) -> dict:
-    """Change a bug's status or text fields. "fixed" needs a fix, "verified" a verification."""
+    """Change a bug's status or text fields, following TRANSITIONS.
+
+    "fixed" needs a fix, "verified" a verification, and reopening or won't-fixing needs a note
+    giving the reason. A status equal to the current one is not a transition.
+    """
     path = path or TRACKER_PATH
     editable = {
         "title",
         "plain",
         "severity",
+        "owner",
         "area",
         "impact",
         "root_cause",
         "fix",
         "fix_commit",
+        "fix_explanation",
         "verification",
     }
     unknown = set(fields) - editable
@@ -457,20 +525,50 @@ def update(
     with _locked(path):
         data = load(path)
         bug = _find(data, bug_id)
+        current = bug["status"]
+        moving = status is not None and status != current
+        if moving:
+            if status not in TRANSITIONS.get(current, ()):
+                allowed = ", ".join(TRANSITIONS.get(current, ())) or "none"
+                raise TrackerError(
+                    f"{bug_id} cannot go from {current} to {status} (allowed: {allowed})"
+                )
+            if status in ("open", "wontfix") and not note.strip():
+                raise TrackerError(f"moving {bug_id} to {status} needs --note giving the reason")
+        changes = []
+        pending = {}
         for name, value in fields.items():
-            if value is not None:
-                bug[name] = value.strip()
-        if status == "fixed" and not bug["fix"]:
+            if value is None:
+                continue
+            value = value.strip()
+            if name == "owner" and value == str(bug.get("owner") or "").strip() and not moving:
+                continue
+            pending[name] = value
+            if name in _TRACKED and value != bug.get(name, ""):
+                if name == "severity":
+                    changes.append(f"severity {bug[name]} -> {value}")
+                else:
+                    changes.append(f"{name} changed")
+        merged = {**bug, **pending}
+        if moving and status == "fixed" and not merged.get("fix"):
             raise TrackerError("a fixed bug needs --fix describing the change")
-        if status == "verified" and not bug["verification"]:
+        if moving and status == "verified" and not merged.get("verification"):
             raise TrackerError(
                 "a verified bug needs --verification naming the clean session or test"
             )
-        if status is not None:
+        if not moving and not pending and not note.strip():
+            return bug
+        bug.update(pending)
+        if moving:
             bug["status"] = status
+        text = note.strip()
+        if moving and current != status:
+            text = f"{current} -> {status}: {text}" if text else f"{current} -> {status}"
+        if changes:
+            text = "; ".join(filter(None, [text, *changes]))
         bug["updated_at"] = _now()
         bug["history"].append(
-            {"at": bug["updated_at"], "status": bug["status"], "note": note or "updated"}
+            {"at": bug["updated_at"], "status": bug["status"], "note": text or "updated"}
         )
         _save(data, path)
     return bug

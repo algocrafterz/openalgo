@@ -6,7 +6,7 @@
         --seen 2026-10-30 --impact ... [--strategy S]... [--evidence E]... [--root-cause ...] [--source P]...
     uv run python -m signal_engine.bugs seen BUG-001 --date 2026-10-31 [--evidence E]... [--source P]...
     uv run python -m signal_engine.bugs update BUG-001 [--status fixed] [--fix ...] [--commit SHA]
-        [--verification ...] [--root-cause ...] [--severity ...] [--note ...]
+        [--verification ...] [--fix-explanation ...] [--owner ...] [--root-cause ...] [--severity ...] [--note ...]
     uv run python -m signal_engine.bugs note BUG-001 --text ...
     uv run python -m signal_engine.bugs apply FILE --origin eod-cron-2026-10-31   # add/seen/note only
 """
@@ -14,8 +14,10 @@
 import argparse
 import json
 import sys
+from datetime import datetime
 
 from signal_engine.bugs import store
+from signal_engine.timeutils import IST
 
 
 def _line(bug: dict) -> str:
@@ -53,7 +55,8 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("--evidence", action="append", default=[])
     add.add_argument("--root-cause", default="")
     add.add_argument("--source", action="append", default=[])
-    add.add_argument("--status", default="open", choices=store.STATUSES)
+    add.add_argument("--status", default="open", choices=store.NEW_STATUSES)
+    add.add_argument("--owner", default="")
 
     seen = sub.add_parser("seen", help="the bug happened again")
     seen.add_argument("id")
@@ -73,6 +76,8 @@ def _parser() -> argparse.ArgumentParser:
     update.add_argument("--fix")
     update.add_argument("--commit", dest="fix_commit")
     update.add_argument("--verification")
+    update.add_argument("--fix-explanation", dest="fix_explanation")
+    update.add_argument("--owner")
     update.add_argument("--note", default="")
 
     note = sub.add_parser("note", help="history note, status unchanged")
@@ -97,6 +102,16 @@ def main(argv=None) -> int:
             rank = {s: i for i, s in enumerate(store.SEVERITIES)}
             bugs.sort(key=lambda b: (rank[b["severity"]], b["id"]))
             if args.json:
+                today = datetime.now(IST).date()
+                bugs = [
+                    {
+                        **b,
+                        "age_days": store.age_days(b, today),
+                        "overdue": store.is_overdue(b, today),
+                        "awaiting_verification": store.awaiting_verification(b),
+                    }
+                    for b in bugs
+                ]
                 print(json.dumps(bugs, indent=2, ensure_ascii=False))
             else:
                 for bug in bugs:
@@ -118,6 +133,7 @@ def main(argv=None) -> int:
                 root_cause=args.root_cause,
                 sources=args.source,
                 status=args.status,
+                owner=args.owner,
             )
             print(_line(bug))
         elif args.command == "seen":
@@ -138,6 +154,8 @@ def main(argv=None) -> int:
                 fix=args.fix,
                 fix_commit=args.fix_commit,
                 verification=args.verification,
+                fix_explanation=args.fix_explanation,
+                owner=args.owner,
             )
             print(_line(bug))
         elif args.command == "note":

@@ -53,6 +53,7 @@ def test_a_fixed_bug_seen_again_reopens(path, monkeypatch):
     # The fix is stamped from the clock; pin it to the day before the sighting, so the
     # sighting is a session after the fix whatever today's date is.
     monkeypatch.setattr(store, "_now", lambda: "2026-11-01T10:00:00+05:30")
+    store.update("BUG-001", status="in_progress", path=path)
     store.update("BUG-001", status="fixed", fix="set sl_order_id from the sweep", path=path)
     bug = store.seen("BUG-001", "2026-11-02", path=path)
     assert bug["status"] == "open"
@@ -61,10 +62,12 @@ def test_a_fixed_bug_seen_again_reopens(path, monkeypatch):
 
 def test_fixed_needs_a_fix_and_verified_needs_a_verification(path):
     _add(path)
+    store.update("BUG-001", status="in_progress", path=path)
     with pytest.raises(store.TrackerError, match="needs --fix"):
         store.update("BUG-001", status="fixed", path=path)
+    store.update("BUG-001", status="fixed", fix="x", path=path)
     with pytest.raises(store.TrackerError, match="needs --verification"):
-        store.update("BUG-001", status="verified", fix="x", path=path)
+        store.update("BUG-001", status="verified", path=path)
 
 
 def test_bad_values_are_refused(path):
@@ -130,6 +133,7 @@ def test_actions_are_read_from_the_last_block_of_a_report():
 
 def test_a_re_run_of_a_day_before_the_fix_does_not_reopen(path):
     _add(path)
+    store.update("BUG-001", status="in_progress", path=path)
     bug = store.update("BUG-001", status="fixed", fix="sweep sets the id", path=path)
     fixed_day = bug["history"][-1]["at"][:10]
     bug = store.seen("BUG-001", "2026-10-27", path=path)  # a re-run of the session that found it
