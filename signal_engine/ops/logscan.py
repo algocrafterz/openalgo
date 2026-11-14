@@ -101,13 +101,14 @@ def run(day: str) -> str:
 #: Known background noise. Never turned into a bug, however often it repeats.
 BENIGN = re.compile(
     r"connection to remote host was lost|ping/pong timed out|no market data for"
-    r"|failed download|\b404\b|NIFTYFPI\.NS",
+    r"|failed download|\b404\b|NIFTYFPI|possibly delisted|quoteSummary",
     re.I,
 )
 MIN_HITS = 5
 MIN_DAYS = 2
 _SECRET = re.compile(
-    r"(token|secret|password|passwd|apikey|api_key|authorization|bearer)\S*\s*[=:]?\s*\S+"
+    r"(token|secret|password|passwd|apikey|api_key|authorization|bearer)\S*\s*[=:]?\s*"
+    r"(?:(?:bearer|basic)\s+)?\S+"
     r"|[A-Za-z0-9_\-]{24,}",
     re.I,
 )
@@ -123,10 +124,13 @@ def mask_evidence(sig: str, hits: int, days: int) -> str:
     return f"Log detector: {line} ({hits} today, seen on {days} day(s))"[:200]
 
 
+TITLE_PREFIX = "Recurring log error: "
+
+
 def mask_title(sig: str) -> str:
     """Bug title for a signature, masked like the evidence line."""
     line = _SECRET.sub("<masked>", sig.splitlines()[0] if sig else "")
-    return f"Recurring log error: {line[:90]}"
+    return f"{TITLE_PREFIX}{line[:90]}"
 
 
 def candidates(day: str, counter=None, sessions: int = 5) -> list[tuple[str, int, int]]:
@@ -144,7 +148,24 @@ def candidates(day: str, counter=None, sessions: int = 5) -> list[tuple[str, int
     return sorted(found, key=lambda item: (-item[1], item[0]))
 
 
-_TICKER = re.compile(r"(?<![A-Za-z0-9_&-])[A-Z][A-Z0-9&-]{2,19}(?![A-Za-z0-9_&-])")
+#: A placeholder already written by normalize (kept as is), or a ticker-shaped word.
+_TICKER = re.compile(
+    r"<(?:SYM|ID|TOKEN)>|(?<![A-Za-z0-9_&-])[A-Z][A-Z0-9&-]{2,19}(?![A-Za-z0-9_&-])"
+)
+#: A two-letter upper-case word is a ticker (LT, M&M's short cousins) only in an explicit symbol
+#: context: after "symbol", "ticker", "instrument", "order for", "position in", or "for XX"
+#: followed by an order or trade word. Common two-letter tokens never count.
+_SHORT_AFTER_LABEL = re.compile(
+    r"\b(?i:symbol|ticker|instrument|order for|position in)(?:\s*[=:]\s*|\s+)"
+    r"([A-Z]{2})(?![A-Za-z0-9_&<-])"
+)
+_SHORT_BEFORE_TRADE_WORD = re.compile(
+    r"\bfor\s+([A-Z]{2})(?=\s+(?i:order|trade|bar|position|entry|exit|stop|signal|fill)\b)"
+)
+_SHORT_STOP = frozenset(
+    "OK ID IP IO DB UI OS NO IF TO ON AT BY OR AM PM US UK IN IS IT OF AS AN BE DO GO HE ME MY SO UP "
+    "WE AI CI CD QA TV PC EU UN EN HR PR VM FS FD RC MQ WS".split()
+)
 _HEXID = re.compile(
     r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{8,}\b|\b[0-9a-f]{8}-[0-9a-f-]{27}\b"
 )
@@ -183,9 +204,19 @@ def normalize(sig: str, universe=frozenset()) -> str:
 
     def ticker(match: re.Match) -> str:
         word = match.group(0)
+        if word.startswith("<"):
+            return word
         return "<SYM>" if word in universe or word not in _NOT_TICKERS else word
 
+    def short(match: re.Match) -> str:
+        word = match.group(1)
+        if word in _SHORT_STOP:
+            return match.group(0)
+        return match.group(0)[: match.start(1) - match.start(0)] + "<SYM>"
+
     message = _TICKER.sub(ticker, message)
+    message = _SHORT_AFTER_LABEL.sub(short, message)
+    message = _SHORT_BEFORE_TRADE_WORD.sub(short, message)
     if universe:
         names = sorted((u for u in universe if len(u) < 3), key=len, reverse=True)
         for name in names:
@@ -211,7 +242,9 @@ def _normalized(counter, universe):
     """Wrap a per-day signature counter so equal normalized signatures add up."""
 
     def wrapped(day: str) -> Counter:
-        raw = counter(day)
+        # BENIGN noise is judged on the raw text too: normalizing can rewrite the very words
+        # (NIFTYFPI.NS, tickers) a benign pattern names.
+        raw = Counter({sig: n for sig, n in counter(day).items() if not BENIGN.search(sig)})
         known = set(universe) | _siblings(list(raw))
         merged: Counter = Counter()
         for sig, n in raw.items():
@@ -240,7 +273,7 @@ def detect(day: str, dry_run: bool = True, *, counter=None, path: str | None = N
         if dry_run:
             verb = f"would update {existing}" if existing else "would create"
             lines.append(
-                f"[dry-run] {verb}: {key} x{hits} on {days} day(s): {mask_title(sig)[22:][:80]}"
+                f"[dry-run] {verb}: {key} x{hits} on {days} day(s): {mask_title(sig)[len(TITLE_PREFIX) :][:80]}"
             )
             continue
         try:
