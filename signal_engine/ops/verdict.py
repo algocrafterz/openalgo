@@ -278,25 +278,39 @@ def message(phase: str, day: str, folder: str = REPORTS) -> str | None:
 
 
 def send(phase: str, day: str) -> bool:
+    """Send the phase's line through the retry, dedupe and channel rules (signal_engine/ops/alerts.py).
+
+    A RED line is sent once until it changes or clears; a close-day line always goes out, because
+    it is the day's one confirmation and the catch-up deliberately sends the corrected one.
+    """
     text = message(phase, day)
     if text is None:
         return False
-    from signal_engine.analysis.eod_review import send_to_admin_channel
+    from signal_engine.ops import alerts
 
-    return send_to_admin_channel(text, _phase())
+    level = review_outcome(day)["verdict"] if phase == "close-day" else "RED"
+    # The close-day line is a daily confirmation, so it never counts as a repeated alarm.
+    return alerts.deliver(
+        text,
+        kind="phase",
+        phase=phase,
+        condition="verdict",
+        severity="RED" if level == "RED" else "INFO",
+    )
+
+
+def recover(phase: str, day: str) -> bool:
+    """Called when a phase has nothing to send: tell the maintainer once if its RED has cleared."""
+    from signal_engine.ops import alerts
+
+    return alerts.recover(kind="phase", phase=phase, condition="verdict")
 
 
 def _phase() -> str:
-    """The admin channel of OpenAlgo's current mode; analyze when it cannot be read."""
-    import asyncio
+    """Compatibility wrapper: the channel name only. Use alerts.deliver for the full rule."""
+    from signal_engine.ops.alerts import resolve_channel
 
-    from signal_engine.api_client import fetch_trading_mode
-
-    try:
-        mode, _ = asyncio.run(fetch_trading_mode())
-    except Exception:  # noqa: BLE001 - an unreadable mode must not stop a failure alert
-        return "analyze"
-    return "live" if mode == "live" else "analyze"
+    return resolve_channel()[0]
 
 
 def _main(argv: list[str] | None = None) -> int:

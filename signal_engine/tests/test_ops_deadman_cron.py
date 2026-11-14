@@ -341,3 +341,49 @@ def test_the_installed_crontab_text_in_the_scripts_matches_the_audit():
     text += f"30 16 * * 1-5 {BASE}/signal_engine/analysis/autofix.sh x\n"
     problems, _ = jobs.audit_cron(text)
     assert problems == []
+
+
+# ---- the dead-man command line: recovery only after something was checked ------------------
+
+
+def _run_deadman(monkeypatch, phase, day, now):
+    from signal_engine.ops import __main__ as cli
+    from signal_engine.ops import actions, alerts
+
+    calls = []
+    monkeypatch.setattr(actions, "now_ist", lambda: now)
+    monkeypatch.setattr(alerts, "recover", lambda **kw: calls.append(kw) or True)
+    monkeypatch.setattr(alerts, "deliver", lambda *a, **kw: calls.append(("deliver", a)) or True)
+    rc = cli.main(["deadman", phase, "--day", day])
+    return rc, calls
+
+
+def test_deadman_on_a_weekend_sends_and_recovers_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(model, "REPORTS", str(tmp_path))
+    monkeypatch.setattr(automation, "REPORTS", str(tmp_path))
+    rc, calls = _run_deadman(
+        monkeypatch, "close", "2026-11-14", datetime(2026, 11, 14, 21, 40, tzinfo=IST)
+    )
+    assert (rc, calls) == (0, [])
+
+
+def test_deadman_on_a_holiday_sends_and_recovers_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(automation, "is_trading_day", lambda day, **kw: False)
+    rc, calls = _run_deadman(monkeypatch, "close", DAY, LATE)
+    assert (rc, calls) == (0, [])
+
+
+def test_deadman_before_the_phase_is_due_sends_and_recovers_nothing(tmp_path, monkeypatch):
+    early = datetime(2026, 11, 12, 9, 5, tzinfo=IST)
+    rc, calls = _run_deadman(monkeypatch, "morning", DAY, early)
+    assert (rc, calls) == (0, [])
+
+
+def test_deadman_recovers_when_every_due_checkpoint_is_healthy(tmp_path, monkeypatch):
+    monkeypatch.setattr(model, "REPORTS", str(tmp_path))
+    monkeypatch.setattr(automation, "REPORTS", str(tmp_path))
+    monkeypatch.setattr(verdict, "REPORTS", str(tmp_path))
+    _phase(tmp_path, "close-day")
+    rc, calls = _run_deadman(monkeypatch, "close", DAY, LATE)
+    assert rc == 0
+    assert calls == [{"kind": "deadman", "phase": "close"}]

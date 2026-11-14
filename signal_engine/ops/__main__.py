@@ -7,7 +7,7 @@
     uv run python -m signal_engine.ops value-areas [--day D]    store the day's VAH/POC/VAL, check coverage
     uv run python -m signal_engine.ops track [--day D]          record the day's FAIL checks in the bug tracker
     uv run python -m signal_engine.ops retry-failed             overnight retry of yesterday's failed backfill
-    uv run python -m signal_engine.ops deadman PHASE            alert when a checkpoint left no record
+    uv run python -m signal_engine.ops deadman PHASE            alert when a checkpoint is missing, incomplete or failed
     uv run python -m signal_engine.ops run-action ACTION --day D --id RUN   run a step again (the page)
     uv run python -m signal_engine.ops notify PHASE [--day D]   the one Telegram message for a phase
 
@@ -20,6 +20,7 @@ from datetime import datetime
 
 from signal_engine.ops import (
     actions,
+    alerts,
     automation,
     autotrack,
     jobs,
@@ -62,6 +63,8 @@ def main(argv=None) -> int:
         text = verdict.message(args.phase, args.day)
         if text is None:
             print(f"{args.phase} {args.day}: nothing to send")
+            if not args.dry_run and verdict.recover(args.phase, args.day):
+                print(f"{args.phase} {args.day}: recovery line sent")
             return 0
         if args.dry_run:
             print(f"[dry-run] would send: {text}")
@@ -78,17 +81,26 @@ def main(argv=None) -> int:
     if args.command == "deadman":
         if args.phase not in automation.EXPECTED:
             parser.error("deadman needs a phase: morning or close")
+        report = automation.deadman_report(args.phase, args.day)
         text = automation.deadman(args.phase, args.day)
+        state = automation.worst_state(report)
         if text is None:
-            print(f"deadman {args.phase} {args.day}: every expected checkpoint left a record")
+            if not report:
+                # A holiday, a weekend or a phase not yet due: nothing was checked, so nothing is
+                # healthy and no earlier RED is cleared.
+                print(f"deadman {args.phase} {args.day}: nothing due, nothing checked")
+                return 0
+            print(f"deadman {args.phase} {args.day}: healthy, every due checkpoint is complete")
+            if not args.dry_run and all(r["state"] == automation.HEALTHY for r in report):
+                alerts.recover(kind="deadman", phase=args.phase)
             return 0
         if args.dry_run:
-            print(f"[dry-run] would send: {text}")
+            print(f"[dry-run] would send ({state}): {text}")
             return 0
-        from signal_engine.analysis.eod_review import send_to_admin_channel
-
-        sent = send_to_admin_channel(text, verdict._phase())
-        print(f"{'sent' if sent else 'NOT sent'}: {text}")
+        sent = alerts.deliver(
+            text, kind="deadman", phase=args.phase, condition=state, severity="RED"
+        )
+        print(f"{'sent' if sent else 'NOT sent'} ({state}): {text}")
         return 0 if sent else 1
 
     if args.command == "run-action":
