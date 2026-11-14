@@ -170,6 +170,7 @@ def test_a_fixed_bug_seen_after_its_fix_is_reopened_but_not_on_or_before_it(env)
     later = "2099-01-01"
     _write_day(folder, later)
     mod.report_finding(_payload())
+    store.update("BUG-001", status="in_progress", note="started", path=str(tracker))
     store.update("BUG-001", status="fixed", fix="changed", note="fixed", path=str(tracker))
     # A day on or before the fix date is evidence of the old code: the store keeps it fixed.
     same = mod.report_finding(_payload(day=NEXT))
