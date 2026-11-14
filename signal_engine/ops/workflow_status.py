@@ -17,15 +17,22 @@ from signal_engine.ops import alerts, model
 
 PHASES = ("open-day", "liveness", "close-day")
 CHECKED = ("open-day", "liveness", "logs", "value-areas", "jobs")
-#: Phase -> (due HH:MM, trader's label). Mirrors automation.EXPECTED; kept here so the page does
-#: not import the scheduler module.
+#: Phase -> due HH:MM. The one source of the workflow's clock times: automation.EXPECTED is built
+#: from it and the page reads it from the day payload's `schedule`. It describes when cron runs
+#: the phases (run_phase.sh, close_day.sh); changing it here does not move a cron job.
 DUE = {"open-day": "09:12", "liveness": "09:27", "close-day": "15:36"}
-MARGIN_MINUTES = 10  # automation.DUE_MARGIN_MINUTES
+#: A phase is judged missed or late only after its due time plus this margin.
+MARGIN_MINUTES = 10
 WINDOW = 10
 TEXT_MAX = 120
 _DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _MASK = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}(:\d{2})?")
 _STATUS = re.compile(r"^(?:open-day|liveness|close-day)-(\d{4}-\d{2}-\d{2})-status\.tsv$")
+
+
+def schedule() -> dict:
+    """The phase times and margin the page shows, for the day payload's `schedule` key."""
+    return {"phases": dict(DUE), "margin_minutes": MARGIN_MINUTES}
 
 
 def _clip(value: object, limit: int = TEXT_MAX) -> str:

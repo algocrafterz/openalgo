@@ -29,6 +29,7 @@ from datetime import datetime, timedelta
 
 from signal_engine.ops import actions, model, verdict
 from signal_engine.ops.model import REPORTS
+from signal_engine.ops.workflow_status import DUE, MARGIN_MINUTES
 
 DB = os.path.join(actions.REPO, "db", "openalgo.db")
 #: The retry must end before the market is near: backfill reads the broker.
@@ -131,12 +132,12 @@ def retry_failed(
 #: only judged once its due time plus DUE_MARGIN_MINUTES has passed.
 EXPECTED = {
     "morning": (
-        ("open-day", "The 09:12 readiness check", "09:12"),
-        ("liveness", "The 09:27 after-the-open check", "09:27"),
+        ("open-day", f"The {DUE['open-day']} readiness check", DUE["open-day"]),
+        ("liveness", f"The {DUE['liveness']} after-the-open check", DUE["liveness"]),
     ),
-    "close": (("close-day", "The 15:36 end-of-day checks", "15:36"),),
+    "close": (("close-day", f"The {DUE['close-day']} end-of-day checks", DUE["close-day"]),),
 }
-DUE_MARGIN_MINUTES = 10
+DUE_MARGIN_MINUTES = MARGIN_MINUTES  # one source: workflow_status
 #: The close dead-man runs at 16:28: the afternoon retry ends by 16:25. The cron line installed
 #: today is 16:20 (see jobs.CRON_LINES); it judges the same way, and a retry that is still running
 #: at that time is reported as incomplete.

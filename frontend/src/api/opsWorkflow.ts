@@ -84,6 +84,12 @@ export interface WorkflowNotifications {
   last_recovery_key?: string | null
 }
 
+/** The clock times the server schedules the phases at. Absent when the server cannot read them. */
+export interface WorkflowSchedule {
+  phases: Record<string, string>
+  margin_minutes?: number
+}
+
 export interface WorkflowDay {
   day: string
   phases: WorkflowPhase[]
@@ -96,6 +102,8 @@ export interface WorkflowDay {
   run_status?: WorkflowRunStatus[]
   recurrence?: WorkflowRecurrence
   notifications?: WorkflowNotifications
+  /** Absent in an older server response: the page then shows the built-in times. */
+  schedule?: WorkflowSchedule
 }
 
 interface WorkflowResponse {

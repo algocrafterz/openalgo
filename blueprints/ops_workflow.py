@@ -41,8 +41,23 @@ _VERDICT = re.compile(r"```close-day-verdict\s*\n(.*?)```", re.S)
 _STATUS = re.compile(r"^(open-day|liveness|close-day)-(\d{4}-\d{2}-\d{2})-status\.tsv$")
 
 
-def list_days(folder: str = REPORTS_DIR, limit: int = 30) -> list[str]:
+def _folder(folder: str | None) -> str:
+    """The reports folder, read when called so a changed REPORTS_DIR is honoured."""
+    return folder or REPORTS_DIR
+
+
+def _schedule() -> dict:
+    """{"schedule": ...} for the payload, or {} (the key absent) when it cannot be read."""
+    try:
+        return {"schedule": workflow_status.schedule()}
+    except Exception:
+        logger.exception("Could not read the workflow schedule")
+        return {}
+
+
+def list_days(folder: str | None = None, limit: int = 30) -> list[str]:
     """Days that have at least one phase status file, newest first."""
+    folder = _folder(folder)
     if not os.path.isdir(folder):
         return []
     days = {m.group(2) for name in os.listdir(folder) if (m := _STATUS.match(name))}
@@ -71,12 +86,17 @@ def _checked(name: str, day: str, folder: str) -> dict | None:
     path = os.path.join(folder, f"{name}-{day}.json")
     if not os.path.exists(path):
         return None
-    with open(path, encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (ValueError, UnicodeDecodeError):  # a damaged report reads as not checked
+        logger.warning("Ignoring unreadable check report %s", os.path.basename(path))
+        return None
 
 
-def close_day_verdict(day: str, folder: str = REPORTS_DIR) -> dict | None:
+def close_day_verdict(day: str, folder: str | None = None) -> dict | None:
     """The close-day review's verdict block ({"verdict", "line"}), or None when it has none."""
+    folder = _folder(folder)
     path = os.path.join(folder, f"eod-{day}-claude-review.md")
     if not os.path.exists(path):
         return None
@@ -102,7 +122,8 @@ def _run_summary(phase: str, day: str, folder: str) -> dict:
     }
 
 
-def day_view(day: str, folder: str = REPORTS_DIR, now=None) -> dict:
+def day_view(day: str, folder: str | None = None, now=None) -> dict:
+    folder = _folder(folder)
     phases = [{"phase": p, "steps": _steps(p, day, folder)} for p in PHASES]
     checks = {name: data for name in CHECKED if (data := _checked(name, day, folder))}
     reports = (
@@ -136,11 +157,13 @@ def day_view(day: str, folder: str = REPORTS_DIR, now=None) -> dict:
         "run_status": workflow_status.run_status(day, folder, now),
         "recurrence": workflow_status.recurrence(day, folder),
         "notifications": workflow_status.notifications(folder),
+        **_schedule(),
     }
 
 
-def read_report(name: str, folder: str = REPORTS_DIR) -> str | None:
+def read_report(name: str, folder: str | None = None) -> str | None:
     """A report's text, only for a whitelisted plain file name inside the reports folder."""
+    folder = _folder(folder)
     if not _REPORT.match(name or ""):
         return None
     path = os.path.join(folder, name)
@@ -171,6 +194,7 @@ def workflow():
                 "reports": [],
                 "verdict": None,
                 "notifications": workflow_status.notifications(REPORTS_DIR),
+                **_schedule(),
             }
         )
         return jsonify({"status": "success", "days": days, "data": data}), 200

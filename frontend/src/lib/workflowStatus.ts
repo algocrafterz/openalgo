@@ -77,6 +77,21 @@ export function summarizeRuns(rows: WorkflowRunStatus[] | undefined): RunSummary
   }
 }
 
+/** Used only when the server sends no schedule (an older server, or one that could not read it). */
+const FALLBACK_TIMES: Record<string, string> = {
+  'open-day': '09:12',
+  liveness: '09:27',
+  'close-day': '15:36',
+}
+
+const HHMM = /^\d{2}:\d{2}$/
+
+/** The HH:MM a phase is scheduled at: the server's schedule first, the built-in time otherwise. */
+export function phaseTime(day: WorkflowDay | null | undefined, phase: string): string {
+  const served = day?.schedule?.phases?.[phase]
+  return typeof served === 'string' && HHMM.test(served) ? served : (FALLBACK_TIMES[phase] ?? '')
+}
+
 export function runFor(day: WorkflowDay, phase: string): WorkflowRunStatus | undefined {
   return day.run_status?.find((r) => r.phase === phase)
 }

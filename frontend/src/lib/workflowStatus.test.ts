@@ -3,6 +3,7 @@ import type { WorkflowDay, WorkflowRunStatus } from '@/api/opsWorkflow'
 import {
   noticeLines,
   noticeNeedsLook,
+  phaseTime,
   recurrenceKey,
   recurrenceOf,
   recurrenceText,
@@ -130,5 +131,25 @@ describe('notifications', () => {
     expect(lines?.[3].value).toBe('none recorded')
     expect(noticeNeedsLook(n)).toBe(true)
     expect(noticeNeedsLook({ available: true, last_result: 'sent', open_red: [] })).toBe(false)
+  })
+})
+
+describe('phaseTime', () => {
+  it('reads the time the server scheduled', () => {
+    const d = day({ schedule: { phases: { 'open-day': '09:20', 'close-day': '15:40' } } })
+    expect(phaseTime(d, 'open-day')).toBe('09:20')
+    expect(phaseTime(d, 'close-day')).toBe('15:40')
+  })
+  it('falls back to the built-in time when the schedule is absent, partial or malformed', () => {
+    expect(phaseTime(day({}), 'open-day')).toBe('09:12')
+    expect(phaseTime(undefined, 'liveness')).toBe('09:27')
+    expect(phaseTime(null, 'close-day')).toBe('15:36')
+    const partial = day({ schedule: { phases: { liveness: '09:30' } } })
+    expect(phaseTime(partial, 'open-day')).toBe('09:12')
+    const bad = day({ schedule: { phases: { 'open-day': 'soon' } } })
+    expect(phaseTime(bad, 'open-day')).toBe('09:12')
+  })
+  it('returns an empty string for an unknown phase', () => {
+    expect(phaseTime(day({}), 'nope')).toBe('')
   })
 })

@@ -49,6 +49,7 @@ import {
 import {
   noticeLines,
   noticeNeedsLook,
+  phaseTime,
   type RunTone,
   recurrenceOf,
   recurrenceText,
@@ -61,18 +62,16 @@ import { type ReportKey, reportFile, WorkflowReports } from './WorkflowReports'
 
 const CurrentDay = createContext<WorkflowDay | null>(null)
 
-const PHASES: { key: PhaseKey; title: string; when: string; duty: string }[] = [
-  { key: 'open-day', title: 'Open', when: '09:12', duty: 'Is the stack ready to trade' },
+const PHASES: { key: PhaseKey; title: string; duty: string }[] = [
+  { key: 'open-day', title: 'Open', duty: 'Is the stack ready to trade' },
   {
     key: 'liveness',
     title: 'After the open',
-    when: '09:27',
     duty: 'Is the engine actually trading',
   },
   {
     key: 'close-day',
     title: 'Close',
-    when: '15:36',
     duty: 'Books, data, errors and jobs, then the review',
   },
 ]
@@ -150,7 +149,7 @@ function SessionOverview({
             <p className="text-[15px] text-muted-foreground">
               {day.verdict
                 ? `Close-day review (${day.verdict.verdict}): ${day.verdict.line}`
-                : 'No close-day review yet. It is written after the 15:36 close checks.'}
+                : `No close-day review yet. It is written after the ${phaseTime(day, 'close-day')} close checks.`}
             </p>
             <p className="text-[15px]">
               {bugs ? (
@@ -700,7 +699,7 @@ function Checkpoint({
         <span className="min-w-0 flex-1">
           <span className="font-medium">{phase.title}</span>
           <span className="ml-2 text-[13px] text-muted-foreground">
-            {phase.when}
+            {phaseTime(day, phase.key)}
             {steps?.length ? `, ran ${steps[0].started.slice(0, 5)}` : ''}
           </span>
           <span className="block text-[13px] text-muted-foreground">{phase.duty}</span>
@@ -882,7 +881,8 @@ export default function DailyWorkflow() {
       ) : !view || !view.day ? (
         <Card>
           <CardContent className="pt-6 text-[15px] text-muted-foreground">
-            No workflow runs yet. The first runs at 09:12 on the next trading day.
+            No workflow runs yet. The first runs at {phaseTime(view, 'open-day')} on the next
+            trading day.
           </CardContent>
         </Card>
       ) : (
