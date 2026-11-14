@@ -236,7 +236,8 @@ def test_critical_steps_are_steps_the_scripts_really_run():
 
 BASE = "/home/anand/github/openalgo"
 LOG = ">> /x.log 2>&1"
-LINES = {
+#: The crontab as installed before Phase 1b (the lines the audit must keep accepting).
+OLD = {
     "retry": f"56 8 * * 1-5 {BASE}/signal_engine/ops/run_upkeep.sh retry-failed {LOG}",
     "open": f"12 9 * * 1-5 {BASE}/signal_engine/ops/run_phase.sh open-day {LOG}",
     "live": f"27 9 * * 1-5 {BASE}/signal_engine/ops/run_phase.sh liveness {LOG}",
@@ -247,26 +248,77 @@ LINES = {
     "catch1": f"35 18 * * 1-5 {BASE}/signal_engine/analysis/review_catchup.sh {LOG}",
     "catch2": f"5 21 * * 1-5 {BASE}/signal_engine/analysis/review_catchup.sh {LOG}",
 }
+#: The crontab of the proposal (docs: cron_diff.txt of the Phase 1b proposal).
+NEW = {
+    "recover": f"36 8 * * 1-5 {BASE}/signal_engine/ops/run_upkeep.sh recover {LOG}",
+    "open": OLD["open"],
+    "live": OLD["live"],
+    "dm_morning": OLD["dm_morning"],
+    "close": OLD["close"],
+    "retry": f"1 16 * * 1-5 {BASE}/signal_engine/analysis/close_day.sh --retry {LOG}",
+    "dm_close": f"28 16 * * 1-5 {BASE}/signal_engine/ops/run_upkeep.sh deadman close {LOG}",
+}
 OTHER = "0 15 * * * /home/anand/github/gold-monitor/run_daily.sh\n# a comment\nMAILTO=x\n"
+LINES = OLD
 
 
-def _cron(**changes):
-    lines = {**LINES, **changes}
+def _cron(base=None, **changes):
+    lines = {**(OLD if base is None else base), **changes}
     return OTHER + "\n".join(v for v in lines.values() if v) + "\n"
 
 
-def test_the_audit_covers_all_nine_lines():
-    assert len(jobs.CRON_LINES) == 9 == len(LINES)
-    problems, notes = jobs.audit_cron(_cron())
+def test_the_installed_crontab_passes_with_pending_notes_and_new_lines_warn():
+    problems, warnings, notes = jobs.audit_cron_full(_cron(), require_new=False)
     assert problems == []
-    assert any("deadman close" in n for n in notes)  # still on the old time: noted, not RED
+    assert any("recover: not installed yet" in w for w in warnings)
+    assert any("close-day retry: not installed yet" in w for w in warnings)
+    assert any("deadman close still at 16:20" in n and "pending install" in n for n in notes)
+    for gone in ("retry-failed", "autofix", "review catch-up 1", "review catch-up 2"):
+        assert any(f"{gone} at" in n and "to be removed" in n for n in notes), gone
 
 
-def test_the_old_deadman_time_passes_and_so_does_the_new_one():
-    for time_fields in ("20 16", "30 21", "35 21"):
+def test_the_proposed_crontab_passes_both_ways_without_notes():
+    for strict in (False, True):
+        assert jobs.audit_cron_full(_cron(NEW), require_new=strict) == ([], [], [])
+
+
+def test_the_flag_makes_the_new_lines_mandatory_and_old_lines_problems():
+    problems, warnings, _ = jobs.audit_cron_full(_cron(), require_new=True)
+    assert warnings == []
+    text = " | ".join(problems)
+    assert "recover: expected 08:36, no line found" in text
+    assert "close-day retry: expected 16:01, no line found" in text
+    assert "deadman close: expected 16:28, found 16:20" in text
+    for gone in ("retry-failed", "autofix", "review catch-up 1", "review catch-up 2"):
+        assert f"{gone}: the" in text and "must be removed" in text, gone
+
+
+def test_the_flag_is_off_in_the_repository_until_the_maintainer_installs_the_cron():
+    assert jobs.REQUIRE_NEW_SCHEDULE is False
+    assert len(jobs.CRON_LINES) == 7 == len(NEW)
+    assert len(jobs.CRON_TO_REMOVE) == 4
+
+
+def test_a_new_line_at_the_wrong_time_is_a_problem_even_before_the_flag():
+    line = f"5 16 * * 1-5 {BASE}/signal_engine/analysis/close_day.sh --retry {LOG}"
+    problems, _, _ = jobs.audit_cron_full(_cron(NEW, retry=line), require_new=False)
+    assert problems == ["close-day retry: expected 16:01, found 16:05"]
+
+
+def test_the_retry_line_is_not_taken_for_the_plain_close_day_line():
+    problems, _, _ = jobs.audit_cron_full(_cron(NEW, close=""), require_new=False)
+    assert problems == ["close-day: expected 15:36, no line found"]
+
+
+def test_the_old_and_the_new_deadman_time_pass_and_the_old_21_times_do_not():
+    for time_fields in ("20 16", "28 16"):
         line = f"{time_fields} * * 1-5 {BASE}/signal_engine/ops/run_upkeep.sh deadman close {LOG}"
         problems, _ = jobs.audit_cron(_cron(dm_close=line))
         assert problems == [], time_fields
+    for time_fields in ("30 21", "35 21"):
+        line = f"{time_fields} * * 1-5 {BASE}/signal_engine/ops/run_upkeep.sh deadman close {LOG}"
+        problems, _ = jobs.audit_cron(_cron(dm_close=line))
+        assert len(problems) == 1, time_fields
 
 
 def test_a_wrong_deadman_time_is_a_problem():
@@ -275,19 +327,11 @@ def test_a_wrong_deadman_time_is_a_problem():
     assert len(problems) == 1 and "deadman close" in problems[0] and "22:50" in problems[0]
 
 
-@pytest.mark.parametrize("key", list(LINES))
-def test_each_missing_line_is_found(key):
-    problems, _ = jobs.audit_cron(_cron(**{key: ""}))
+@pytest.mark.parametrize("key", ["open", "live", "dm_morning", "close", "dm_close"])
+def test_each_missing_kept_line_is_found(key):
+    problems, _ = jobs.audit_cron(_cron(NEW, **{key: ""}))
     assert len(problems) == 1, (key, problems)
-    # a catch-up line shares its script with the other one, so its message names the other time
-    assert "no line found" in problems[0] or key.startswith("catch")
-
-
-def test_a_moved_line_is_found():
-    problems, _ = jobs.audit_cron(
-        _cron(autofix=f"45 16 * * 1-5 {BASE}/signal_engine/analysis/autofix.sh {LOG}")
-    )
-    assert problems and "autofix" in problems[0] and "16:45" in problems[0]
+    assert "no line found" in problems[0]
 
 
 def test_a_weekday_field_that_is_not_1_5_is_found():
@@ -297,39 +341,32 @@ def test_a_weekday_field_that_is_not_1_5_is_found():
     assert problems and "weekday" in problems[0]
 
 
-def test_both_catchup_lines_are_needed():
-    problems, _ = jobs.audit_cron(_cron(catch2=""))
-    assert problems == ["review catch-up 2: expected 21:05, no line found"]
-
-
 def test_a_commented_line_does_not_count():
-    problems, _ = jobs.audit_cron(_cron(autofix="# " + LINES["autofix"]))
+    problems, _ = jobs.audit_cron(_cron(NEW, open="# " + NEW["open"]))
     assert len(problems) == 1
 
 
-def test_the_audit_check_is_red_only_for_problems(monkeypatch):
+def test_the_audit_check_is_red_only_for_problems_and_amber_for_not_installed(monkeypatch):
     class Done:
         stdout = _cron()
 
     monkeypatch.setattr(jobs.subprocess, "run", lambda *a, **k: Done)
     check = jobs._cron_check()
-    assert check.status == "OK" and "9 cron lines" in check.evidence
-    Done.stdout = _cron(open="")
+    assert check.status == "WARN" and "not installed yet" in check.evidence
+    Done.stdout = _cron(NEW)
+    check = jobs._cron_check()
+    assert check.status == "OK" and "7 cron lines" in check.evidence
+    Done.stdout = _cron(NEW, open="")
     assert jobs._cron_check().status == "FAIL"
 
 
-def test_the_installed_crontab_text_in_the_scripts_matches_the_audit():
-    """The cron lines documented in the scripts' headers are accepted by the audit."""
+def test_the_cron_lines_in_the_script_headers_are_the_proposed_lines():
+    """The lines documented in the scripts' headers are accepted by the strict audit."""
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2] / "signal_engine"
     text = ""
-    for rel in (
-        "ops/run_phase.sh",
-        "ops/run_upkeep.sh",
-        "analysis/close_day.sh",
-        "analysis/review_catchup.sh",
-    ):
+    for rel in ("ops/run_phase.sh", "ops/run_upkeep.sh", "analysis/close_day.sh"):
         text += (
             "\n".join(
                 ln[1:].strip()
@@ -338,9 +375,27 @@ def test_the_installed_crontab_text_in_the_scripts_matches_the_audit():
             )
             + "\n"
         )
-    text += f"30 16 * * 1-5 {BASE}/signal_engine/analysis/autofix.sh x\n"
-    problems, _ = jobs.audit_cron(text)
-    assert problems == []
+    problems, warnings, notes = jobs.audit_cron_full(text, require_new=True)
+    assert (problems, warnings, notes) == ([], [], [])
+
+
+def test_the_windows_start_times_accept_old_and_new_until_the_flag(monkeypatch):
+    for name, (old, new) in jobs.WINDOWS_START_TIMES.items():
+        check = jobs.start_time_check(name, {"Start Time": f"{old}:00"})
+        assert check.status == "OK" and "pending install" in check.evidence
+        assert jobs.start_time_check(name, {"Start Time": f"{new}:00"}).status == "OK"
+        assert jobs.start_time_check(name, {"Start Time": "07:00:00"}).status == "FAIL"
+        monkeypatch.setattr(jobs, "REQUIRE_NEW_SCHEDULE", True)
+        assert jobs.start_time_check(name, {"Start Time": f"{old}:00"}).status == "FAIL"
+        assert jobs.start_time_check(name, {"Start Time": f"{new}:00"}).status == "OK"
+        monkeypatch.setattr(jobs, "REQUIRE_NEW_SCHEDULE", False)
+    assert jobs.start_time_check("openAlgoAutoStart", None) is None
+    assert jobs.start_time_check("openAlgoAutoStart", {"Start Time": "N/A"}) is None
+    assert jobs.start_time_check("openAlgoWatchdog", {"Start Time": "09:00:00"}) is None
+    assert jobs.WINDOWS_START_TIMES == {
+        "openAlgoAutoStart": ("08:50", "08:30"),
+        "openAlgoAutoStop": ("16:00", "16:31"),
+    }
 
 
 # ---- the dead-man command line: recovery only after something was checked ------------------
@@ -387,3 +442,35 @@ def test_deadman_recovers_when_every_due_checkpoint_is_healthy(tmp_path, monkeyp
     rc, calls = _run_deadman(monkeypatch, "close", DAY, LATE)
     assert rc == 0
     assert calls == [{"kind": "deadman", "phase": "close"}]
+
+
+def test_a_twelve_hour_locale_task_time_is_read_not_skipped(monkeypatch):
+    assert jobs.task_time_24h("08:50:00") == "08:50"
+    assert jobs.task_time_24h("8:50:00 AM") == "08:50"
+    assert jobs.task_time_24h("04:31:00 PM") == "16:31"  # zero-padded: the old [:5] read 04:31
+    assert jobs.task_time_24h("4:31:00 pm") == "16:31"
+    assert jobs.task_time_24h("12:00:00 AM") == "00:00"
+    assert jobs.task_time_24h("12:30:00 PM") == "12:30"
+    assert jobs.task_time_24h("8:30 AM") == "08:30"
+    for bad in ("N/A", "", "soon", "25:00:00", "13:00:00 PM", "8:75:00"):
+        assert jobs.task_time_24h(bad) is None, bad
+    cases = {
+        "openAlgoAutoStart": ("8:50:00 AM", "8:30:00 AM"),
+        "openAlgoAutoStop": ("04:00:00 PM", "04:31:00 PM"),
+    }
+    for name, (old, new) in cases.items():
+        assert jobs.start_time_check(name, {"Start Time": old}).status == "OK"
+        assert jobs.start_time_check(name, {"Start Time": new}).status == "OK"
+        assert jobs.start_time_check(name, {"Start Time": "7:00:00 AM"}).status == "FAIL"
+    monkeypatch.setattr(jobs, "REQUIRE_NEW_SCHEDULE", True)
+    assert jobs.start_time_check("openAlgoAutoStop", {"Start Time": "04:00:00 PM"}).status == "FAIL"
+    assert jobs.start_time_check("openAlgoAutoStop", {"Start Time": "04:31:00 PM"}).status == "OK"
+
+
+def test_an_unreadable_task_time_is_a_warn_that_says_so_not_a_silent_skip():
+    check = jobs.start_time_check("openAlgoAutoStart", {"Start Time": "um 8.30 Uhr"})
+    assert check is not None and check.status == "WARN"
+    assert "could not read the task time" in check.evidence and "Next:" in check.evidence
+    # no start time at all (Task Scheduler says N/A or leaves it empty) stays a silent None
+    assert jobs.start_time_check("openAlgoAutoStart", {"Start Time": ""}) is None
+    assert jobs.start_time_check("openAlgoAutoStart", {"Start Time": "N/A"}) is None

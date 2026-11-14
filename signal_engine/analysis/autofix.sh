@@ -24,8 +24,9 @@
 #   ./signal_engine/analysis/autofix.sh BUG-014       # that bug (must still be eligible)
 #   AUTOFIX_DRY=1 ./signal_engine/analysis/autofix.sh # show what would be attempted
 #
-# CRON (weekdays 16:30 IST, after OpenAlgo stops and the close-day review is done):
-#   30 16 * * 1-5 /home/anand/github/openalgo/signal_engine/analysis/autofix.sh >> /home/anand/github/openalgo/signal_engine/logs/autofix_cron.log 2>&1
+# CRON: none in the daily schedule. The 16:30 line is removed (nothing routine runs after 16:30
+# IST); until the maintainer removes it from the crontab the line still works. Run this script by
+# hand, or add a line of your own outside the 09:00-09:15 and 15:30-16:30 windows.
 
 set -uo pipefail
 

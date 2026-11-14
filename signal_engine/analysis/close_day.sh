@@ -37,8 +37,9 @@
 #                                                       # the snapshot and the backfill)
 #   ./signal_engine/analysis/close_day.sh --no-review   # deterministic steps only
 #
-# CRON (weekdays, 15:36 IST):
+# CRON (weekdays, IST):
 #   36 15 * * 1-5 /home/anand/github/openalgo/signal_engine/analysis/close_day.sh >> /home/anand/github/openalgo/signal_engine/logs/close_day_cron.log 2>&1
+#   1 16 * * 1-5 /home/anand/github/openalgo/signal_engine/analysis/close_day.sh --retry >> /home/anand/github/openalgo/signal_engine/logs/close_day_cron.log 2>&1
 
 set -uo pipefail
 

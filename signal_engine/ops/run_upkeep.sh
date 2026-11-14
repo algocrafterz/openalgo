@@ -12,9 +12,9 @@
 # or code. Output goes to the ops cron log, which is where the other phases write.
 #
 # CRON (weekdays, IST):
-#   56 8 * * 1-5 /home/anand/github/openalgo/signal_engine/ops/run_upkeep.sh retry-failed >> /home/anand/github/openalgo/signal_engine/logs/ops_cron.log 2>&1
+#   36 8 * * 1-5 /home/anand/github/openalgo/signal_engine/ops/run_upkeep.sh recover >> /home/anand/github/openalgo/signal_engine/logs/ops_cron.log 2>&1
 #   40 9 * * 1-5 /home/anand/github/openalgo/signal_engine/ops/run_upkeep.sh deadman morning >> /home/anand/github/openalgo/signal_engine/logs/ops_cron.log 2>&1
-#   35 21 * * 1-5 /home/anand/github/openalgo/signal_engine/ops/run_upkeep.sh deadman close >> /home/anand/github/openalgo/signal_engine/logs/ops_cron.log 2>&1
+#   28 16 * * 1-5 /home/anand/github/openalgo/signal_engine/ops/run_upkeep.sh deadman close >> /home/anand/github/openalgo/signal_engine/logs/ops_cron.log 2>&1
 
 set -uo pipefail
 
