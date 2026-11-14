@@ -26,6 +26,12 @@ Sort every changed path into **in scope** or **foreign**. Foreign changes usuall
 session: run `ListAgents` if you are not sure. Never touch foreign changes: no `git stash`, `reset`,
 `checkout --`, `restore`, or `clean`.
 
+A file you edited may already hold another session's uncommitted hunks. Before staging any file you edited, run `git diff -- <file>` and confirm every hunk is yours; `git add <file>` stages the foreign hunks too and commits another session's behaviour change under your message. Stage the file by content split (below), not whole.
+
+Other sessions can commit on top of yours between your report and the user's next message. Before any `reset`, `commit --amend` or rebase of "my commit", run `git log --oneline -5` and match the hash to yours; `reset --soft HEAD~1` once undid another session's commit this way (repair: `git reset --soft <their hash>`). Prefer not rewriting at all, and commit with `git commit -- <explicit paths>` so the index of other sessions is not swept in.
+
+Other sessions commit while you work. Re-run `git log --oneline -3` immediately before any history-touching command, and never use `HEAD~1` or `HEAD` as a stand-in for "my commit": name the hash. If a fix-up would rewrite a commit that now has others on top, do not rewrite; report it and let the owner run the rebase when no other session is committing.
+
 A file can hold both in-scope and foreign hunks. `git add -p` is interactive and not available here. Write
 the in-scope hunks to a patch and stage it with `git apply --cached <patch>`, then check that the work tree
 still holds the foreign hunks.
