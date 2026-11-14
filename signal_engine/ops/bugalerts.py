@@ -4,7 +4,9 @@ Events, all HIGH only: a new bug, a reopened bug, a bug overdue (open more than 
 week), and a fixed bug nobody verified for 7 days (about 5 sessions, once a week). One alert per
 bug and event, at most MAX_ALERTS per run with an "and N more" line. Nothing here changes a bug.
 Already-sent events are kept in reports/bug-alert-state.json so a new or reopened alert is
-sent once, not once per day. Dry-run prints what would be sent and sends nothing.
+sent once, not once per day. New and reopened events stay alertable for LOOKBACK_DAYS, so a send
+that failed or was held back by the cap is retried on the following days. Dry-run prints what
+would be sent and sends nothing.
 """
 
 from __future__ import annotations
@@ -20,6 +22,10 @@ from signal_engine.ops.model import REPORTS
 
 MAX_ALERTS = 5
 UNVERIFIED_DAYS = 7
+#: New and reopened events stay alertable for this many calendar days (today included), so an
+#: alert held back by the cap or a failed send is retried the next day. The sent-key state
+#: dedupes it; an event older than the window is never alerted.
+LOOKBACK_DAYS = 3
 STATE_FILE = "bug-alert-state.json"
 
 
@@ -58,6 +64,11 @@ def _reopens(bug: dict) -> list[str]:
     ]
 
 
+def _window(day: str) -> set[str]:
+    end = date.fromisoformat(day)
+    return {(end - timedelta(days=n)).isoformat() for n in range(LOOKBACK_DAYS)}
+
+
 def _what(bug: dict) -> str:
     return " ".join(str(bug.get("plain") or bug.get("impact") or "").split())[:160]
 
@@ -66,15 +77,16 @@ def events(day: str, path: str | None = None) -> list[tuple[str, str, str]]:
     """(kind, condition, text) for every alertable event on `day`, most urgent first."""
     found: list[tuple[str, str, str]] = []
     bugs = [b for b in store.load(path)["bugs"] if b.get("severity") == "HIGH"]
+    recent = _window(day)
     for bug in bugs:
         bid, title = bug["id"], bug["title"][:100]
         if bug["status"] in ("open", "in_progress") and (
-            bug["first_seen"] == day or str(bug.get("created_at", ""))[:10] == day
+            bug["first_seen"] in recent or str(bug.get("created_at", ""))[:10] in recent
         ):
             found.append(("bug-new", bid, f"New HIGH bug {bid}: {title}. {_what(bug)}"))
     for bug in bugs:
         reopens = _reopens(bug)
-        if bug["status"] == "open" and reopens and reopens[-1] == day:
+        if bug["status"] == "open" and reopens and reopens[-1] in recent:
             found.append(
                 (
                     "bug-reopened",
@@ -112,7 +124,24 @@ def events(day: str, path: str | None = None) -> list[tuple[str, str, str]]:
 def run(
     day: str, dry_run: bool = True, *, path: str | None = None, folder: str | None = None
 ) -> list[str]:
-    """Send (or, in dry-run, print) the day's bug alerts. Returns one line per event handled."""
+    """Send (or, in dry-run, print) the day's bug alerts. Returns one line per event handled.
+
+    A real run holds an exclusive cross-process lock from reading the state to saving it, so two
+    simultaneous runs cannot both send the same alert. If the other run holds it longer than the
+    tracker's lock timeout, this run sends nothing and the next one picks the alerts up.
+    """
+    if dry_run:
+        return _run(day, dry_run, path, folder)
+    state = _state_path(folder)
+    os.makedirs(os.path.dirname(state), exist_ok=True)
+    try:
+        with store._locked(state):
+            return _run(day, dry_run, path, folder)
+    except store.TrackerBusy:
+        return ["skipped: another bug-alert run is in progress"]
+
+
+def _run(day: str, dry_run: bool, path: str | None, folder: str | None) -> list[str]:
     sent_before = _load(folder)
     todo = [e for e in events(day, path) if f"{e[0]}|{e[1]}" not in sent_before]
     shown, rest = todo[:MAX_ALERTS], todo[MAX_ALERTS:]
