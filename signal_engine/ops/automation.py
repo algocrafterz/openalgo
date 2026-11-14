@@ -5,8 +5,18 @@ button (signal_engine/ops/actions.py). The dead-man check reads the run manifest
 and the reports of each phase. It sends one Telegram line when a checkpoint is missing,
 incomplete or failed. Neither touches orders, positions, config or code.
 
-    uv run python -m signal_engine.ops retry-failed          08:56 weekdays: redo yesterday's failed backfill
-    uv run python -m signal_engine.ops deadman PHASE         PHASE is morning (09:40) or close (21:35, after the last catch-up)
+    uv run python -m signal_engine.ops retry-failed          08:56 weekdays (installed until the
+                                                             08:36 recover line replaces it): redo
+                                                             yesterday's failed backfill only
+    uv run python -m signal_engine.ops recover               08:36 weekdays: signal_engine/ops/recovery.py
+    uv run python -m signal_engine.ops close-day-retry        16:01 weekdays, called by close_day.sh --retry
+    uv run python -m signal_engine.ops deadman PHASE         PHASE is morning (09:40) or close
+                                                             (16:28, after the 16:01 retry; the
+                                                             line installed today runs at 16:20)
+
+The close dead-man judges the day after the retry: a step the retry or the morning recovery
+recovered counts as healthy, a step that stays open stays failed or incomplete, and a retry that is
+still running makes the day incomplete.
 """
 
 from __future__ import annotations
@@ -127,6 +137,10 @@ EXPECTED = {
     "close": (("close-day", "The 15:36 end-of-day checks", "15:36"),),
 }
 DUE_MARGIN_MINUTES = 10
+#: The close dead-man runs at 16:28: the afternoon retry ends by 16:25. The cron line installed
+#: today is 16:20 (see jobs.CRON_LINES); it judges the same way, and a retry that is still running
+#: at that time is reported as incomplete.
+FINAL_DEADMAN_CLOSE = "16:28"
 #: Reports a phase must leave behind, readable as JSON, besides its status file. close-day also
 #: needs the review report (read through verdict.review_outcome).
 PHASE_REPORTS = {
@@ -164,6 +178,39 @@ def _only_review_timed_out(steps: dict[str, int], day: str, folder: str) -> bool
     return timed_out == {"review"} and verdict.review_outcome(day, folder)["outcome"] == "verdict"
 
 
+def _later_attempts(
+    day: str, folder: str, now: datetime | None
+) -> tuple[bool, list[str], list[str]]:
+    """What the morning recovery and the 16:01 retry of a close-day run say about it.
+
+    Returns (superseded, failed, incomplete). `superseded` is True when the newest attempt ended
+    completed: every step that was open is recovered. The recovery is the later attempt, so it is
+    read first. A manifest that does not exist (no retry was needed) says nothing.
+    """
+    for phase, label in (
+        ("close-day-recover", "the morning recovery"),
+        ("close-day-retry", "the 16:01 retry"),
+    ):
+        run = model.read_run(phase, day, folder, now=now)
+        state = run["state"]
+        if state == model.COMPLETED:
+            return True, [], []
+        if state == model.RUNNING:
+            return False, [], [f"{label} is still running"]
+        if state == model.INTERRUPTED:
+            return False, [], [f"{label} was interrupted before it finished"]
+        if state in (model.FAILED, model.TIMED_OUT):
+            note = (run.get("note") or "").strip()
+            return (
+                False,
+                [f"{label} ended as {state.replace('_', ' ')}" + (f" ({note})" if note else "")],
+                [],
+            )
+        if state == model.UNREADABLE:
+            return False, [], [f"the record of {label} is unreadable"]
+    return False, [], []
+
+
 def judge_phase(phase: str, day: str, folder: str, now: datetime | None = None) -> dict:
     """Judge one phase's recorded run. Returns {phase, state, reasons}; state is one of
     healthy, missing, incomplete or failed. Reads files only.
@@ -181,7 +228,16 @@ def judge_phase(phase: str, day: str, folder: str, now: datetime | None = None) 
     incomplete: list[str] = []
     state = run["state"]
     steps = verdict.latest_steps(phase, day, folder)
-    if (
+    superseded = False
+    if phase == "close-day":
+        superseded, later_failed, later_incomplete = _later_attempts(day, folder, now)
+        failed += later_failed
+        incomplete += later_incomplete
+    if superseded and state in (model.FAILED, model.TIMED_OUT, model.INTERRUPTED, model.RUNNING):
+        # The retry or the morning recovery finished with every open step recovered. The steps'
+        # newest rows and reports are judged below, so the first run's end state is history.
+        pass
+    elif (
         state == model.TIMED_OUT
         and phase == "close-day"
         and _only_review_timed_out(steps, day, folder)

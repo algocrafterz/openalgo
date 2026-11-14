@@ -143,7 +143,7 @@ def test_usage_limit_text_is_reported_as_cannot_run(tmp_path):
         "AMBER",
     )
     assert "usage limit" in got["text"]
-    assert "18:35" in got["text"]  # the next action
+    assert "08:36" in got["text"]  # the next action: the retry and the morning recovery
 
 
 def test_sign_in_expiry_text_is_reported_as_cannot_run(tmp_path):

@@ -212,7 +212,7 @@ def review_outcome(day: str, folder: str = REPORTS) -> dict:
         result.update(outcome="limit_or_auth", cause=cause)
         result["text"] = (
             "The AI review could not run because the Claude usage limit was reached. "
-            "Next: wait for the limit to reset. The catch-up run tries again at 18:35 and 21:05."
+            "Next: wait for the limit to reset. The 16:01 retry and the next morning's 08:36 recovery try again."
         )
     elif cause == "auth":
         result.update(outcome="limit_or_auth", cause=cause)

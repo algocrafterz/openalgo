@@ -281,14 +281,30 @@ def _update(phase: str, day: str, folder: str, change) -> dict | None:
 
 
 def manifest_step(
-    phase: str, day: str, step: str, started: str, ended: str, exit_code: int, folder: str = REPORTS
+    phase: str,
+    day: str,
+    step: str,
+    started: str,
+    ended: str,
+    exit_code: int,
+    folder: str = REPORTS,
+    *,
+    result: str = "",
+    attempt: str = "",
 ) -> dict | None:
-    """Record one finished step. A step run again replaces nothing: it appends a row."""
+    """Record one finished step. A step run again replaces nothing: it appends a row.
+
+    `result` and `attempt` are set only by a retry or a recovery run (signal_engine/ops/recovery.py):
+    the outcome in words (recovered, failed, timed_out, blocked, ...) and the id of that run.
+    """
 
     def change(data: dict) -> None:
-        data.setdefault("steps", []).append(
-            {"step": step, "started": started, "ended": ended, "exit": int(exit_code)}
-        )
+        row = {"step": step, "started": started, "ended": ended, "exit": int(exit_code)}
+        if result:
+            row["result"] = result
+        if attempt:
+            row["attempt"] = attempt
+        data.setdefault("steps", []).append(row)
 
     return _update(phase, day, folder, change)
 
@@ -407,6 +423,7 @@ def _cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--note", default="")
     parser.add_argument("--status", default="")
     parser.add_argument("--attempt", default="")
+    parser.add_argument("--result", default="")
     args = parser.parse_args(argv)
     try:
         if args.action == "start":
@@ -420,6 +437,8 @@ def _cli(argv: list[str] | None = None) -> int:
                 args.ended,
                 args.exit_code,
                 args.folder,
+                result=args.result,
+                attempt=args.attempt,
             )
         elif args.action == "finish":
             manifest_finish(args.phase, args.day, args.state, args.note, args.folder)
