@@ -6,6 +6,10 @@
 # is RED. Step outcomes go to signal_engine/reports/<phase>-<day>-status.tsv for the /logs
 # workflow page and the close-day job audit. The close of the day is signal_engine/analysis/close_day.sh.
 #
+# Run manifest: signal_engine/reports/<phase>-<day>-run.json (state running at the start, a row per
+# step, a terminal state at the end: completed, failed, timed_out or interrupted by SIGTERM/SIGINT).
+# It is evidence only: a manifest write that fails never stops the phase.
+#
 # USAGE
 #   ./signal_engine/ops/run_phase.sh open-day [YYYY-MM-DD]
 #   ./signal_engine/ops/run_phase.sh liveness [YYYY-MM-DD]
@@ -39,12 +43,37 @@ UV="$(command -v uv || echo /home/anand/.local/bin/uv)"  # cron has a minimal PA
 STATUS="$REPO/signal_engine/reports/$PHASE-$DAY-status.tsv"
 mkdir -p "$(dirname "$STATUS")"
 printf 'step\tstarted\tended\texit\n' > "$STATUS"
+
+# Run manifest (stdlib python, no uv: about 30 ms). Never fatal.
+PY="$(command -v python3 || echo /usr/bin/python3)"
+mf() { "$PY" "$REPO/signal_engine/ops/model.py" manifest "$1" --phase "$PHASE" --day "$DAY" "${@:2}" || true; }
+FINISHED=0
+CHILD=""
+on_signal() {  # SIGTERM or SIGINT: stop the running step, record the interruption, leave
+  [ -n "$CHILD" ] && kill -TERM "$CHILD" 2>/dev/null
+  [ "$FINISHED" -eq 0 ] && mf finish --state interrupted --note "stopped by signal $1"
+  FINISHED=1
+  exit $(( 128 + $2 ))
+}
+on_exit() {  # any other way out (an unexpected exit) is also an interruption, never a success
+  [ "$FINISHED" -eq 0 ] && mf finish --state interrupted --note "the script ended before its last step"
+}
+trap 'on_signal TERM 15' TERM
+trap 'on_signal INT 2' INT
+trap on_exit EXIT
+mf start --pid $$
+
 step() {
   local name="$1"; shift
   local started; started="$(date +%T)"
-  timeout --kill-after=10 300 "$@"
+  timeout --kill-after=10 300 "$@" &  # background + wait, so a signal is handled at once
+  CHILD=$!
+  wait "$CHILD"
   local rc=$?
-  printf '%s\t%s\t%s\t%s\n' "$name" "$started" "$(date +%T)" "$rc" >> "$STATUS"
+  CHILD=""
+  local ended; ended="$(date +%T)"
+  printf '%s\t%s\t%s\t%s\n' "$name" "$started" "$ended" "$rc" >> "$STATUS"
+  mf step --name "$name" --started "$started" --ended "$ended" --exit "$rc"
 }
 
 echo "=== $PHASE $DAY $(date +%T) ==="
@@ -55,4 +84,6 @@ step track env PYTHONPATH=. "$UV" run python -m signal_engine.ops track --day "$
 # Only a same-day run talks to Telegram; a re-run of an earlier day prints the message instead.
 NOTIFY_FLAG=""; [ "$DAY" = "$(date +%F)" ] || NOTIFY_FLAG="--dry-run"
 step notify env PYTHONPATH=. "$UV" run python -m signal_engine.ops notify "$PHASE" --day "$DAY" $NOTIFY_FLAG
+mf finish
+FINISHED=1
 column -t -s $'\t' "$STATUS"

@@ -22,6 +22,12 @@
 # Each step's start, end and exit code go to signal_engine/reports/close-day-<day>-status.tsv,
 # so the review and /close-day can say exactly what ran and what did not.
 #
+# Run manifest: signal_engine/reports/close-day-<day>-run.json. State running at the start, a row
+# per step, then a terminal state: completed, failed, timed_out (a step hit the 15:58 deadline) or
+# interrupted (SIGTERM/SIGINT, or the script ended early). A killed run (SIGKILL, power loss) keeps
+# state running; readers see a dead pid or an old start time and read it as interrupted. The
+# manifest is evidence only: a failed write never stops the close.
+#
 # USAGE
 #   ./signal_engine/analysis/close_day.sh               # today
 #   ./signal_engine/analysis/close_day.sh 2026-10-30    # re-run a day (OpenAlgo must be up for
@@ -77,13 +83,41 @@ remaining() { local left=$(( DEADLINE - $(date +%s) )); [ "$left" -gt 30 ] && ec
 
 printf 'step\tstarted\tended\texit\n' > "$STATUS"
 
+# Run manifest (stdlib python, no uv). Never fatal. Several steps write it at once (the backfill
+# runs in the background), so the writer holds a lock and replaces the file atomically.
 PY="$(command -v python3 || echo /usr/bin/python3)"
+mf() { "$PY" "$REPO/signal_engine/ops/model.py" manifest "$1" --phase close-day --day "$DAY" "${@:2}" || true; }
+FINISHED=0
+STEP_PIDS=""
+on_signal() {  # SIGTERM or SIGINT: stop the running steps, record the interruption, leave
+  for pid in $STEP_PIDS; do kill -TERM "$pid" 2>/dev/null; done
+  if [ -n "${BACKFILL_PID:-}" ]; then
+    pkill -TERM -P "$BACKFILL_PID" 2>/dev/null  # the backfill step's own timeout process
+    kill -TERM "$BACKFILL_PID" 2>/dev/null
+  fi
+  [ "$FINISHED" -eq 0 ] && mf finish --state interrupted --note "stopped by signal $1"
+  FINISHED=1
+  exit $(( 128 + $2 ))
+}
+on_exit() {  # any other way out is also an interruption, never a success
+  [ "$FINISHED" -eq 0 ] && mf finish --state interrupted --note "the script ended before its last step"
+}
+trap 'on_signal TERM 15' TERM
+trap 'on_signal INT 2' INT
+trap on_exit EXIT
+mf start --pid $$
+
 step() {  # step NAME CMD... : run with the deadline as its timeout, record the outcome
   local name="$1"; shift
   local started; started="$(date +%T)"
-  timeout --kill-after=15 "$(remaining)" "$@"
+  timeout --kill-after=15 "$(remaining)" "$@" &  # background + wait, so a signal is handled at once
+  local child=$!
+  STEP_PIDS="$STEP_PIDS $child"
+  wait "$child"
   local rc=$?
-  printf '%s\t%s\t%s\t%s\n' "$name" "$started" "$(date +%T)" "$rc" >> "$STATUS"
+  local ended; ended="$(date +%T)"
+  printf '%s\t%s\t%s\t%s\n' "$name" "$started" "$ended" "$rc" >> "$STATUS"
+  mf step --name "$name" --started "$started" --ended "$ended" --exit "$rc"
   [ "$rc" -eq 124 ] && echo "WARNING: $name stopped at the deadline"
   return "$rc"
 }
@@ -140,5 +174,7 @@ fi
 if [ -f "$REVIEW_REPORT" ]; then
   { echo; echo "## Close-day steps"; echo; echo '```'; column -t -s $'\t' "$STATUS"; echo '```'; } >> "$REVIEW_REPORT"
 fi
+mf finish
+FINISHED=1
 echo "=== close day $DAY done $(date +%T); status -> $STATUS ==="
 column -t -s $'\t' "$STATUS"
