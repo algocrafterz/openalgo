@@ -6,7 +6,9 @@
     uv run python -m signal_engine.ops jobs [--day D]           scheduled-job audit
     uv run python -m signal_engine.ops value-areas [--day D]    store the day's VAH/POC/VAL, check coverage
     uv run python -m signal_engine.ops track [--day D]          record the day's FAIL checks in the bug tracker
-    uv run python -m signal_engine.ops retry-failed             overnight retry of yesterday's failed backfill
+    uv run python -m signal_engine.ops retry-failed             overnight retry of yesterday's failed backfill (installed 08:56 line)
+    uv run python -m signal_engine.ops recover                  08:36: retry only the open steps of the previous trading day
+    uv run python -m signal_engine.ops close-day-retry [--day D] 16:01: retry only the open steps of today (close_day.sh --retry)
     uv run python -m signal_engine.ops deadman PHASE            alert when a checkpoint is missing, incomplete or failed
     uv run python -m signal_engine.ops run-action ACTION --day D --id RUN   run a step again (the page)
     uv run python -m signal_engine.ops notify PHASE [--day D]   the one Telegram message for a phase
@@ -26,11 +28,30 @@ from signal_engine.ops import (
     jobs,
     logscan,
     readiness,
+    recovery,
     value_areas,
     verdict,
 )
 from signal_engine.ops.model import read_phase
 from signal_engine.timeutils import IST
+
+
+def _previous_day_line(day: str, *, dry_run: bool) -> None:
+    """The morning dead-man's extra line: what the previous trading day left open and what the
+    08:36 recovery did. WARN level, never RED, and it never changes the dead-man's own result."""
+    if not automation.is_trading_day(day):
+        return
+    line = recovery.previous_day_line(day, folder=automation.REPORTS)
+    print(f"previous day [{line['level']}] {line['outcome']}: {line['text']}")
+    if line["level"] != "WARN" or dry_run:
+        return
+    alerts.deliver(
+        line["text"],
+        kind="deadman",
+        phase="morning-previous-day",
+        condition=line["outcome"],
+        severity="WARN",
+    )
 
 
 def main(argv=None) -> int:
@@ -47,6 +68,8 @@ def main(argv=None) -> int:
             "track",
             "run-action",
             "retry-failed",
+            "recover",
+            "close-day-retry",
             "deadman",
         ),
     )
@@ -78,12 +101,20 @@ def main(argv=None) -> int:
             print(line)
         return 0
 
+    if args.command == "recover":
+        return recovery.recover_main()
+
+    if args.command == "close-day-retry":
+        return recovery.retry_main(args.day)
+
     if args.command == "deadman":
         if args.phase not in automation.EXPECTED:
             parser.error("deadman needs a phase: morning or close")
         report = automation.deadman_report(args.phase, args.day)
         text = automation.deadman(args.phase, args.day)
         state = automation.worst_state(report)
+        if args.phase == "morning" and report:  # only once the morning checkpoints are due
+            _previous_day_line(args.day, dry_run=args.dry_run)
         if text is None:
             if not report:
                 # A holiday, a weekend or a phase not yet due: nothing was checked, so nothing is

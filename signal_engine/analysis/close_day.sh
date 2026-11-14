@@ -19,6 +19,8 @@
 #   ~15:43 track      the day's FAIL checks recorded in the bug tracker (plain code, seconds)
 #   ~15:43 review     Claude close-day review, report-only, reads every output above (2-10 minutes)
 #   ~15:50 notify     the day's single Telegram line (verdict); hard deadline 15:58
+#   16:01  --retry    only the steps still open (see RETRY below); ends by 16:25
+#   16:28  the close dead-man (run_upkeep.sh deadman close) judges the day after the retry
 #
 # The morning phases (open-day 09:12, liveness 09:27) are signal_engine/ops/run_phase.sh.
 #
@@ -31,11 +33,24 @@
 # state running; readers see a dead pid or an old start time and read it as interrupted. The
 # manifest is evidence only: a failed write never stops the close.
 #
+# RETRY (--retry, cron 16:01): reads this run's manifest and status rows, runs again ONLY the steps
+# whose newest result is not a success, in dependency order, and appends its rows. The first
+# attempt is never changed. A step counts as recovered only when its real output checks out. The
+# wall clock ends the run at 16:25 IST. Logic and rules: signal_engine/ops/recovery.py. The retry
+# never places an order. Today only; an earlier day is recovered by run_upkeep.sh recover.
+# An outer `timeout` ends a hung python at 16:27 at the latest (RETRY_END plus two minutes), so
+# nothing runs past the 16:30 hard limit.
+# ROLLOUT ORDER: (1) merge the code; (2) install the Windows task changes (AutoStart 08:30,
+# AutoStop 16:31) on a weekend: this retry needs OpenAlgo up until 16:25; (3) then install the
+# cron line below; (4) then set jobs.REQUIRE_NEW_SCHEDULE = True. Cron before the Windows tasks
+# makes this retry fail every day, because OpenAlgo stops at 16:00 until the task is changed.
+#
 # USAGE
 #   ./signal_engine/analysis/close_day.sh               # today
 #   ./signal_engine/analysis/close_day.sh 2026-10-30    # re-run a day (OpenAlgo must be up for
 #                                                       # the snapshot and the backfill)
 #   ./signal_engine/analysis/close_day.sh --no-review   # deterministic steps only
+#   ./signal_engine/analysis/close_day.sh --retry       # only the open steps of today (cron 16:01)
 #
 # CRON (weekdays, IST):
 #   36 15 * * 1-5 /home/anand/github/openalgo/signal_engine/analysis/close_day.sh >> /home/anand/github/openalgo/signal_engine/logs/close_day_cron.log 2>&1
@@ -47,10 +62,12 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO" || { echo "FATAL: cannot cd to $REPO"; exit 1; }
 
 REVIEW=1
+RETRY=0
 DAY="$(date +%F)"
 for arg in "$@"; do
   case "$arg" in
     --no-review) REVIEW=0 ;;
+    --retry) RETRY=1 ;;
     *) DAY="$arg" ;;
   esac
 done
@@ -70,6 +87,19 @@ if [ -n "$HOLIDAY" ]; then
 fi
 
 UV="$(command -v uv || echo /home/anand/.local/bin/uv)"  # cron has a minimal PATH
+if [ "$RETRY" -eq 1 ]; then
+  # Before anything below: the retry must not truncate the status file or restart the manifest of
+  # the 15:36 run. It appends rows to both (signal_engine/ops/recovery.py).
+  # The outer timeout is the wall-clock end of the retry (16:25, as RETRY_DEADLINE in recovery.py)
+  # plus two minutes for its last records, so a hung python cannot run past 16:30. The limit is
+  # never below 120 s, which also covers a manual run for a past day (python exits at once).
+  RETRY_END="$(date -d "$DAY 16:25" +%s)"
+  RETRY_LIMIT=$(( RETRY_END - $(date +%s) + 120 ))
+  [ "$RETRY_LIMIT" -lt 120 ] && RETRY_LIMIT=120
+  exec env PYTHONPATH=. timeout --kill-after=15 "$RETRY_LIMIT" \
+    "$UV" run python -m signal_engine.ops close-day-retry --day "$DAY"
+fi
+
 ANALYSIS="$REPO/signal_engine/analysis"
 REPORTS="$REPO/signal_engine/reports"
 LOGS="$REPO/signal_engine/logs"

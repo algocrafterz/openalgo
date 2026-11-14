@@ -159,6 +159,14 @@ async def check_reconciliation(mode: str, day: str) -> str:
     engine (sandbox or live) it is CURRENTLY pointed at, so this only means anything when
     `mode` matches that - the same assumption tracker.py's own end-of-day call already makes.
     """
+    if day != ist_today().isoformat():
+        # The funds API answers for the current session only. A run for an earlier day (the morning
+        # recovery, signal_engine/ops/recovery.py) would compare that day's engine P&L with today's
+        # reset funds and report a false mismatch, so it is not applicable and calls nothing.
+        return (
+            f"SKIPPED (skipped_not_applicable) - the broker funds figure answers for today only, "
+            f"and {day} is not today"
+        )
     from signal_engine import reconcile
 
     result = await reconcile.reconcile_day(mode, day)

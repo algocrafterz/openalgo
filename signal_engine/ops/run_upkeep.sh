@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
 # Unattended upkeep around the daily workflow (signal_engine/ops/automation.py).
 #
-#   retry-failed   08:56  redo the last session's data download if it failed (once, before 09:10)
-#   deadman morning 09:40  alert when the 09:12 or 09:27 checkpoint left no record
-#   deadman close   21:35  alert when the close-day run is missing, incomplete or failed. It runs
-#                           after the 18:35 and 21:05 review catch-ups so it judges the final state.
+#   recover         08:36  retry only the steps the previous trading day left open (backfill,
+#                           reports, review), at low priority, ending by 08:55 IST so 09:00-09:15
+#                           stays free. One Telegram notice, and only when something was open.
+#                           Replaces retry-failed. Rules: signal_engine/ops/recovery.py.
+#   retry-failed   08:56  the line installed until the maintainer installs recover: redo the last
+#                           session's data download if it failed (once, before 09:10). It is
+#                           removed from the schedule; the command stays for that line.
+#   deadman morning 09:40  alert when the 09:12 or 09:27 checkpoint left no record; also prints
+#                           what the previous day left open and what the recovery did (WARN).
+#   deadman close   16:28  alert when the close-day run is missing, incomplete or failed, judged
+#                           after the 16:01 retry (close_day.sh --retry, which ends by 16:25).
 #                           (Installed until the maintainer switches the line: 16:20. Both pass the
 #                           jobs audit, signal_engine/ops/jobs.py CRON_LINES.)
+#
+# ROLLOUT ORDER: (1) merge the code; (2) install the Windows task changes (AutoStart 08:30,
+# AutoStop 16:31) on a weekend: recover needs the 08:30 broker login; (3) then install the cron
+# lines; (4) then set jobs.REQUIRE_NEW_SCHEDULE = True. Cron before the Windows tasks leaves
+# recover without a login (it ends incomplete) and the 16:01 retry without OpenAlgo.
 #
 # Weekends and NSE holidays are handled in Python. Nothing here touches orders, positions, config
 # or code. Output goes to the ops cron log, which is where the other phases write.
@@ -21,14 +33,22 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO" || { echo "FATAL: cannot cd to $REPO"; exit 1; }
 
-CMD="${1:?usage: run_upkeep.sh retry-failed | deadman morning|close}"
+CMD="${1:?usage: run_upkeep.sh recover | retry-failed | deadman morning|close}"
+PREFIX=()
 case "$CMD" in
   retry-failed) LIMIT=2700 ;;
+  recover)
+    # 08:36 + 1140 s = 08:55. The Python side also stops at 08:55 by the wall clock; this limit is
+    # the backstop. Lowest CPU and disk priority: the recovery must never slow the open.
+    LIMIT=1140
+    PREFIX=(nice -n 19)
+    command -v ionice >/dev/null 2>&1 && PREFIX=(ionice -c3 "${PREFIX[@]}")
+    ;;
   deadman) LIMIT=120 ;;
   *) echo "unknown command $CMD"; exit 2 ;;
 esac
 
 UV="$(command -v uv || echo /home/anand/.local/bin/uv)"  # cron has a minimal PATH
 echo "=== upkeep $* $(date +%F\ %T) ==="
-env PYTHONPATH=. timeout --kill-after=15 "$LIMIT" "$UV" run python -m signal_engine.ops "$@"
+${PREFIX[@]+"${PREFIX[@]}"} env PYTHONPATH=. timeout --kill-after=15 "$LIMIT" "$UV" run python -m signal_engine.ops "$@"
 echo "upkeep $* exit $?"
