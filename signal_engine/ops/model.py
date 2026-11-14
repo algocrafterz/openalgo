@@ -138,6 +138,25 @@ LEGACY, MISSING, UNREADABLE = "legacy", "missing", "unreadable"
 MAX_RUN_SECONDS = 3600
 IST = timezone(timedelta(hours=5, minutes=30))
 
+# --------------------------------------------------------------------------------------------
+# The afternoon retry window (close_day.sh --retry). ONE definition: recovery.py imports these
+# names and close_day.sh asks `model.py retry-limits`, so the shell and the python cannot drift.
+#   16:25:00  RETRY_DEADLINE: the soft end. No step starts after 16:23, the last notification
+#             may run to 16:25.
+#   16:26:40  RETRY_OUTER_TERM: the outer `timeout` sends TERM here, 15 s before its KILL.
+#   16:26:55  TERM + RETRY_KILL_AFTER_SECONDS: the last moment the retry process can exist.
+#   16:27:00  RETRY_HARD_END: nothing of the retry runs past this. Its 5 s margin covers the
+#             exit of the killed process. The 16:28 dead-man and the 16:30 limit stay as before.
+# --------------------------------------------------------------------------------------------
+RETRY_DEADLINE = "16:25"
+RETRY_HARD_END = "16:27"
+RETRY_OUTER_TERM = "16:26:40"
+RETRY_KILL_AFTER_SECONDS = 15
+#: A retry that starts with less time than this before RETRY_DEADLINE does not start.
+RETRY_MIN_START_SECONDS = 30
+#: Test hook: an ISO date-time that replaces the clock. Unset in production.
+NOW_ENV = "OPS_RECOVERY_NOW"
+
 #: Steps that must finish for a phase to count as complete. The review has its own rule
 #: (signal_engine/ops/verdict.py review_outcome) and is not listed.
 #:  - open-day, liveness: `check` writes the report and `notify` is the only alert path for RED.
@@ -166,6 +185,44 @@ RED_EXIT_OK_STEPS = ("check", "logs", "value_areas", "jobs")
 
 def now_ist() -> datetime:
     return datetime.now(IST)
+
+
+def clock_now() -> datetime:
+    """Now in IST. OPS_RECOVERY_NOW replaces it for tests only (unset in production)."""
+    fake = os.environ.get(NOW_ENV)
+    if fake:
+        stamp = datetime.fromisoformat(fake)
+        return stamp if stamp.tzinfo else stamp.replace(tzinfo=IST)
+    return now_ist()
+
+
+def at_ist(day: str, clock: str) -> datetime:
+    """`day` (YYYY-MM-DD) at `clock` (HH:MM or HH:MM:SS), IST."""
+    fmt = "%Y-%m-%d %H:%M:%S" if clock.count(":") == 2 else "%Y-%m-%d %H:%M"
+    return datetime.strptime(f"{day} {clock}", fmt).replace(tzinfo=IST)
+
+
+def retry_outer_limits(now: datetime, day: str) -> tuple[int, int] | None:
+    """(timeout seconds, kill-after seconds) of the outer `timeout` around the afternoon retry.
+
+    The timeout sends TERM at RETRY_OUTER_TERM and KILL RETRY_KILL_AFTER_SECONDS later, so the
+    process is gone by 16:26:55 and always before RETRY_HARD_END. The cases:
+      - another day than today: python exits at once; a short fixed limit;
+      - a start before 16:26:35: TERM at RETRY_OUTER_TERM;
+      - a late start: python only writes the "started too late" records, so it gets the time
+        that is left minus two seconds (at most 8) and a one second kill-after;
+      - None when less than 3 seconds remain before RETRY_HARD_END: nothing can be recorded.
+    """
+    today = now.astimezone(IST).strftime("%Y-%m-%d")
+    if day != today:
+        return 120, RETRY_KILL_AFTER_SECONDS
+    room = int((at_ist(today, RETRY_HARD_END) - now).total_seconds())
+    if room < 3:
+        return None
+    wait = int((at_ist(today, RETRY_OUTER_TERM) - now).total_seconds())
+    if wait >= 5:
+        return wait, RETRY_KILL_AFTER_SECONDS
+    return max(1, min(8, room - 2)), 1
 
 
 def atomic_write_json(path: str, data: dict) -> None:
@@ -407,7 +464,19 @@ def read_run(phase: str, day: str, folder: str = REPORTS, *, now: datetime | Non
     return data
 
 
+def _retry_limits_cli(argv: list[str]) -> int:
+    """`model.py retry-limits --day D`: print "<timeout> <kill-after>" or "refuse" for the shell."""
+    parser = argparse.ArgumentParser(prog="model.py retry-limits")
+    parser.add_argument("--day", required=True)
+    args = parser.parse_args(argv)
+    limits = retry_outer_limits(clock_now(), args.day)
+    sys.stdout.write("refuse\n" if limits is None else f"{limits[0]} {limits[1]}\n")
+    return 0
+
+
 def _cli(argv: list[str] | None = None) -> int:
+    if (argv if argv is not None else sys.argv[1:])[:1] == ["retry-limits"]:
+        return _retry_limits_cli((argv if argv is not None else sys.argv[1:])[1:])
     parser = argparse.ArgumentParser(prog="model.py")
     parser.add_argument("area", choices=("manifest",))
     parser.add_argument("action", choices=("start", "step", "finish", "review"))

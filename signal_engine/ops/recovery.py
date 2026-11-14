@@ -4,7 +4,10 @@ Two entry points share one engine. Both read what the 15:36 close-day run left o
 steps whose newest result is not a success, run only those in dependency order, check the real
 output of each one, and record every attempt without touching the first one.
 
-    close_day.sh --retry                    16:01, today only, ends by 16:25 IST (wall clock)
+    close_day.sh --retry                    16:01, today only, ends by 16:25 IST (wall clock);
+                                            the whole process, with the termination of its
+                                            children and its last writes, ends by 16:27:00
+                                            (model.RETRY_* hold every time of that window)
     run_upkeep.sh recover                   08:36, the previous trading day, ends by 08:55 IST
 
 What a run never does: place or change an order, call an OpenAlgo order endpoint, rerun a step
@@ -123,13 +126,19 @@ OPENALGO_LOG_DIR = os.path.join(REPO, "log")
 #: The supervisor log: openalgoscheduler (the AutoStart login) writes its lines here as well.
 SUPERVISOR_LOG = os.path.join(LOGS, "openalgoctl.log")
 
-NOW_ENV = "OPS_RECOVERY_NOW"
+NOW_ENV = model.NOW_ENV
 RETRY_PHASE, RECOVER_PHASE = "close-day-retry", "close-day-recover"
 
 #: The afternoon retry ends here. 16:25 and not 16:30: the final dead-man runs at 16:28 and must
-#: judge a finished retry, the retry needs about two minutes after its last step to write its
-#: records, and the 16:30 hard limit then has a margin. The deadline is never extended.
-RETRY_DEADLINE = "16:25"
+#: judge a finished retry, and the 16:30 hard limit then has a margin. The deadline is never
+#: extended. The value lives in model.py because close_day.sh reads it from there too.
+RETRY_DEADLINE = model.RETRY_DEADLINE
+#: Everything of the retry, the termination of its children and its last writes included, ends
+#: by this time (16:27:00). The outer timeout of close_day.sh is worked out from model.py too.
+RETRY_HARD_END = model.RETRY_HARD_END
+#: A retry that starts with less time than this before RETRY_DEADLINE does not start.
+RETRY_MIN_START_SECONDS = model.RETRY_MIN_START_SECONDS
+STARTED_TOO_LATE = "started too late"
 #: No step except the last notification starts or runs past this time (deadline minus two minutes).
 RETRY_NOTIFY_RESERVE_SECONDS = 120
 #: The review starts only when it can still run: not after this time.
@@ -154,6 +163,10 @@ DEFAULT_MIN_USEFUL_SECONDS = 20
 LOGIN_WAIT_TAIL_SECONDS = MIN_USEFUL_SECONDS["backfill"]
 #: Wait after a TERM before the KILL. Only a child this run started is ever signalled.
 TERM_WAIT_SECONDS = 10
+#: The same waits when the retry itself receives a TERM (the outer timeout at 16:26:40): 5 s for
+#: the TERM and 2 s for the KILL, 7 s in all, inside the 15 s that the outer KILL allows.
+SIGNAL_TERM_WAIT_SECONDS = 5
+SIGNAL_KILL_WAIT_SECONDS = 2
 
 #: Status exit codes written by this module (besides the real exit code of a step).
 EXIT_TIMED_OUT = (
@@ -258,15 +271,11 @@ _RESET = re.compile(r"resets?\s+(\d{1,2})(?::(\d{2}))?\s*([ap]m)", re.I)
 
 def _clock() -> datetime:
     """Now in IST. OPS_RECOVERY_NOW replaces it for tests only (unset in production)."""
-    fake = os.environ.get(NOW_ENV)
-    if fake:
-        stamp = datetime.fromisoformat(fake)
-        return stamp if stamp.tzinfo else stamp.replace(tzinfo=model.IST)
-    return model.now_ist()
+    return model.clock_now()
 
 
 def _at(day: str, hhmm: str) -> datetime:
-    return datetime.strptime(f"{day} {hhmm}", "%Y-%m-%d %H:%M").replace(tzinfo=model.IST)
+    return model.at_ist(day, hhmm)
 
 
 def previous_trading_day(today: str, *, db_path: str | None = None) -> str:
@@ -398,18 +407,22 @@ class StepResult:
     ran: bool = False
 
 
-def _kill_group(proc: subprocess.Popen) -> None:
+def _kill_group(
+    proc: subprocess.Popen,
+    term_wait: float = TERM_WAIT_SECONDS,
+    kill_wait: float = TERM_WAIT_SECONDS,
+) -> None:
     """TERM the process group this run created for `proc`, wait a bounded time, then KILL it."""
     with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(proc.pid, signal.SIGTERM)
-    deadline = time.monotonic() + TERM_WAIT_SECONDS
+    deadline = time.monotonic() + term_wait
     while proc.poll() is None and time.monotonic() < deadline:
         time.sleep(0.2)
     if proc.poll() is None:
         with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(proc.pid, signal.SIGKILL)
         with contextlib.suppress(subprocess.TimeoutExpired):
-            proc.wait(timeout=TERM_WAIT_SECONDS)
+            proc.wait(timeout=kill_wait)
 
 
 def make_runner(ctx: Ctx) -> Callable:
@@ -912,9 +925,16 @@ def _final_state(results: list[StepResult], timed_out: bool) -> tuple[str, str]:
 
 def _install_signal_handlers(ctx: Ctx, state: dict) -> None:
     def handler(signum, _frame):
+        # The retry has a hard end (RETRY_HARD_END): its outer timeout KILLs 15 s after the TERM.
+        # So its children get a short, bounded wait. The morning recovery keeps the long one.
+        waits = (
+            (SIGNAL_TERM_WAIT_SECONDS, SIGNAL_KILL_WAIT_SECONDS)
+            if ctx.mode == "retry"
+            else (TERM_WAIT_SECONDS, TERM_WAIT_SECONDS)
+        )
         for proc in list(ctx.children):
             if proc.poll() is None:
-                _kill_group(proc)
+                _kill_group(proc, *waits)
         if not state.get("finished"):
             model.manifest_finish(
                 ctx.phase, ctx.day, model.INTERRUPTED, f"stopped by signal {signum}", ctx.folder
@@ -955,6 +975,31 @@ def run_plan(ctx: Ctx, todo: list[str], *, say: Callable[[str], None] = print) -
     return results
 
 
+def _not_started(
+    ctx: Ctx, todo: list[str], now: datetime, say: Callable[[str], None]
+) -> list[StepResult]:
+    """A retry that begins with less than RETRY_MIN_START_SECONDS before RETRY_DEADLINE (or after
+    it) runs no step. It records every open step as not done, in its own manifest and in the
+    close-day status file, so the 16:28 dead-man reads a clear answer and not a missing record."""
+    say(
+        f"It is {now.strftime('%H:%M:%S')}, less than {RETRY_MIN_START_SECONDS} seconds before "
+        f"{RETRY_DEADLINE} - {STARTED_TOO_LATE}, no step was run. {ACTION}"
+    )
+    _begin(ctx)
+    stamp = _hms(now)
+    results = []
+    for step in todo:
+        res = StepResult(step, INCOMPLETE, EXIT_TIMED_OUT, STARTED_TOO_LATE)
+        _record(ctx, res, stamp, stamp, to_status=True)
+        results.append(res)
+    note = (
+        f"{STARTED_TOO_LATE}: the retry began at {now.strftime('%H:%M:%S')}, with less than "
+        f"{RETRY_MIN_START_SECONDS} seconds before {RETRY_DEADLINE}. No step was run. {ACTION}"
+    )
+    model.manifest_finish(ctx.phase, ctx.day, model.TIMED_OUT, note, ctx.folder)
+    return results
+
+
 def threading_main() -> bool:
     import threading
 
@@ -989,9 +1034,6 @@ def retry_main(
         say(f"{day} is not a trading day - nothing to retry.")
         return 0
     deadline = _at(day, RETRY_DEADLINE)
-    if now >= deadline:
-        say(f"It is {now.strftime('%H:%M')}, after {RETRY_DEADLINE} - not retrying.")
-        return 0
     found = outstanding(day, folder, now=now)
     if found["state"] == "running":
         say(f"{day}: the close-day run is still going - not retrying.")
@@ -1026,7 +1068,10 @@ def retry_main(
         if not free:
             say("Another retry holds the lock - not starting.")
             return 0
-        results = run_plan(ctx, todo, say=say)
+        if (deadline - now).total_seconds() < RETRY_MIN_START_SECONDS:
+            results = _not_started(ctx, todo, now, say)
+        else:
+            results = run_plan(ctx, todo, say=say)
     wanted = set(found["steps"])
     return 0 if all(r.result == RECOVERED for r in results if r.step in wanted) else 1
 

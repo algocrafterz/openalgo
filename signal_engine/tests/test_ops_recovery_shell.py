@@ -126,16 +126,11 @@ def test_the_retry_has_an_outer_timeout_that_ends_before_the_1630_hard_limit(tre
     seen = Path(env["STUB_TIMEOUT_LOG"]).read_text().splitlines()
     assert len(seen) == 1 and seen[0].startswith("--kill-after=15 ")
     limit = int(seen[0].split()[1])
-    assert 120 <= limit <= 26 * 60 + 120  # at most 16:01 to 16:25 plus two minutes
+    assert limit == 120  # a past day: python exits at once. The window of today is tested in
+    # test_ops_strict_deadline.py (the limits come from model.py, not from this script).
     assert "close-day-retry" in seen[0]
     text = (ROOT / "signal_engine/analysis/close_day.sh").read_text()
-    assert 'timeout --kill-after=15 "$RETRY_LIMIT"' in text and 'date -d "$DAY 16:25"' in text
-
-
-def test_the_outer_timeout_shrinks_for_a_late_start_and_never_goes_below_two_minutes(tmp_path):
-    text = (ROOT / "signal_engine/analysis/close_day.sh").read_text()
-    assert '[ "$RETRY_LIMIT" -lt 120 ] && RETRY_LIMIT=120' in text
-    assert "RETRY_LIMIT=$(( RETRY_END - $(date +%s) + 120 ))" in text
+    assert 'timeout --kill-after="${LIMITS#* }" "${LIMITS% *}"' in text
 
 
 def test_close_day_retry_on_a_weekend_does_nothing(tree):

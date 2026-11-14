@@ -38,8 +38,12 @@
 # attempt is never changed. A step counts as recovered only when its real output checks out. The
 # wall clock ends the run at 16:25 IST. Logic and rules: signal_engine/ops/recovery.py. The retry
 # never places an order. Today only; an earlier day is recovered by run_upkeep.sh recover.
-# An outer `timeout` ends a hung python at 16:27 at the latest (RETRY_END plus two minutes), so
-# nothing runs past the 16:30 hard limit.
+# STRICT END: the whole retry, its child termination and its last writes included, ends by 16:27:00
+# IST. An outer `timeout` sends TERM at 16:26:40 and KILL 15 s later (16:26:55, a 5 s margin), so
+# the 16:28 dead-man has a clear window and nothing runs near the 16:30 hard limit. A retry that
+# starts with less than 30 s before 16:25 runs no step and records "started too late". The times
+# are defined once, in signal_engine/ops/model.py (RETRY_*); this script asks
+# `model.py retry-limits` and holds no copy of them.
 # ROLLOUT ORDER: (1) merge the code; (2) install the Windows task changes (AutoStart 08:30,
 # AutoStop 16:31) on a weekend: this retry needs OpenAlgo up until 16:25; (3) then install the
 # cron line below; (4) then set jobs.REQUIRE_NEW_SCHEDULE = True. Cron before the Windows tasks
@@ -90,13 +94,21 @@ UV="$(command -v uv || echo /home/anand/.local/bin/uv)"  # cron has a minimal PA
 if [ "$RETRY" -eq 1 ]; then
   # Before anything below: the retry must not truncate the status file or restart the manifest of
   # the 15:36 run. It appends rows to both (signal_engine/ops/recovery.py).
-  # The outer timeout is the wall-clock end of the retry (16:25, as RETRY_DEADLINE in recovery.py)
-  # plus two minutes for its last records, so a hung python cannot run past 16:30. The limit is
-  # never below 120 s, which also covers a manual run for a past day (python exits at once).
-  RETRY_END="$(date -d "$DAY 16:25" +%s)"
-  RETRY_LIMIT=$(( RETRY_END - $(date +%s) + 120 ))
-  [ "$RETRY_LIMIT" -lt 120 ] && RETRY_LIMIT=120
-  exec env PYTHONPATH=. timeout --kill-after=15 "$RETRY_LIMIT" \
+  # The outer timeout comes from the wall clock, worked out by model.py (stdlib only; the one
+  # definition of the retry times, shared with recovery.py): TERM at 16:26:40, KILL 15 s later.
+  # A manual run for a past day gets 120 s (python exits at once).
+  PY="$(command -v python3 || echo /usr/bin/python3)"
+  LIMITS="$("$PY" "$REPO/signal_engine/ops/model.py" retry-limits --day "$DAY")" || LIMITS=""
+  case "$LIMITS" in
+    refuse)
+      echo "The retry window of today is over - not retrying. Next: open the Daily Workflow page and run the open steps by hand."
+      exit 0 ;;
+    [0-9]*" "[0-9]*) ;;
+    *)
+      echo "The retry time limit could not be worked out - not retrying. Next: open the Daily Workflow page and run the open steps by hand."
+      exit 1 ;;
+  esac
+  exec env PYTHONPATH=. timeout --kill-after="${LIMITS#* }" "${LIMITS% *}" \
     "$UV" run python -m signal_engine.ops close-day-retry --day "$DAY"
 fi
 
