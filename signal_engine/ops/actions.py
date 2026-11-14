@@ -32,7 +32,9 @@ STATE_DIR = os.path.join(SE, "logs", "ops_actions")
 
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 RUN_ID = re.compile(r"^\d{10}-[a-z_]+$")
-#: Close-day steps write their results from this time (the engine stops at 15:35).
+#: Close-day steps write their results from this time (the BreakingTrade poller stops at 15:35;
+#: the signal engine stops together with OpenAlgo, at the AutoStop task: 16:00, 16:31 after the
+#: Windows task change).
 CLOSE_FROM = "15:36"
 #: A page may re-run a step only for a recent day.
 MAX_AGE_DAYS = 7

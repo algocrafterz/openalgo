@@ -2,8 +2,8 @@
 # Create Windows Task Scheduler tasks for OpenAlgo
 #
 # Creates four tasks under the Anand user account:
-#   1. openAlgoAutoStart  -- Weekdays 8:50 AM  -- long-running foreground launcher
-#   2. openAlgoAutoStop   -- Weekdays 3:30 PM  -- graceful shutdown
+#   1. openAlgoAutoStart  -- Weekdays 8:30 AM  -- long-running foreground launcher
+#   2. openAlgoAutoStop   -- Weekdays 4:31 PM  -- graceful shutdown
 #   3. openAlgoWatchdog   -- Weekdays 9:00 AM-3:25 PM, every 5 min -- crash recovery
 #   4. openAlgoSquareOff  -- Weekdays 3:02 PM  -- failsafe MIS position close
 #
@@ -21,8 +21,11 @@ if (!(Test-Path $ps1Path)) {
 }
 
 # --- Configuration ---
-$startTime      = "8:50AM"
-$stopTime       = "4:00PM"
+# 8:30 AM gives the 08:36 recovery (signal_engine/ops/recovery.py) a broker login. 4:31 PM leaves
+# the broker session alive for the 16:01 retry, which ends by 16:25 (the dead-man runs at 16:28).
+# The execution limit below must stay longer than the gap from the start to the stop.
+$startTime      = "8:30AM"
+$stopTime       = "4:31PM"
 $squareoffTime  = "2:55PM"
 $watchdogTime   = "9:00AM"
 $days           = @("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
@@ -38,8 +41,10 @@ $principal = New-ScheduledTaskPrincipal `
 # Launches openalgoctl.ps1 dailystart -- first stops anything already running (so every
 # trading day begins from a clean slate, even if a stack was left up from an earlier
 # session), then runs: fresh login, app.py + signal engine, then
-# BLOCKS until either process exits or AutoStop kills them at 3:30 PM.
-# StartWhenAvailable: fires at next login if machine was off at 8:50.
+# BLOCKS until either process exits or AutoStop kills them at 4:31 PM.
+# StartWhenAvailable: fires at next login if machine was off at 8:30.
+# ExecutionTimeLimit PT10H: from 8:30 an 8 hour limit would end the run at 4:30 PM, a minute
+# before the stop.
 # -------------------------------------------------------
 
 Unregister-ScheduledTask -TaskName "openAlgoAutoStart" -Confirm:$false -ErrorAction SilentlyContinue
@@ -56,7 +61,7 @@ $startSettings = New-ScheduledTaskSettingsSet `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
     -MultipleInstances IgnoreNew `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 8)
+    -ExecutionTimeLimit (New-TimeSpan -Hours 10)
 
 Register-ScheduledTask `
     -TaskName "openAlgoAutoStart" -TaskPath "\" `
@@ -282,11 +287,11 @@ Write-Host ""
 Write-Host "All 5 tasks registered under user: Anand" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "How they work together:" -ForegroundColor Cyan
-Write-Host "  8:50 AM  openAlgoAutoStart      -- starts app.py + signal engine, stays running all day" -ForegroundColor White
+Write-Host "  8:30 AM  openAlgoAutoStart      -- starts app.py + signal engine, stays running all day" -ForegroundColor White
 Write-Host "  9:00 AM  openAlgoWatchdog       -- fires every 5 min; no-op if running, restarts if dead" -ForegroundColor White
 Write-Host "  9:05 AM  openAlgoHeartbeatCheck -- fires every 10 min; dead-man's switch, independent of WSL/bash/Python" -ForegroundColor White
 Write-Host "  2:55 PM  openAlgoSquareOff      -- failsafe: closes MIS positions if engine didn't (WakeToRun)" -ForegroundColor White
-Write-Host "  4:00 PM  openAlgoAutoStop       -- sends shutdown notification, kills all services (later than market close for the momentum-rank EOD scan)" -ForegroundColor White
+Write-Host "  4:31 PM  openAlgoAutoStop       -- sends shutdown notification, kills all services (after the 16:01 close-day retry and the 16:28 dead-man)" -ForegroundColor White
 Write-Host ""
 Write-Host "Square-off design:" -ForegroundColor Cyan
 Write-Host "  Signal engine fires its own exit at 3:00 PM (asyncio scheduler, 5s polling)" -ForegroundColor White

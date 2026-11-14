@@ -192,7 +192,7 @@ function Invoke-Ctl {
 # "App answers on the health URL" is NOT proof the stack is being supervised: an
 # app.py left running after a manual evening session answers just as well, yet nothing
 # is watching it, no login ran for today, and its in-memory auth cache may hold a dead
-# token. On 2026-09-29 that was tolerated at the 08:50 start and a stale browser
+# token. On 2026-09-29 that was tolerated at the morning start and a stale browser
 # cookie later revoked the fresh broker token. The '[o]' bracket trick keeps pgrep
 # from matching its own command line.
 
@@ -372,7 +372,7 @@ try {
         }
 
         "dailystart" {
-            # Used only by the 08:50 openAlgoAutoStart task. Always begin the trading day
+            # Used only by the 08:30 openAlgoAutoStart task (08:50 until the task is changed). Always begin the trading day
             # from a clean slate: stop whatever is running (a stack left up from an earlier
             # session, a manual evening run, a wedged supervisor), then 'run', which logs in
             # fresh and starts app.py plus the signal engine. When nothing is running the

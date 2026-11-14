@@ -31,7 +31,7 @@
 #   ./signal_engine/analysis/eod_claude_review.sh 2026-09-08  # a specific session
 #
 # SCHEDULE: not a cron line of its own any more; close_day.sh (15:36 IST) runs it with a timeout
-# that ends before OpenAlgo's 16:00 stop. Hand-run for an earlier day as below.
+# that ends before OpenAlgo's stop (16:00 today, 16:31 after the task change). Hand-run for an earlier day as below.
 
 set -uo pipefail
 

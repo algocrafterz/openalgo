@@ -7,8 +7,11 @@
 # 16:00 stop. The interactive counterpart is the `close-day` skill (/close-day), which reads what
 # this produced and finishes anything it could not.
 #
-# TIMELINE (weekdays; the Windows tasks stop the engine at 15:35 and OpenAlgo at 16:00)
-#   15:36  start: the engine is stopped, so trades.db and the sandbox are final
+# TIMELINE (weekdays. The 15:35 Windows task stops only the BreakingTrade poller. The signal engine
+# stops together with OpenAlgo, at the openAlgoAutoStop task: 16:00 today, 16:31 once the
+# maintainer installs the Windows task change. By 15:36 the 14:45 time exit and the 14:55
+# square-off are done, so the day's trades are normally final.)
+#   15:36  start
 #   15:36  backfill   backfill_cron.sh in the background (needs OpenAlgo; about 7 minutes)
 #   15:36  eod        eod.sh: tradebook snapshot, ledger, pages vs fills, regression check (< 1 min)
 #   15:37  execution_health, logs (error signatures), Fridays weekly (seconds each)
@@ -72,7 +75,7 @@ LOGS="$REPO/signal_engine/logs"
 STATUS="$REPORTS/close-day-$DAY-status.tsv"
 mkdir -p "$REPORTS"
 
-# Hard deadline: OpenAlgo stops at 16:00. A same-day run gets until 15:58; a re-run of an
+# Hard deadline: OpenAlgo stops at 16:00 today (16:31 after the task change). A same-day run gets until 15:58; a re-run of an
 # earlier day (by hand) gets 20 minutes from now.
 if [ "$DAY" = "$(date +%F)" ]; then
   DEADLINE="$(date -d "$DAY 15:58" +%s)"

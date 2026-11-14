@@ -17,10 +17,10 @@
 #     stale_days resets to 0.
 #   - backfill.py reads OpenAlgo's own live broker session straight from db/openalgo.db
 #     (_broker_session) - it needs OpenAlgo up and logged in, not a separate
-#     secondary-broker login. OpenAlgo's actual AutoStop task runs at 16:00 IST (Windows
+#     secondary-broker login. OpenAlgo's actual AutoStop task runs at 16:00 IST today (Windows
 #     Scheduled Task, $stopTime in createTaskOpenAlgoScheduler.ps1 - NOT the 15:30 some
-#     older comments in this repo assume).
-# That leaves 15:30-16:00. Started at 15:36 (close_day.sh) for a 6-minute buffer after close (in case
+#     older comments in this repo assume); the repo script says 16:31, installed by the maintainer.
+# That leaves 15:30-16:00 (16:31 after the task change; the 16:01 retry uses the extra time). Started at 15:36 (close_day.sh) for a 6-minute buffer after close (in case
 # the broker takes a moment to finalize/publish the last bar) and a 25-minute buffer
 # before AutoStop.
 #
@@ -37,7 +37,8 @@
 #   ./signal_engine/backtest/backfill_cron.sh
 #
 # SCHEDULE: started first, in the background, by signal_engine/analysis/close_day.sh (cron 15:36
-# IST - after the 15:30 close, before the 16:00 AutoStop); no cron line of its own.
+# IST - after the 15:30 close, before the AutoStop at 16:00, or 16:31 after the task change).
+# Retried by close_day.sh --retry (16:01) and run_upkeep.sh recover (08:36); no cron line of its own.
 
 set -uo pipefail
 
