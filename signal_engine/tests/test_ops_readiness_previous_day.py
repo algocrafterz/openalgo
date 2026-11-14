@@ -42,6 +42,9 @@ def _open_day(monkeypatch, today_overrides=None):
         "_engine_startup": Check("engine startup", OK, "ok"),
         "_poller_started": Check("BreakingTrade poller", OK, "ok"),
         "_clock": Check("clock (NTP)", OK, "yes"),
+        "_price_history": Check(
+            "price history for today", OK, "stubbed: the real store is not read"
+        ),
         "_overnight_errors": Check("errors since the last close", OK, "none"),
     }
     healthy.update(today_overrides or {})

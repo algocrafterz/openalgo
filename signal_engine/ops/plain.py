@@ -30,6 +30,11 @@ _PLAIN: dict[str, tuple[str, str]] = {
         "The engine started and loaded every stock it trades.",
         "The engine's own start-up checks reported a problem.",
     ),
+    "price history for today": (
+        "The price history the engine starts from is current and complete.",
+        "The price history the engine starts from is old, incomplete or could not be read. "
+        "The engine leaves the affected stocks out of today's trading.",
+    ),
     "BreakingTrade poller": (
         "The BreakingTrade scanner started.",
         "The BreakingTrade scanner did not start.",

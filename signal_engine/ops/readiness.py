@@ -18,17 +18,36 @@ import shutil
 import socket
 import sqlite3
 import subprocess
+import threading
 import urllib.request
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from signal_engine.ops import automation, jobs, logs, recovery
-from signal_engine.ops.model import FAIL, NOT_VERIFIED, OK, REPORTS, WARN, Check, write_phase
+from signal_engine.ops.model import FAIL, IST, NOT_VERIFIED, OK, REPORTS, WARN, Check, write_phase
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 HEALTH_URL = "http://127.0.0.1:5000/health/status"
 PORTS = {"websocket proxy": 8765, "ZeroMQ bus": 5555}
 POLLER_LOG = os.path.join(logs.SE_LOGS, "breakingtrade_poller.log")
 DATA = os.path.join(logs.REPO, "signal_engine", "data")
 MIN_FREE_GB = 5
+
+#: The check that the price history the engine warms up from is current (see _price_history).
+HISTORY_CHECK = "price history for today"
+#: A read of the store waits this long for another program to let go of the file, polling every
+#: HISTORY_LOCK_POLL_SECONDS: the one bounded retry. The engine's own warm-up hit such a lock on
+#: 2026-11-13 10:15 and succeeded 3 s later, so 30 s covers the lock that has been observed.
+HISTORY_LOCK_WAIT_SECONDS = 30.0
+HISTORY_LOCK_POLL_SECONDS = 5.0
+#: A read that runs longer than this is cut off and tried once more.
+HISTORY_QUERY_SECONDS = 60.0
+#: Bars older than the previous session by more than this many days are reported as "no bars since".
+HISTORY_LOOKBACK_DAYS = 10
+#: How many stock names the evidence lists before it says "and N more".
+HISTORY_SHOWN = 6
+BACKFILL_BY_HAND = "./signal_engine/backtest/backfill_cron.sh"
 
 
 def _previous_weekday(day: str) -> str:
@@ -315,12 +334,253 @@ def _calendar_coverage(day: str, calendar=None) -> Check:
     return Check(name, OK, f"{covered}; next session {cursor}")
 
 
+class _HistoryProblem(Exception):
+    """The price history cannot be judged. The message is the sentence for the trader."""
+
+
+def _historify_path() -> str:
+    """The store the engine warms up from: HISTORIFY_DB, else db/historify.duckdb (as the engine)."""
+    raw = os.environ.get("HISTORIFY_DB") or os.path.join("db", "historify.duckdb")
+    return raw if os.path.isabs(raw) else os.path.join(logs.REPO, raw)
+
+
+def _history_symbols(live: bool | None) -> tuple[list[str], bool, str]:
+    """(stocks, every stock in the store too, why nothing is needed or "").
+
+    What the engine warms up at its start: the runner list (the preflight warms it) and the own
+    list of every strategy that runs (pipeline/service.py strategy_symbols). In live mode the
+    engine drops the paper-only strategies and does not start when none is left, so `live` True
+    removes them. An unknown mode (None) keeps every strategy: the safe side.
+    """
+    from signal_engine import config
+
+    try:
+        runner = config._runner_fields(config._load_yaml())["runner"]  # noqa: SLF001
+    except Exception as exc:  # noqa: BLE001 - any failure to read the list is the finding
+        logger.exception("open-day: the runner section of config.yaml could not be read")
+        raise _HistoryProblem(
+            "The list of stocks the engine trades could not be read from signal_engine/config.yaml, "
+            "so the price history cannot be checked. Next: fix the runner section of that file, "
+            "then run the open-day check again. The reason is in log/errors.jsonl."
+        ) from exc
+    if not runner.enabled:
+        return [], False, "the Python runner is switched off, so no price history is needed"
+    running = {t: s for t, s in runner.strategies.items() if not (live and s.paper_only)}
+    if not running:
+        return [], False, "no Python strategy runs in live mode, so no price history is needed"
+    everything = runner.universe == config.UNIVERSE_ALL
+    symbols = [] if everything else list(runner.universe)
+    for strategy in running.values():
+        symbols += list(strategy.universe or ())
+    return list(dict.fromkeys(symbols)), everything, ""
+
+
+def _ist(clock: str) -> float:
+    return datetime.fromisoformat(f"{clock}+05:30").timestamp()
+
+
+def _history_read(path: str, symbols: list[str], everything: bool, previous: str) -> dict:
+    """Read-only: per stock, its newest 1-minute bar, and the bars of the previous session.
+
+    Opens the store read-only through backfill._connect_read_only (the helper that the backfill
+    verify step uses): it waits out a lock held by another program and raises anything else at
+    once. One query for the named stocks; a second for the last bar of a stock with none in the
+    look-back window. Never writes.
+    """
+    import duckdb
+
+    from signal_engine.backtest import backfill
+
+    session_open, continuous_end = _ist(f"{previous}T09:15:00"), _ist(f"{previous}T15:15:00")
+    lower = _ist(f"{previous}T00:00:00") - HISTORY_LOOKBACK_DAYS * 86400
+    con = backfill._connect_read_only(  # noqa: SLF001
+        path, wait=HISTORY_LOCK_WAIT_SECONDS, poll=HISTORY_LOCK_POLL_SECONDS
+    )
+    timer = threading.Timer(HISTORY_QUERY_SECONDS, con.interrupt)
+    timer.start()
+    try:
+        if everything:  # runner.universe is fno_all: the engine warms every stock the store holds
+            stored = con.execute(
+                "SELECT DISTINCT symbol FROM market_data WHERE interval = '1m'"
+            ).fetchall()
+            symbols = list(dict.fromkeys([*symbols, *(r[0] for r in stored)]))
+        if not symbols:
+            return {"symbols": [], "found": {}}
+        rows = con.execute(
+            "SELECT symbol, max(timestamp), "
+            "count(*) FILTER (WHERE timestamp >= ? AND timestamp < ?), "
+            "max(timestamp) FILTER (WHERE timestamp >= ? AND timestamp < ?) "
+            "FROM market_data WHERE interval = '1m' AND timestamp >= ? "
+            "AND symbol IN (SELECT unnest(?)) GROUP BY symbol",
+            [session_open, continuous_end, session_open, continuous_end, lower, symbols],
+        ).fetchall()
+        found = {r[0]: (r[1], r[2], r[3]) for r in rows}
+        for symbol in symbols:
+            if symbol not in found:
+                last = con.execute(
+                    "SELECT max(timestamp) FROM market_data WHERE symbol = ? AND interval = '1m'",
+                    [symbol],
+                ).fetchone()[0]
+                found[symbol] = (last, 0, None)
+        return {"symbols": symbols, "found": found}
+    except duckdb.InterruptException as exc:
+        raise TimeoutError("the read took too long") from exc
+    finally:
+        timer.cancel()
+        con.close()
+
+
+def _history_judge(previous: str, symbols: list[str], found: dict) -> tuple[list[str], list[str]]:
+    """(stale, incomplete): zero tolerance. A stock is fresh when its newest 1-minute bar is on
+    the previous trading day or later and that day is a full session, the engine's own test
+    (pipeline/context.py HistorifyLoader: MIN_CONTINUOUS_BARS bars before 15:15, the last one at
+    or after LAST_CONTINUOUS_BAR). No source of halted or newly listed stocks exists, so none is
+    excused."""
+    from signal_engine.pipeline.context import LAST_CONTINUOUS_BAR, MIN_CONTINUOUS_BARS
+
+    day_start = _ist(f"{previous}T00:00:00")
+    last_wanted = _ist(f"{previous}T{LAST_CONTINUOUS_BAR:%H:%M}:00")
+    stale, incomplete = [], []
+    for symbol in symbols:
+        newest, bars, last_bar = found[symbol]
+        if newest is None:
+            stale.append(f"{symbol} (no bars at all)")
+        elif newest < day_start:
+            stale.append(f"{symbol} (last bar {datetime.fromtimestamp(newest, tz=IST):%Y-%m-%d})")
+        elif bars < MIN_CONTINUOUS_BARS or last_bar is None or last_bar < last_wanted:
+            incomplete.append(f"{symbol} ({bars} bars on {previous})")
+    return stale, incomplete
+
+
+def _history_names(items: list[str]) -> str:
+    shown = ", ".join(items[:HISTORY_SHOWN])
+    return shown + (f" and {len(items) - HISTORY_SHOWN} more" if len(items) > HISTORY_SHOWN else "")
+
+
+def _price_history(day: str, live: bool | None = None, *, path: str | None = None) -> Check:
+    """The price history the engine warms up from must be current: FAIL (RED) when it is not.
+
+    A separate current-day check. It does not read the close-day status of yesterday, so a failed
+    backfill step of yesterday stays a WARN in _yesterday_close when the history of today is good,
+    and a successful backfill step never excuses an old store.
+
+    Required set: the stocks the engine warms up today (_history_symbols), 1-minute bars in
+    db/historify.duckdb. Fresh: newest bar on the previous trading day (the previous weekday that
+    is not an NSE holiday in OpenAlgo's own table) or later, and a full session on that day.
+    Tolerance: none. One stale or incomplete stock, a missing or unreadable store, a lock that
+    outlasts HISTORY_LOCK_WAIT_SECONDS, or a list of stocks that cannot be read gives FAIL.
+    A lock is the one cause that can give a false RED: nothing but the wording tells it apart.
+    The store is only ever opened read-only (never written, never opened read-write).
+    """
+    name = HISTORY_CHECK
+    try:
+        if not recovery.holiday_table_readable():
+            raise _HistoryProblem(
+                "The price history could not be checked: the exchange holiday table could not be "
+                "read, so the previous trading day is not known. Next: check that db/openalgo.db "
+                "opens, then run the open-day check again."
+            )
+        previous = _previous_close_day(day)
+        symbols, everything, unneeded = _history_symbols(live)
+        if unneeded:
+            return Check(name, OK, unneeded)
+        path = path or _historify_path()
+        if not os.path.exists(path):
+            raise _HistoryProblem(
+                f"The price history could not be read: the file {path} does not exist, so the "
+                f"engine has nothing to start from. Next: run {BACKFILL_BY_HAND} by hand "
+                "(OpenAlgo must be logged in), then restart the engine."
+            )
+        result = None
+        # The lock wait is inside the read. A read that is cut off is tried once more.
+        for attempt in (1, 2):
+            try:
+                result = _history_read(path, symbols, everything, previous)
+                break
+            except TimeoutError:
+                if attempt == 2:
+                    raise
+        stale, incomplete = _history_judge(previous, result["symbols"], result["found"])
+    except _HistoryProblem as problem:
+        return Check(name, FAIL, str(problem))
+    except TimeoutError:
+        logger.exception("open-day: the price history read was cut off twice")
+        return Check(
+            name,
+            FAIL,
+            "The price history could not be read: the read took longer than "
+            f"{int(HISTORY_QUERY_SECONDS)} seconds twice. Next: run the open-day check again in a few "
+            "minutes. If it stays red, check that nothing else is using db/historify.duckdb.",
+        )
+    except Exception as exc:  # noqa: BLE001 - a lock, a damaged file or a missing table is the finding
+        logger.exception("open-day: the price history could not be read")
+        if "lock" in str(exc).lower():
+            return Check(
+                name,
+                FAIL,
+                "The price history could not be read: another program kept db/historify.duckdb "
+                f"open for {int(HISTORY_LOCK_WAIT_SECONDS)} seconds. This can be a false alarm. "
+                "Next: run the open-day check again in a few minutes. If it stays red, run "
+                f"{BACKFILL_BY_HAND} by hand and restart the engine.",
+            )
+        return Check(
+            name,
+            FAIL,
+            "The price history could not be read: the file is damaged or has an unexpected "
+            "layout. Next: check that db/historify.duckdb opens, then run "
+            f"{BACKFILL_BY_HAND} by hand and restart the engine.",
+        )
+    total = len(result["symbols"])
+    if not total:
+        return Check(
+            name,
+            FAIL,
+            "The price history could not be used: the store holds no 1-minute bars for any stock "
+            f"the engine trades. Next: run {BACKFILL_BY_HAND} by hand (OpenAlgo must be logged "
+            "in), then restart the engine.",
+        )
+    if not (stale or incomplete):
+        return Check(
+            name,
+            OK,
+            f"all {total} stocks the engine trades have a full session of {previous} in the store",
+        )
+    parts = []
+    if stale:
+        parts.append(
+            f"{len(stale)} of {total} stocks have price history older than {previous}: "
+            f"{_history_names(stale)}"
+        )
+    if incomplete:
+        parts.append(
+            f"{len(incomplete)} of {total} stocks have an incomplete session on {previous}: "
+            f"{_history_names(incomplete)}"
+        )
+    return Check(
+        name,
+        FAIL,
+        "; ".join(parts) + ". The engine leaves these stocks out of today's trading. Next: run "
+        f"{BACKFILL_BY_HAND} by hand (OpenAlgo must be logged in), then restart the engine so "
+        "that it loads the new history.",
+    )
+
+
+def _is_live(checks: list[Check]) -> bool | None:
+    """True when the trading-mode check says LIVE, False when it names another mode, else None."""
+    for check in checks:
+        if check.name == "trading mode":
+            return check.evidence.startswith("LIVE")
+    return None
+
+
 def open_day(day: str) -> str:
+    mode_checks = _broker_and_mode()
     checks = [
         _services(),
         _health(),
-        *_broker_and_mode(),
+        *mode_checks,
         _engine_startup(day),
+        _price_history(day, _is_live(mode_checks)),
         _poller_started(day),
         *_ports(),
         _clock(),

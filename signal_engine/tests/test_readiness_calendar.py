@@ -28,7 +28,7 @@ def test_the_check_is_part_of_the_open_day_phase(monkeypatch):
     from signal_engine.ops.model import Check
 
     for name in ("_services", "_health", "_engine_startup", "_poller_started", "_clock",
-                 "_overnight_errors", "_yesterday_close"):
+                 "_overnight_errors", "_yesterday_close", "_price_history"):
         monkeypatch.setattr(readiness, name, lambda *a, **k: Check("stub", OK, ""))
     for name in ("_broker_and_mode", "_ports", "_disk_and_databases", "_morning_tasks"):
         monkeypatch.setattr(readiness, name, lambda *a, **k: [])
