@@ -1,4 +1,4 @@
-import type { Bug, BugStatus } from '@/api/bugs'
+import type { Bug, BugActionBody, BugActionKey, BugStatus } from '@/api/bugs'
 
 /**
  * Bug status groups, trading categories, lifecycle and summary counts, shared by the Bug Tracker
@@ -241,4 +241,151 @@ export function evidenceRefs(bug: Bug): string[] {
     ...quoted,
   ]
   return [...new Set(refs)]
+}
+
+/** Server-computed age in whole days, or null when the server could not compute it. */
+export function ageDays(bug: Bug): number | null {
+  return typeof bug.age_days === 'number' ? bug.age_days : null
+}
+
+export function ageLabel(bug: Bug): string {
+  const n = ageDays(bug)
+  if (n === null) return 'age unknown'
+  if (n <= 0) return 'today'
+  return n === 1 ? '1 day old' : `${n} days old`
+}
+
+export function isOverdue(bug: Bug): boolean {
+  return bug.overdue === true
+}
+
+export function ownerLabel(bug: Bug): string {
+  return bug.owner?.trim() ? bug.owner.trim() : 'Unassigned'
+}
+
+const FALLBACK_NEXT: Record<BugStatus, string> = {
+  open: 'Assign and start',
+  in_progress: 'Finish fix',
+  fixed: 'Verify with evidence',
+  verified: 'None',
+  wontfix: 'None',
+}
+
+/** The server's next action; the status-based fallback only covers an older server. */
+export function nextAction(bug: Bug): string {
+  return bug.next_action || FALLBACK_NEXT[bug.status]
+}
+
+/**
+ * Which actions a bug's status offers. This only decides which buttons to show; the server's
+ * transition table is the authority and refuses anything else.
+ */
+const ACTIONS_BY_STATUS: Record<BugStatus, BugActionKey[]> = {
+  open: ['start', 'assign', 'note', 'wontfix'],
+  in_progress: ['fix', 'assign', 'note', 'reopen', 'wontfix'],
+  fixed: ['verify', 'start', 'assign', 'note', 'reopen'],
+  verified: ['note', 'reopen'],
+  wontfix: ['note', 'reopen'],
+}
+
+export function availableActions(status: BugStatus): BugActionKey[] {
+  return ACTIONS_BY_STATUS[status]
+}
+
+export interface ActionField {
+  key: keyof BugActionBody
+  label: string
+  required: boolean
+  multiline: boolean
+  hint?: string
+}
+
+export interface ActionSpec {
+  label: string
+  title: string
+  description: string
+  submit: string
+  fields: ActionField[]
+}
+
+export const ACTION_SPECS: Record<BugActionKey, ActionSpec> = {
+  assign: {
+    label: 'Assign',
+    title: 'Assign an owner',
+    description: 'Who is responsible for this bug. It is recorded in the history.',
+    submit: 'Assign',
+    fields: [{ key: 'owner', label: 'Owner', required: true, multiline: false }],
+  },
+  start: {
+    label: 'Start fix',
+    title: 'Start working on this bug',
+    description: 'Moves it to Being fixed. An owner and a note are optional.',
+    submit: 'Start',
+    fields: [
+      { key: 'owner', label: 'Owner', required: false, multiline: false },
+      { key: 'text', label: 'Note', required: false, multiline: true },
+    ],
+  },
+  note: {
+    label: 'Add note',
+    title: 'Add a note',
+    description: 'Adds a line to the history without changing the status.',
+    submit: 'Add note',
+    fields: [{ key: 'text', label: 'Note', required: true, multiline: true }],
+  },
+  fix: {
+    label: 'Mark fixed',
+    title: 'Mark as fixed',
+    description:
+      'Describe what was changed. The bug then waits in Awaiting verification until evidence proves it.',
+    submit: 'Mark fixed',
+    fields: [
+      { key: 'fix', label: 'What was changed', required: true, multiline: true },
+      { key: 'commit', label: 'Commit (optional)', required: false, multiline: false },
+      {
+        key: 'fix_explanation',
+        label: 'Why it works (optional)',
+        required: false,
+        multiline: true,
+      },
+    ],
+  },
+  verify: {
+    label: 'Verify',
+    title: 'Verify with evidence',
+    description:
+      'Name the clean session, report or test that proves the fix. Without evidence it stays unverified.',
+    submit: 'Mark verified',
+    fields: [{ key: 'evidence', label: 'Evidence', required: true, multiline: true }],
+  },
+  reopen: {
+    label: 'Reopen',
+    title: 'Reopen this bug',
+    description: 'Moves it back to Needs attention. A reason is required.',
+    submit: 'Reopen',
+    fields: [{ key: 'reason', label: 'Reason', required: true, multiline: true }],
+  },
+  wontfix: {
+    label: "Won't fix",
+    title: 'Close without fixing',
+    description: 'The bug is closed on purpose. A reason is required.',
+    submit: "Won't fix",
+    fields: [{ key: 'reason', label: 'Reason', required: true, multiline: true }],
+  },
+}
+
+export type ActionForm = Partial<Record<keyof BugActionBody, string>>
+
+/** The request body, or the first missing required field's message. Empty optional fields are dropped. */
+export function buildActionBody(
+  action: BugActionKey,
+  form: ActionForm
+): { ok: true; body: BugActionBody } | { ok: false; error: string } {
+  const body: BugActionBody = {}
+  for (const f of ACTION_SPECS[action].fields) {
+    const value = (form[f.key] ?? '').trim()
+    if (f.required && value === '') return { ok: false, error: `${f.label} is required.` }
+    if (value !== '') body[f.key] = value
+  }
+  return { ok: true, body }
 }

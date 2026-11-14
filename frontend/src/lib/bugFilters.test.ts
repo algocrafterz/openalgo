@@ -2,14 +2,19 @@ import { describe, expect, it } from 'vitest'
 import type { Bug } from '@/api/bugs'
 import {
   countByGroup,
+  countByPageGroup,
   distinctAreas,
   distinctStrategies,
   groupOf,
   isFiltering,
   matchesQuery,
   NO_FILTERS,
+  overdueCount,
+  pageGroupOf,
+  parsePageGroup,
   sortBugs,
   visibleBugs,
+  visiblePage,
 } from './bugFilters'
 
 function bug(over: Partial<Bug>): Bug {
@@ -152,5 +157,55 @@ describe('new filters', () => {
     const b = bug({ id: 'B', first_seen: '2026-10-20', updated_at: '2026-11-03T10:00:00' })
     expect(sortBugs([b, a], 'oldest').map((x) => x.id)).toEqual(['A', 'B'])
     expect(sortBugs([a, b], 'updated').map((x) => x.id)).toEqual(['B', 'A'])
+  })
+})
+
+describe('page groups', () => {
+  it('splits work into needs attention, being fixed, awaiting verification and done', () => {
+    expect(SAMPLE.map(pageGroupOf)).toEqual(['attention', 'fixing', 'proving', 'done', 'done'])
+    expect(countByPageGroup(SAMPLE, NO_FILTERS)).toEqual({
+      attention: 1,
+      fixing: 1,
+      proving: 1,
+      done: 2,
+    })
+  })
+
+  it('keeps the old todo link working and defaults to needs attention', () => {
+    expect(parsePageGroup('todo')).toBe('attention')
+    expect(parsePageGroup(null)).toBe('attention')
+    expect(parsePageGroup('nonsense')).toBe('attention')
+    expect(parsePageGroup('fixing')).toBe('fixing')
+    expect(parsePageGroup('proving')).toBe('proving')
+    expect(parsePageGroup('done')).toBe('done')
+  })
+
+  it('lists overdue bugs first, then the chosen sort', () => {
+    const list = [
+      bug({ id: 'BUG-010', severity: 'HIGH', status: 'open' }),
+      bug({ id: 'BUG-011', severity: 'LOW', status: 'open', overdue: true }),
+      bug({ id: 'BUG-012', severity: 'MEDIUM', status: 'open' }),
+      bug({
+        id: 'BUG-013',
+        severity: 'LOW',
+        status: 'open',
+        overdue: true,
+        first_seen: '2026-10-01',
+      }),
+    ]
+    expect(visiblePage(list, 'attention', NO_FILTERS, 'severity').map((b) => b.id)).toEqual([
+      'BUG-011',
+      'BUG-013',
+      'BUG-010',
+      'BUG-012',
+    ])
+    expect(visiblePage(list, 'attention', NO_FILTERS, 'oldest').map((b) => b.id)[0]).toBe('BUG-013')
+    expect(overdueCount(list)).toBe(2)
+    expect(visiblePage(list, 'fixing', NO_FILTERS, 'severity')).toEqual([])
+  })
+
+  it('applies filters inside a group', () => {
+    const rows = visiblePage(SAMPLE, 'done', { ...NO_FILTERS, status: 'wontfix' }, 'severity')
+    expect(rows.map((b) => b.id)).toEqual(['BUG-005'])
   })
 })

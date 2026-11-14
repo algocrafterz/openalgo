@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import type { Bug } from '@/api/bugs'
 import {
+  ACTION_SPECS,
   acceptanceCriteria,
+  ageLabel,
+  availableActions,
+  buildActionBody,
   categoryOfBug,
   evidenceRefs,
   groupOfStatus,
+  isOverdue,
   lifecycle,
+  nextAction,
+  ownerLabel,
   readableSources,
   reportedFromWorkflow,
   summarizeBugs,
@@ -224,5 +231,75 @@ describe('bugs reported from a workflow finding', () => {
     expect(groupOfStatus('in_progress')).toBe('todo')
     expect(groupOfStatus('fixed')).toBe('proving')
     expect(groupOfStatus('wontfix')).toBe('done')
+  })
+})
+
+describe('server-computed fields', () => {
+  it('labels age, owner and overdue from the server values only', () => {
+    expect(ageLabel(bug({ age_days: 0 }))).toBe('today')
+    expect(ageLabel(bug({ age_days: 1 }))).toBe('1 day old')
+    expect(ageLabel(bug({ age_days: 12 }))).toBe('12 days old')
+    expect(ageLabel(bug({}))).toBe('age unknown')
+    expect(ageLabel(bug({ age_days: null }))).toBe('age unknown')
+    expect(ownerLabel(bug({}))).toBe('Unassigned')
+    expect(ownerLabel(bug({ owner: ' Priya ' }))).toBe('Priya')
+    expect(isOverdue(bug({ overdue: true }))).toBe(true)
+    expect(isOverdue(bug({}))).toBe(false)
+  })
+
+  it('prefers the server next action and falls back by status', () => {
+    expect(nextAction(bug({ next_action: 'Do it' }))).toBe('Do it')
+    expect(nextAction(bug({ status: 'open' }))).toBe('Assign and start')
+    expect(nextAction(bug({ status: 'in_progress' }))).toBe('Finish fix')
+    expect(nextAction(bug({ status: 'fixed' }))).toBe('Verify with evidence')
+    expect(nextAction(bug({ status: 'verified' }))).toBe('None')
+  })
+})
+
+describe('actions', () => {
+  it('offers only actions the transition table can accept', () => {
+    expect(availableActions('open')).not.toContain('verify')
+    expect(availableActions('open')).not.toContain('fix')
+    expect(availableActions('in_progress')).toContain('fix')
+    expect(availableActions('fixed')).toContain('verify')
+    expect(availableActions('verified')).toEqual(['note', 'reopen'])
+    expect(availableActions('verified')).not.toContain('verify')
+    expect(availableActions('wontfix')).not.toContain('verify')
+  })
+
+  it('requires the text each action needs and sends nothing else', () => {
+    for (const [action, field] of [
+      ['assign', 'owner'],
+      ['note', 'text'],
+      ['fix', 'fix'],
+      ['verify', 'evidence'],
+      ['reopen', 'reason'],
+      ['wontfix', 'reason'],
+    ] as const) {
+      expect(buildActionBody(action, {})).toMatchObject({ ok: false })
+      expect(buildActionBody(action, { [field]: '   ' })).toMatchObject({ ok: false })
+      expect(buildActionBody(action, { [field]: ' x ' })).toEqual({
+        ok: true,
+        body: { [field]: 'x' },
+      })
+    }
+    expect(buildActionBody('start', {})).toEqual({ ok: true, body: {} })
+    expect(
+      buildActionBody('fix', { fix: 'f', commit: '', fix_explanation: ' why ', evidence: 'no' })
+    ).toEqual({ ok: true, body: { fix: 'f', fix_explanation: 'why' } })
+  })
+
+  it('has a spec for every action and no status field anywhere', () => {
+    expect(Object.keys(ACTION_SPECS).sort()).toEqual([
+      'assign',
+      'fix',
+      'note',
+      'reopen',
+      'start',
+      'verify',
+      'wontfix',
+    ])
+    for (const spec of Object.values(ACTION_SPECS))
+      for (const f of spec.fields) expect(f.key).not.toBe('status')
   })
 })

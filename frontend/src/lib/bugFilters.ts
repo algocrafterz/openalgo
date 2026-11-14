@@ -1,5 +1,12 @@
 import type { Bug, BugKind, BugSeverity, BugStatus } from '@/api/bugs'
-import { type BugCategoryKey, type BugGroup, categoryOfBug, groupOf, lastUpdated } from './bugModel'
+import {
+  type BugCategoryKey,
+  type BugGroup,
+  categoryOfBug,
+  groupOf,
+  isOverdue,
+  lastUpdated,
+} from './bugModel'
 
 export type { BugGroup }
 export { groupOf }
@@ -111,4 +118,47 @@ export function distinctAreas(bugs: Bug[]): string[] {
 
 export function distinctStrategies(bugs: Bug[]): string[] {
   return [...new Set(bugs.flatMap((b) => b.strategies))].sort()
+}
+
+/** The page's four tabs: three working groups, then everything closed. */
+export type PageGroup = 'attention' | 'fixing' | 'proving' | 'done'
+
+export const PAGE_GROUPS: PageGroup[] = ['attention', 'fixing', 'proving', 'done']
+
+export function pageGroupOf(bug: Bug): PageGroup {
+  if (bug.status === 'open') return 'attention'
+  if (bug.status === 'in_progress') return 'fixing'
+  if (bug.status === 'fixed') return 'proving'
+  return 'done'
+}
+
+/** A tab from the URL. The old `todo` value (open and in progress together) opens Needs attention. */
+export function parsePageGroup(value: string | null): PageGroup {
+  if (value === 'todo') return 'attention'
+  return PAGE_GROUPS.find((g) => g === value) ?? 'attention'
+}
+
+export function countByPageGroup(bugs: Bug[], f: BugFilters): Record<PageGroup, number> {
+  const counts: Record<PageGroup, number> = { attention: 0, fixing: 0, proving: 0, done: 0 }
+  for (const bug of bugs) if (matchesFilters(bug, f)) counts[pageGroupOf(bug)] += 1
+  return counts
+}
+
+/** Overdue bugs first, then the chosen sort; the sort is stable inside each half. */
+export function visiblePage(
+  bugs: Bug[],
+  group: PageGroup,
+  filters: BugFilters,
+  sort: BugSort
+): Bug[] {
+  const sorted = sortBugs(
+    bugs.filter((b) => pageGroupOf(b) === group && matchesFilters(b, filters)),
+    sort
+  )
+  if (group === 'done') return sorted
+  return [...sorted.filter(isOverdue), ...sorted.filter((b) => !isOverdue(b))]
+}
+
+export function overdueCount(bugs: Bug[]): number {
+  return bugs.filter(isOverdue).length
 }

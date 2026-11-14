@@ -1,12 +1,29 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bug as BugIcon, ChevronDown, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
-import { type Bug, type BugKind, type BugSeverity, type BugStatus, bugsApi } from '@/api/bugs'
+import {
+  type Bug,
+  type BugActionBody,
+  type BugActionKey,
+  type BugKind,
+  type BugSeverity,
+  type BugStatus,
+  bugsApi,
+} from '@/api/bugs'
 import { StatusBadge, TONE_STYLE, TONE_TEXT, type Tone } from '@/components/ops/StatusBadge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -15,43 +32,60 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Textarea } from '@/components/ui/textarea'
 import { seenPerDay, statusBreakdown } from '@/lib/bugCharts'
 import {
   type BugFilters,
   type BugSort,
-  countByGroup,
+  countByPageGroup,
   distinctAreas,
   distinctStrategies,
   isFiltering,
   NO_FILTERS,
-  visibleBugs,
+  overdueCount,
+  type PageGroup,
+  pageGroupOf,
+  parsePageGroup,
+  visiblePage,
 } from '@/lib/bugFilters'
 import {
+  ACTION_SPECS,
+  type ActionForm,
   acceptanceCriteria,
+  ageLabel,
+  availableActions,
   BUG_CATEGORIES,
   type BugCategoryKey,
-  type BugGroup,
+  buildActionBody,
   categoryLabel,
   categoryOfBug,
   evidenceRefs,
+  isOverdue,
   type LifecycleStep,
   lastUpdated,
   lifecycle,
+  nextAction,
+  ownerLabel,
   readableSources,
   reportedFromWorkflow,
-  summarizeBugs,
   verificationMethods,
   wasReopened,
 } from '@/lib/bugModel'
+import { showToast } from '@/utils/toast'
 
-const GROUPS: { key: BugGroup; label: string; hint: string }[] = [
-  { key: 'todo', label: 'Needs fixing', hint: 'Found and confirmed, not fixed yet' },
+const GROUPS: { key: PageGroup; label: string; hint: string }[] = [
+  {
+    key: 'attention',
+    label: 'Needs attention',
+    hint: 'Found and confirmed, nobody is fixing it yet',
+  },
+  { key: 'fixing', label: 'Being fixed', hint: 'Someone is working on it' },
   {
     key: 'proving',
-    label: 'Fixed, awaiting proof',
-    hint: 'Changed; a live trading session still has to show it works',
+    label: 'Awaiting verification',
+    hint: 'Fixed; evidence from a clean session or test still has to prove it',
   },
-  { key: 'done', label: 'Done', hint: 'Proven by a session, or closed on purpose' },
+  { key: 'done', label: 'Verified and closed', hint: 'Proven by evidence, or closed on purpose' },
 ]
 
 const SORTS: { key: BugSort; label: string }[] = [
@@ -84,9 +118,9 @@ const KIND: Record<BugKind, string> = {
 }
 
 const STATUS_TEXT: Record<BugStatus, string> = {
-  open: 'Needs fixing',
+  open: 'Needs attention',
   in_progress: 'Being fixed',
-  fixed: 'Awaiting proof',
+  fixed: 'Awaiting verification',
   verified: 'Verified',
   wontfix: 'Not fixing',
 }
@@ -180,8 +214,90 @@ function Lifecycle({ bug, tone }: { bug: Bug; tone: Tone }) {
   )
 }
 
+/** One small dialog per action. Required text is checked here for speed and again by the server. */
+function ActionDialog({
+  bug,
+  action,
+  onClose,
+}: {
+  bug: Bug
+  action: BugActionKey
+  onClose: () => void
+}) {
+  const spec = ACTION_SPECS[action]
+  const [form, setForm] = useState<ActionForm>({})
+  const [error, setError] = useState<string | null>(null)
+  const client = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: (body: BugActionBody) => bugsApi.act(bug.id, action, body),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ['bug-tracker'] })
+      showToast.success(`${bug.id}: ${spec.label.toLowerCase()} done`)
+      onClose()
+    },
+    onError: (e: Error) => {
+      setError(e.message)
+      // The bug may have changed under us; show the current state.
+      client.invalidateQueries({ queryKey: ['bug-tracker'] })
+    },
+  })
+  const submit = () => {
+    setError(null)
+    const built = buildActionBody(action, form)
+    if (!built.ok) return setError(built.error)
+    mutation.mutate(built.body)
+  }
+  return (
+    <Dialog open onOpenChange={(open) => !open && !mutation.isPending && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{spec.title}</DialogTitle>
+          <DialogDescription>
+            {bug.id}: {bug.title}. {spec.description}
+          </DialogDescription>
+        </DialogHeader>
+        {spec.fields.map((f) => (
+          <div key={f.key} className="space-y-1">
+            <Label htmlFor={`ba-${f.key}`}>{f.label}</Label>
+            {f.multiline ? (
+              <Textarea
+                id={`ba-${f.key}`}
+                rows={3}
+                maxLength={4000}
+                value={form[f.key] ?? ''}
+                onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+              />
+            ) : (
+              <Input
+                id={`ba-${f.key}`}
+                maxLength={80}
+                value={form[f.key] ?? ''}
+                onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+              />
+            )}
+          </div>
+        ))}
+        {error && (
+          <p role="alert" className="text-[15px] text-red-600 dark:text-red-400">
+            {error}
+          </p>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>
+            Cancel
+          </Button>
+          <Button onClick={submit} disabled={mutation.isPending}>
+            {mutation.isPending ? 'Saving...' : spec.submit}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function BugRow({ bug, defaultOpen }: { bug: Bug; defaultOpen: boolean }) {
   const [toggled, setToggled] = useState(false)
+  const [acting, setActing] = useState<BugActionKey | null>(null)
   const open = defaultOpen !== toggled
   const risk = RISK[bug.severity]
   const tone = statusTone(bug)
@@ -204,6 +320,7 @@ function BugRow({ bug, defaultOpen }: { bug: Bug; defaultOpen: boolean }) {
             <span className="font-mono text-[15px] font-semibold">{bug.id}</span>
             <StatusBadge tone={risk.tone}>{risk.label}</StatusBadge>
             <StatusBadge tone={tone}>{STATUS_TEXT[bug.status]}</StatusBadge>
+            {isOverdue(bug) && <StatusBadge tone="bad">Overdue</StatusBadge>}
             {wasReopened(bug) && <StatusBadge tone="warn">Reopened</StatusBadge>}
           </span>
           <span className="block text-base font-semibold leading-snug">{bug.title}</span>
@@ -214,6 +331,12 @@ function BugRow({ bug, defaultOpen }: { bug: Bug; defaultOpen: boolean }) {
           )}
           <span className="block text-[13px] text-muted-foreground">
             Seen {days} {days === 1 ? 'day' : 'days'}, last {shortDate(bug.last_seen)}
+            {' | '}
+            {ownerLabel(bug)}
+            {' | '}
+            {ageLabel(bug)}
+            {' | '}
+            Next: <span className="font-medium text-foreground">{nextAction(bug)}</span>
           </span>
         </span>
         <ChevronDown
@@ -230,6 +353,20 @@ function BugRow({ bug, defaultOpen }: { bug: Bug; defaultOpen: boolean }) {
           )}
 
           <Lifecycle bug={bug} tone={tone} />
+
+          <div className="flex flex-wrap items-center gap-2">
+            {availableActions(bug.status).map((a, i) => (
+              <Button
+                key={a}
+                size="sm"
+                variant={i === 0 && nextAction(bug) !== 'None' ? 'default' : 'outline'}
+                onClick={() => setActing(a)}
+              >
+                {ACTION_SPECS[a].label}
+              </Button>
+            ))}
+          </div>
+          {acting && <ActionDialog bug={bug} action={acting} onClose={() => setActing(null)} />}
 
           {criteria && bug.status !== 'verified' && (
             <p className={`rounded-md border border-l-4 px-3 py-2 text-[15px] ${TONE_STYLE.info}`}>
@@ -268,6 +405,7 @@ function BugRow({ bug, defaultOpen }: { bug: Bug; defaultOpen: boolean }) {
             <span>{KIND[bug.kind]}</span>
             <span>Component: {bug.area}</span>
             {bug.strategies.length > 0 && <span>Strategies: {bug.strategies.join(', ')}</span>}
+            <span>Owner: {ownerLabel(bug)}</span>
             <span>Updated {shortDate(lastUpdated(bug).slice(0, 10))}</span>
             <span>
               Fix commit:{' '}
@@ -284,13 +422,22 @@ function BugRow({ bug, defaultOpen }: { bug: Bug; defaultOpen: boolean }) {
             )}
           </div>
 
-          <details className="rounded-md border bg-card">
+          <details
+            className="rounded-md border bg-card"
+            open={defaultOpen || bug.status !== 'open'}
+          >
             <summary className="cursor-pointer px-3 py-2 text-[13px] text-muted-foreground">
               Technical details
             </summary>
             <div className="grid gap-3 border-t p-4 md:grid-cols-2">
               <Detail label="Cause">{bug.root_cause || 'Not found yet'}</Detail>
               <Detail label="Fix">{bug.fix || 'None yet'}</Detail>
+              {bug.fix_explanation && (
+                <Detail label="Why the fix works">{bug.fix_explanation}</Detail>
+              )}
+              <Detail label="Tests and verification">
+                {bug.verification || 'Not verified yet'}
+              </Detail>
               <Detail label="Days seen">{bug.occurrences.join(', ')}</Detail>
               <Detail label="Sources">
                 {readableSources(bug).length > 0
@@ -484,10 +631,7 @@ export default function BugTracker() {
   const [params, setParams] = useSearchParams()
   const [showFilters, setShowFilters] = useState(false)
   const filters = readFilters(params)
-  const groupParam = params.get('group')
-  const group: BugGroup = GROUPS.some((g) => g.key === groupParam)
-    ? (groupParam as BugGroup)
-    : 'todo'
+  const group: PageGroup = parsePageGroup(params.get('group'))
   const sortParam = params.get('sort')
   const sort: BugSort = SORTS.some((s) => s.key === sortParam) ? (sortParam as BugSort) : 'severity'
 
@@ -510,30 +654,34 @@ export default function BugTracker() {
     )
   }
 
-  const counts = useMemo(() => countByGroup(all, filters), [all, filters])
-  const totals = useMemo(() => countByGroup(all, NO_FILTERS), [all])
-  const summary = useMemo(() => summarizeBugs(all), [all])
+  const counts = useMemo(() => countByPageGroup(all, filters), [all, filters])
+  const totals = useMemo(() => countByPageGroup(all, NO_FILTERS), [all])
+  const overdue = useMemo(() => overdueCount(all), [all])
+  const highIn = useMemo(() => {
+    const out: Record<PageGroup, number> = { attention: 0, fixing: 0, proving: 0, done: 0 }
+    for (const b of all) if (b.severity === 'HIGH') out[pageGroupOf(b)] += 1
+    return out
+  }, [all])
   const areas = useMemo(() => distinctAreas(all), [all])
   const strategies = useMemo(() => distinctStrategies(all), [all])
   const categories = useMemo(() => {
     const present = new Set(all.map(categoryOfBug))
     return BUG_CATEGORIES.filter((c) => present.has(c.key))
   }, [all])
-  const shown = useMemo(() => visibleBugs(all, group, filters, sort), [all, group, filters, sort])
+  const shown = useMemo(() => visiblePage(all, group, filters, sort), [all, group, filters, sort])
   const filtering = isFiltering(filters)
   // Filters that are active stay visible; otherwise they hide behind one button.
   const filtersOpen = showFilters || filters.severity !== 'all' || filters.highRisk
 
-  const sub: Record<BugGroup, string> = {
-    todo: summary.highNeedsFix ? `${summary.highNeedsFix} high risk` : '',
-    proving: summary.highAwaitingProof ? `${summary.highAwaitingProof} high risk` : '',
-    done: '',
+  const sub = (g: PageGroup): string => {
+    if (g === 'done') return ''
+    const parts = []
+    if (highIn[g]) parts.push(`${highIn[g]} high risk`)
+    if (g === 'attention' && overdue) parts.push(`${overdue} overdue`)
+    return parts.join(', ')
   }
-  const subTone: Record<BugGroup, string> = {
-    todo: summary.highNeedsFix ? TONE_TEXT.bad : '',
-    proving: summary.highAwaitingProof ? TONE_TEXT.warn : '',
-    done: '',
-  }
+  const subTone = (g: PageGroup): string =>
+    g === 'attention' ? TONE_TEXT.bad : g === 'done' ? '' : TONE_TEXT.warn
 
   return (
     <div className="py-6 space-y-5">
@@ -544,8 +692,8 @@ export default function BugTracker() {
             Bug Tracker
           </h1>
           <p className="text-muted-foreground mt-1">
-            What is broken, what is fixed, what needs proof. To fix one, ask Claude: /resolve
-            BUG-007
+            What is broken, what is fixed, what needs proof. Assign, fix and verify bugs here, or
+            ask Claude: /resolve BUG-007
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
@@ -554,14 +702,14 @@ export default function BugTracker() {
         </Button>
       </div>
 
-      <div className="grid grid-cols-3 gap-2 sm:gap-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
         {GROUPS.map((g) => (
           <button
             type="button"
             key={g.key}
             aria-pressed={group === g.key}
             title={g.hint}
-            onClick={() => setParam('group', g.key, 'todo')}
+            onClick={() => setParam('group', g.key, 'attention')}
             className={`text-left rounded-lg border p-3 sm:p-4 transition-colors ${
               group === g.key
                 ? 'border-primary ring-1 ring-primary bg-primary/5'
@@ -577,8 +725,8 @@ export default function BugTracker() {
               )}
             </div>
             <div className="font-semibold">{g.label}</div>
-            {data && sub[g.key] && (
-              <div className={`text-[13px] font-medium ${subTone[g.key]}`}>{sub[g.key]}</div>
+            {data && sub(g.key) && (
+              <div className={`text-[13px] font-medium ${subTone(g.key)}`}>{sub(g.key)}</div>
             )}
           </button>
         ))}
