@@ -1,7 +1,7 @@
 """Close-day step `jobs`: did every scheduled job run today, and succeed?
 
-Owns the schedule audit. Sources: Windows Task Scheduler (process lifecycle), the crontab (the
-three ops phases) and each phase's step status file.
+Owns the schedule audit. Sources: Windows Task Scheduler (process lifecycle), the crontab (all nine OpenAlgo
+lines) and each phase's step status file.
 """
 
 from __future__ import annotations
@@ -27,10 +27,23 @@ WINDOWS_TASKS = {
     "breakingTradeAutoStop": "15:35",
     "openAlgoAutoStop": None,  # 16:00, after this step: shows the previous run
 }
-CRON_PHASES = (
-    "signal_engine/ops/run_phase.sh open-day",
-    "signal_engine/ops/run_phase.sh liveness",
-    "signal_engine/analysis/close_day.sh",
+#: Every OpenAlgo cron line: (what the line runs, label, accepted "HH:MM" times). The audit checks
+#: the script, its arguments, the time and the weekday field (1-5) of each line, so a line that
+#: moved or was deleted is found, not only a line that is missing.
+#: The close-day dead-man accepts three times. 16:20 is the line installed today. 21:35 is the line
+#: proposed in the Phase 1 cron proposal: it must run after the 21:05 catch-up. Both pass until the
+#: maintainer switches the cron line, so deploying this code before the cron change never turns the
+#: audit RED. When the cron line is on 21:35, delete "16:20" here in the same change.
+CRON_LINES = (
+    ("signal_engine/ops/run_upkeep.sh retry-failed", "retry-failed", ("08:56",)),
+    ("signal_engine/ops/run_phase.sh open-day", "open-day", ("09:12",)),
+    ("signal_engine/ops/run_phase.sh liveness", "liveness", ("09:27",)),
+    ("signal_engine/ops/run_upkeep.sh deadman morning", "deadman morning", ("09:40",)),
+    ("signal_engine/analysis/close_day.sh", "close-day", ("15:36",)),
+    ("signal_engine/ops/run_upkeep.sh deadman close", "deadman close", ("16:20", "21:30", "21:35")),
+    ("signal_engine/analysis/autofix.sh", "autofix", ("16:30",)),
+    ("signal_engine/analysis/review_catchup.sh", "review catch-up 1", ("18:35",)),
+    ("signal_engine/analysis/review_catchup.sh", "review catch-up 2", ("21:05",)),
 )
 PHASE_FILES = ("open-day", "liveness", "close-day")
 
@@ -160,6 +173,46 @@ def _phase_checks(day: str, folder: str = REPORTS) -> list[Check]:
     return checks
 
 
+def parse_cron_line(line: str) -> tuple[str, str, str] | None:
+    """(HH:MM, weekday field, command) of a crontab line, or None for a comment or other line."""
+    text = line.strip()
+    if not text or text.startswith("#") or "=" in text.split()[0]:
+        return None
+    fields = text.split(None, 5)
+    if len(fields) < 6 or not (fields[0].isdigit() and fields[1].isdigit()):
+        return None
+    return f"{int(fields[1]):02d}:{int(fields[0]):02d}", fields[4], fields[5]
+
+
+def audit_cron(text: str) -> tuple[list[str], list[str]]:
+    """(problems, notes) for a crontab text against CRON_LINES. A problem is a missing line, a
+    wrong time or a wrong weekday field. A note is a line on an accepted but older time."""
+    lines = [p for p in (parse_cron_line(ln) for ln in text.splitlines()) if p]
+    problems: list[str] = []
+    notes: list[str] = []
+    used: set[int] = set()
+    for needle, label, times in CRON_LINES:
+        match = [
+            i
+            for i, (_, _, cmd) in enumerate(lines)
+            if needle in cmd and i not in used and not cmd.startswith("#")
+        ]
+        exact = [i for i in match if lines[i][0] in times]
+        if not exact:
+            seen = ", ".join(lines[i][0] for i in match)
+            problems.append(
+                f"{label}: expected {' or '.join(times)}, "
+                f"{'found ' + seen if seen else 'no line found'}"
+            )
+            continue
+        used.add(exact[0])
+        if lines[exact[0]][1] != "1-5":
+            problems.append(f"{label}: weekday field is {lines[exact[0]][1]}, expected 1-5")
+        if lines[exact[0]][0] != times[-1] and len(times) > 1:
+            notes.append(f"{label} still at {lines[exact[0]][0]} (move to {times[-1]})")
+    return problems, notes
+
+
 def _cron_check() -> Check:
     try:
         out = subprocess.run(
@@ -167,12 +220,9 @@ def _cron_check() -> Check:
         ).stdout
     except (OSError, subprocess.TimeoutExpired):
         return Check("crontab", WARN, "crontab unreadable")
-    missing = [p for p in CRON_PHASES if p not in out]
-    return Check(
-        "crontab",
-        FAIL if missing else OK,
-        f"missing: {missing}" if missing else "3 ops phases scheduled",
-    )
+    problems, notes = audit_cron(out)
+    ok = f"{len(CRON_LINES)} cron lines scheduled" + (f" ({'; '.join(notes)})" if notes else "")
+    return Check("crontab", FAIL if problems else OK, "; ".join(problems) if problems else ok)
 
 
 def run(day: str) -> str:

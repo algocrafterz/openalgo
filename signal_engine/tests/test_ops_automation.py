@@ -14,6 +14,7 @@ from signal_engine.timeutils import IST
 TODAY = "2026-11-12"  # a Thursday
 PREV = "2026-11-11"
 MORNING = datetime(2026, 11, 12, 8, 56, tzinfo=IST)
+LATE = datetime(2026, 11, 12, 21, 40, tzinfo=IST)  # after every phase is due
 
 
 @pytest.fixture
@@ -163,18 +164,29 @@ def test_a_human_run_does_not_use_up_the_automatic_retry(env, monkeypatch):
 # --- dead-man ------------------------------------------------------------------------------
 
 
+def _complete_phase(folder, phase, day=TODAY):
+    """A phase that finished cleanly: status rows, manifest and reports (content is tested in
+    test_ops_deadman_cron.py)."""
+    from signal_engine.ops import model
+
+    steps = model.CRITICAL_STEPS[phase]
+    rows = "".join(f"{n}\t09:12:00\t09:12:09\t0\n" for n in steps)
+    (folder / f"{phase}-{day}-status.tsv").write_text("step\tstarted\tended\texit\n" + rows)
+    model.write_phase(phase, day, [model.Check("a", model.OK, "x")], "s", folder=str(folder))
+
+
 def test_a_missing_morning_record_is_reported_in_plain_words(env):
-    (env / f"open-day-{TODAY}-status.tsv").write_text("step\tstarted\tended\texit\n")
-    text = automation.deadman("morning", TODAY, folder=str(env))
+    _complete_phase(env, "open-day")
+    text = automation.deadman("morning", TODAY, folder=str(env), now=LATE)
     assert "09:27 after-the-open check did not run" in text
-    assert "09:12" not in text  # that one left a record
+    assert "09:12" not in text  # that one finished cleanly
     assert "exit" not in text and "cron" not in text.lower()
 
 
 def test_nothing_is_reported_when_every_record_exists_or_it_is_no_trading_day(env):
     for phase in ("open-day", "liveness"):
-        (env / f"{phase}-{TODAY}-status.tsv").write_text("step\tstarted\tended\texit\n")
-    assert automation.deadman("morning", TODAY, folder=str(env)) is None
+        _complete_phase(env, phase)
+    assert automation.deadman("morning", TODAY, folder=str(env), now=LATE) is None
     assert automation.deadman("morning", "2026-11-10", folder=str(env)) is None  # holiday
     assert automation.deadman("close", "2026-11-14", folder=str(env)) is None  # Saturday
     assert automation.deadman("nonsense", TODAY, folder=str(env)) is None
@@ -182,5 +194,5 @@ def test_nothing_is_reported_when_every_record_exists_or_it_is_no_trading_day(en
 
 def test_a_missing_close_record_is_reported(env):
     assert "15:36 end-of-day checks did not run" in automation.deadman(
-        "close", TODAY, folder=str(env)
+        "close", TODAY, folder=str(env), now=LATE
     )
