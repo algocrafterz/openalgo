@@ -21,7 +21,7 @@ import subprocess
 import urllib.request
 from datetime import date, timedelta
 
-from signal_engine.ops import jobs, logs
+from signal_engine.ops import automation, jobs, logs, recovery
 from signal_engine.ops.model import FAIL, NOT_VERIFIED, OK, REPORTS, WARN, Check, write_phase
 
 HEALTH_URL = "http://127.0.0.1:5000/health/status"
@@ -36,6 +36,20 @@ def _previous_weekday(day: str) -> str:
     while current.weekday() >= 5:
         current -= timedelta(days=1)
     return current.isoformat()
+
+
+def _previous_close_day(day: str) -> str:
+    """The previous trading day: the previous weekday that is not an NSE holiday.
+
+    A holiday has no close-day run, so the line must read the last session, the same day the
+    08:36 recovery works on (recovery.previous_trading_day).
+    """
+    current = _previous_weekday(day)
+    for _ in range(14):  # no real run of holidays is longer; the bound stops a broken calendar
+        if automation.is_trading_day(current):
+            return current
+        current = _previous_weekday(current)
+    return current
 
 
 def _run(cmd: list[str], timeout: int = 30) -> str:
@@ -207,20 +221,44 @@ def _morning_tasks(day: str) -> list[Check]:
 
 
 def _yesterday_close(day: str) -> Check:
-    prev = _previous_weekday(day)
+    """The previous trading day's close-day result: always a WARN or OK, never a FAIL.
+
+    The maintainer chose WARN: a failed history job of yesterday (data download, reports, review)
+    must not turn the whole morning RED. That is not the same as harmless. The download and the
+    value-area step write the historical store the engine warms up from, and a stale store once
+    made PFC trade on old levels (header of backtest/backfill_cron.sh), so the text says so. The
+    checks of today (broker session, price feed, OpenAlgo health, engine start, databases) stay
+    separate and keep their own FAIL. Nothing in open-day compares the store with the previous
+    trading day, so this WARN is the only morning sign of a stale store (open decision for the
+    maintainer: see the Phase 1b report).
+
+    The check runs at 09:12, after the 08:36 recovery had its turn, so the text does not promise
+    a recovery: it points to the Daily Workflow page, which shows what the recovery did.
+    """
+    prev = _previous_close_day(day)
     path = os.path.join(REPORTS, f"close-day-{prev}-status.tsv")
     if not os.path.exists(path):
-        return Check(f"close-day {prev}", WARN, "no status file (holiday, or it did not run)")
+        return Check(f"close-day {prev}", WARN, "no status file (it did not run)")
     with open(path, encoding="utf-8") as handle:
-        steps = [ln.split("\t") for ln in handle.read().splitlines()[1:]]
-    steps = [s for s in steps if len(s) == 4 and s[3] != "0"]
+        rows = [ln.split("\t") for ln in handle.read().splitlines()[1:]]
+    # A step that ran again appends a row, so only the newest row of each step counts.
+    latest = {s[0]: s for s in rows if len(s) == 4}
+    steps = [s for s in latest.values() if s[3] != "0"]
     # A step that exited 1 because its own report says RED ran; its finding was alerted that day.
     reported = [
         s[0] for s in steps if jobs.reported_red("close-day", s[0], s[1], s[3], prev, REPORTS)
     ]
     bad = [s[0] for s in steps if s[0] not in reported]
     if bad:
-        return Check(f"close-day {prev}", FAIL, f"failed steps: {bad}")
+        # The step id stays in brackets: it is the label the Daily Workflow page shows.
+        names = ", ".join(f"{recovery.WORDS.get(step, step)} ({step})" for step in bad)
+        warning = f" {recovery.DATA_WARNING}" if recovery.data_open(bad) else ""
+        return Check(
+            f"close-day {prev}",
+            WARN,
+            f"these steps did not finish: {names}.{warning} Next: open the Daily Workflow page, "
+            "read what the 08:36 recovery did, and run the open steps by hand.",
+        )
     if reported:
         return Check(
             f"close-day {prev}", WARN, f"steps {reported} ran and reported RED (see their report)"

@@ -157,14 +157,15 @@ def test_yesterdays_reported_red_jobs_step_does_not_keep_open_day_red(tmp_path, 
     _status(tmp_path, "close-day", prev, ["eod\t00:00:00\t00:00:01\t0", "jobs\t00:00:01\t00:00:02\t1"])
     check = readiness._yesterday_close("2026-11-04")
     assert check.status == WARN and "jobs" in check.evidence
-    # a real failure in the same file is still a FAIL
+    # a real failure in the same file is still named, but it is a WARN: it never blocks trading
     _status(tmp_path, "close-day", prev, ["eod\t00:00:00\t00:00:01\t2", "jobs\t00:00:01\t00:00:02\t1"])
     check = readiness._yesterday_close("2026-11-04")
-    assert check.status == FAIL and "eod" in check.evidence
-    # a jobs step that exited 1 with no report behind it is a crash
+    assert check.status == WARN and "eod" in check.evidence
+    # a jobs step that exited 1 with no report behind it is a crash: named, WARN
     (tmp_path / f"jobs-{prev}.json").unlink()
     _status(tmp_path, "close-day", prev, ["jobs\t00:00:01\t00:00:02\t1"])
-    assert readiness._yesterday_close("2026-11-04").status == FAIL
+    check = readiness._yesterday_close("2026-11-04")
+    assert check.status == WARN and "jobs" in check.evidence
 
 
 # --- BUG-013 extension: logs and value_areas report RED the same way jobs does ---------------
@@ -186,7 +187,7 @@ def test_a_red_logs_or_value_areas_step_is_a_report_not_a_failed_job(tmp_path, m
     monkeypatch.setattr(readiness, "_previous_weekday", lambda day: prev)
     _status(tmp_path, "close-day", prev, [*rows, "backfill\t00:00:02\t00:00:03\t1"])
     check = readiness._yesterday_close("2026-11-05")
-    assert check.status == FAIL and "backfill" in check.evidence and "logs" not in check.evidence
+    assert check.status == WARN and "backfill" in check.evidence and "logs" not in check.evidence
 
 
 # --- BUG-014: the health endpoint's three answers ---------------------------------------------
