@@ -107,10 +107,20 @@
           "at": "2026-11-04T15:43:35+05:30",
           "status": "fixed",
           "note": "2026-11-04 (Phase D side check, before the review's own note): path EXERCISED. Exits timed out and later filled (AXISBANK, TATAPOWER, HDFCBANK, COALINDIA, NESTLEIND). trades.db: of 45 'Closed by tracker' rows on 11-04, 38 are booked under an order id that the core log shows as a MARKET order for that symbol, with their real label (TRAILING_STOP or NO-PROGRESS); the 7 labelled (SL) are stop orders that triggered ('@ SL' in the core log) and are booked under their own SL id, which is correct. No timed-out MARKET exit was booked under a stop id or labelled SL. This supports the fix for the booking; it is NOT promoted to verified because the same day shows AXISBANK exit SELL 154 filling 3 times after repeated timeouts (closed by a BUY duplicate-correction), and BUG-017 (CGPOWER). Decide with /resolve verify."
+        },
+        {
+          "at": "2026-11-12T15:44:46+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-12] 2026-11-12: not exercised. 0 'Timeout sending order' in execution health; no EXIT UNCERTAIN; eod regression check reports no duplicate fills and pages match fills for all 4 strategies."
+        },
+        {
+          "at": "2026-11-13T18:36:56+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-13] 2026-11-13: not exercised. 0 'Timeout sending order' and 0 EXIT UNCERTAIN (execution-health-2026-11-13.md); the 46 positions in the eod ledger show no timed-out exit later filled; pages match fills with 0.0 difference."
         }
       ],
       "created_at": "2026-10-31T14:15:18+05:30",
-      "updated_at": "2026-11-04T15:43:35+05:30",
+      "updated_at": "2026-11-13T18:36:56+05:30",
       "plain": "When the broker was slow to confirm a sale, the system wrote the wrong order number on the trade and called it a stop-loss exit. The money was right; the record was wrong."
     },
     {
@@ -255,10 +265,20 @@
           "at": "2026-11-04T15:42:17+05:30",
           "status": "fixed",
           "note": "[eod-cron-2026-11-04] 2026-11-04: not exercised. I looked for an engine restart or startup reconcile in signal_engine_analyze_2026-11-04.log (restart, startup reconcile) and found none during the session."
+        },
+        {
+          "at": "2026-11-12T15:44:46+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-12] 2026-11-12: not exercised. The analyze log shows a single startup at 08:51:52 and no mid-day restart, so the empty one-position-per-symbol cap after a restart did not occur. COFORGE 09:40 was declined by risk_gates 'symbol already held by this strategy', so the cap worked in-session."
+        },
+        {
+          "at": "2026-11-13T18:36:56+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-13] 2026-11-13: restart at 10:15 exercised the path. Startup log '[ORB-PY] Position reconciliation: stored=1 matches broker=1'. No second entry replaced a held position; the symbol-held guard declined BAJFINANCE and M&M re-entries (risk_gates). Held."
         }
       ],
       "created_at": "2026-10-31T14:15:20+05:30",
-      "updated_at": "2026-11-04T15:42:17+05:30",
+      "updated_at": "2026-11-13T18:36:56+05:30",
       "plain": "After a restart, a strategy could buy a stock it already held. The new trade replaced the old one in the system, and the old trade lost its safety stop."
     },
     {
@@ -322,10 +342,20 @@
           "at": "2026-11-04T15:42:17+05:30",
           "status": "fixed",
           "note": "[eod-cron-2026-11-04] 2026-11-04: not exercised. No engine restart or startup reconcile in the log, so the startup path did not run. The CGPOWER multi-strategy time exit is a different path."
+        },
+        {
+          "at": "2026-11-12T15:44:46+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-12] 2026-11-12: not exercised. No restart or startup reconcile after 08:51; the eod reconciliation shows 0 positions still open and 0 broker fills the engine never sent."
+        },
+        {
+          "at": "2026-11-13T18:36:56+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-13] 2026-11-13: partly exercised. Startup reconcile ran at 10:15; ORB-PY reported stored=1 matches broker=1. No leg was closed while another strategy held the same symbol across the restart that I could confirm. eod ledger shows 0 untracked broker fills. Not fully exercised."
         }
       ],
       "created_at": "2026-10-31T14:15:21+05:30",
-      "updated_at": "2026-11-04T15:42:17+05:30",
+      "updated_at": "2026-11-13T18:36:56+05:30",
       "plain": "After a restart, a trade closed by its stop-loss was never recorded if another strategy held the same stock. The loss (HDFCBANK, Rs 1,049) was missing from the books."
     },
     {
@@ -864,10 +894,20 @@
           "at": "2026-11-04T22:06:38+05:30",
           "status": "fixed",
           "note": "updated"
+        },
+        {
+          "at": "2026-11-12T15:44:46+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-12] 2026-11-12: partly exercised. jobs-2026-11-12.md still lists open-day and liveness as WARN because they reported RED, but BUG-020 on the tracker shows open-day RED came from a real failed step in 2026-11-11 close-day, not from this check. Not proven fixed or broken."
+        },
+        {
+          "at": "2026-11-13T18:36:56+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-13] 2026-11-13: exercised. Liveness was RED (first runner cycle and first scan) yet jobs-2026-11-13.md shows it only as WARN 'ran and reported RED', not a failed job. The next morning's open-day check reading 2026-11-12 will show whether that day's close-day row stays OK; today's close-day steps all exited 0."
         }
       ],
       "created_at": "2026-11-04T13:09:16+05:30",
-      "updated_at": "2026-11-04T22:06:38+05:30"
+      "updated_at": "2026-11-13T18:36:56+05:30"
     },
     {
       "id": "BUG-014",
@@ -909,10 +949,20 @@
           "at": "2026-11-04T22:06:39+05:30",
           "status": "fixed",
           "note": "updated"
+        },
+        {
+          "at": "2026-11-12T15:44:46+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-12] 2026-11-12: not exercised. Open-day reported 'OpenAlgo is answering normally' with health status=pass, so the warn-status case did not occur."
+        },
+        {
+          "at": "2026-11-13T18:36:56+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-13] 2026-11-13: not exercised. open-day shows OpenAlgo health status=pass; the warn state did not occur."
         }
       ],
       "created_at": "2026-11-04T13:52:33+05:30",
-      "updated_at": "2026-11-04T22:06:39+05:30"
+      "updated_at": "2026-11-13T18:36:56+05:30"
     },
     {
       "id": "BUG-015",
@@ -963,10 +1013,20 @@
           "at": "2026-11-04T22:06:39+05:30",
           "status": "fixed",
           "note": "updated"
+        },
+        {
+          "at": "2026-11-12T15:44:46+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-12] 2026-11-12: not exercised in the reports I read. I did not check the scheduler auto-login logs for a master contract download error."
+        },
+        {
+          "at": "2026-11-13T18:36:56+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-13] 2026-11-13: not exercised or not confirmed. I grepped log/openalgo_2026-11-13.log for CACHE_INVALIDATE and cache-notification errors and found none; I did not check the master-contract download itself."
         }
       ],
       "created_at": "2026-11-04T13:54:30+05:30",
-      "updated_at": "2026-11-04T22:06:39+05:30"
+      "updated_at": "2026-11-13T18:36:56+05:30"
     },
     {
       "id": "BUG-016",
@@ -1014,10 +1074,20 @@
           "at": "2026-11-04T22:06:39+05:30",
           "status": "fixed",
           "note": "updated"
+        },
+        {
+          "at": "2026-11-12T15:44:46+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-12] 2026-11-12: this run produced fixed-bug notes, the tracker block and section 9 within the time limit. Section 4 has no week-to-date table (evidence not computed in time) and section 6 was not read after a risk_counters query error. Section 4 and 6 gaps are repeats of the original symptom only in part."
+        },
+        {
+          "at": "2026-11-13T18:36:56+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-13] 2026-11-13: exercised. This unattended review covered the sections including week-to-date and tomorrow's readiness; sections 4 and 6 are incomplete (no per-day charges, daily-limit value not read) and are marked as such."
         }
       ],
       "created_at": "2026-11-04T15:27:26+05:30",
-      "updated_at": "2026-11-04T22:06:39+05:30"
+      "updated_at": "2026-11-13T18:36:56+05:30"
     },
     {
       "id": "BUG-017",
@@ -1072,10 +1142,20 @@
           "at": "2026-11-04T22:20:14+05:30",
           "status": "fixed",
           "note": "Full-suite run 22:07-22:19 found 21 failures in test_main_exit.py and test_main_partial_exit.py caused by my own signal-exit guard (a MagicMock position made 'time_exit_left_open' truthy); fixed by testing for exactly True in the follow-up commit. These were not pre-existing failures."
+        },
+        {
+          "at": "2026-11-12T15:44:46+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-12] 2026-11-12: exercised and held. 'Time exit triggered at 14:45 IST' in the analyze log; the two TIME exits (ADANIENT, AXISBANK) were booked with real fills and 0 positions were left open at close."
+        },
+        {
+          "at": "2026-11-13T18:36:56+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-13] 2026-11-13: exercised and held. Time exit triggered at 14:45:04; eod shows 2 TIME exits (AXISBANK, PAYTM), both closed with fill rows; 0 positions open at the close."
         }
       ],
       "created_at": "2026-11-04T15:42:17+05:30",
-      "updated_at": "2026-11-04T22:20:14+05:30"
+      "updated_at": "2026-11-13T18:36:56+05:30"
     },
     {
       "id": "BUG-018",
@@ -1122,10 +1202,20 @@
           "at": "2026-11-04T22:06:39+05:30",
           "status": "fixed",
           "note": "updated"
+        },
+        {
+          "at": "2026-11-12T15:44:46+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-12] 2026-11-12: exercised and held. backfill_cron.log verify lines: 'verify 1m: expected last session 2026-11-12; symbols behind: 0' and 'verify D: ... symbols behind: 0'."
+        },
+        {
+          "at": "2026-11-13T18:36:56+05:30",
+          "status": "fixed",
+          "note": "[eod-cron-2026-11-13] 2026-11-13: exercised and held. backfill_cron.log verify lines: 'verify 1m: ... symbols behind: 0' and 'verify D: ... symbols behind: 0'; value-areas 211/211 coverage. Only a 5s DuckDB lock wait at 15:44."
         }
       ],
       "created_at": "2026-11-04T15:42:17+05:30",
-      "updated_at": "2026-11-04T22:06:39+05:30"
+      "updated_at": "2026-11-13T18:36:56+05:30"
     },
     {
       "id": "BUG-019",
@@ -1163,6 +1253,42 @@
       ],
       "created_at": "2026-11-04T21:16:47+05:30",
       "updated_at": "2026-11-04T21:16:47+05:30"
+    },
+    {
+      "id": "BUG-020",
+      "title": "Yesterday's end-of-day job had a failed step or did not run. (close-day 2026-11-11)",
+      "plain": "Yesterday's end-of-day job had a failed step or did not run.",
+      "kind": "EXECUTION",
+      "severity": "MEDIUM",
+      "status": "open",
+      "area": "ops",
+      "strategies": [],
+      "first_seen": "2026-11-12",
+      "last_seen": "2026-11-12",
+      "occurrences": [
+        "2026-11-12"
+      ],
+      "impact": "Recorded automatically from a failed daily check. The risk level is a default and has not been reviewed.",
+      "evidence": [
+        "Recorded automatically: Open checkpoint on 2026-11-12 at 09:12:04; close-day 2026-11-11: failed steps: ['backfill', 'review']"
+      ],
+      "root_cause": "",
+      "fix": "",
+      "fix_commit": "",
+      "verification": "",
+      "sources": [
+        "workflow-finding:open-day:open-day:close-day <date>",
+        "signal_engine/reports/open-day-2026-11-12.md"
+      ],
+      "history": [
+        {
+          "at": "2026-11-12T15:43:40+05:30",
+          "status": "open",
+          "note": "recorded"
+        }
+      ],
+      "created_at": "2026-11-12T15:43:40+05:30",
+      "updated_at": "2026-11-12T15:43:40+05:30"
     },
     {
       "id": "BUG-021",
@@ -1254,6 +1380,42 @@
       ],
       "created_at": "2026-11-13T09:35:12+05:30",
       "updated_at": "2026-11-13T09:35:12+05:30"
+    },
+    {
+      "id": "BUG-023",
+      "title": "The engine's first check after the open was late or missing. (first runner cycle)",
+      "plain": "The engine's first check after the open was late or missing.",
+      "kind": "EXECUTION",
+      "severity": "MEDIUM",
+      "status": "open",
+      "area": "ops",
+      "strategies": [],
+      "first_seen": "2026-11-13",
+      "last_seen": "2026-11-13",
+      "occurrences": [
+        "2026-11-13"
+      ],
+      "impact": "Recorded automatically from a failed daily check. The risk level is a default and has not been reviewed.",
+      "evidence": [
+        "Recorded automatically: After the open checkpoint on 2026-11-13 at 09:27:01; first runner cycle: pipeline cycle 09:25: evaluated 0, fires 0, submitted 0, skipped 40, late 0 in 7.79s"
+      ],
+      "root_cause": "",
+      "fix": "",
+      "fix_commit": "",
+      "verification": "",
+      "sources": [
+        "workflow-finding:liveness:liveness:first runner cycle",
+        "signal_engine/reports/liveness-2026-11-13.md"
+      ],
+      "history": [
+        {
+          "at": "2026-11-13T15:45:36+05:30",
+          "status": "open",
+          "note": "recorded"
+        }
+      ],
+      "created_at": "2026-11-13T15:45:36+05:30",
+      "updated_at": "2026-11-13T15:45:36+05:30"
     }
   ]
 }
