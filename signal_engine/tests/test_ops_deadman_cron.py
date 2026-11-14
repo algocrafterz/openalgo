@@ -293,8 +293,8 @@ def test_the_flag_makes_the_new_lines_mandatory_and_old_lines_problems():
         assert f"{gone}: the" in text and "must be removed" in text, gone
 
 
-def test_the_flag_is_off_in_the_repository_until_the_maintainer_installs_the_cron():
-    assert jobs.REQUIRE_NEW_SCHEDULE is False
+def test_the_flag_is_on_in_the_repository_after_the_maintainer_installs_the_cron():
+    assert jobs.REQUIRE_NEW_SCHEDULE is True
     assert len(jobs.CRON_LINES) == 7 == len(NEW)
     assert len(jobs.CRON_TO_REMOVE) == 4
 
@@ -310,7 +310,8 @@ def test_the_retry_line_is_not_taken_for_the_plain_close_day_line():
     assert problems == ["close-day: expected 15:36, no line found"]
 
 
-def test_the_old_and_the_new_deadman_time_pass_and_the_old_21_times_do_not():
+def test_the_old_and_the_new_deadman_time_pass_and_the_old_21_times_do_not(monkeypatch):
+    monkeypatch.setattr(jobs, "REQUIRE_NEW_SCHEDULE", False)  # this test covers the old schedule
     for time_fields in ("20 16", "28 16"):
         line = f"{time_fields} * * 1-5 {BASE}/signal_engine/ops/run_upkeep.sh deadman close {LOG}"
         problems, _ = jobs.audit_cron(_cron(dm_close=line))
@@ -321,7 +322,8 @@ def test_the_old_and_the_new_deadman_time_pass_and_the_old_21_times_do_not():
         assert len(problems) == 1, time_fields
 
 
-def test_a_wrong_deadman_time_is_a_problem():
+def test_a_wrong_deadman_time_is_a_problem(monkeypatch):
+    monkeypatch.setattr(jobs, "REQUIRE_NEW_SCHEDULE", False)  # this test covers the old schedule
     line = f"50 22 * * 1-5 {BASE}/signal_engine/ops/run_upkeep.sh deadman close {LOG}"
     problems, _ = jobs.audit_cron(_cron(dm_close=line))
     assert len(problems) == 1 and "deadman close" in problems[0] and "22:50" in problems[0]
@@ -334,7 +336,8 @@ def test_each_missing_kept_line_is_found(key):
     assert "no line found" in problems[0]
 
 
-def test_a_weekday_field_that_is_not_1_5_is_found():
+def test_a_weekday_field_that_is_not_1_5_is_found(monkeypatch):
+    monkeypatch.setattr(jobs, "REQUIRE_NEW_SCHEDULE", False)  # this test covers the old schedule
     problems, _ = jobs.audit_cron(
         _cron(open=f"12 9 * * * {BASE}/signal_engine/ops/run_phase.sh open-day {LOG}")
     )
@@ -347,6 +350,7 @@ def test_a_commented_line_does_not_count():
 
 
 def test_the_audit_check_is_red_only_for_problems_and_amber_for_not_installed(monkeypatch):
+    monkeypatch.setattr(jobs, "REQUIRE_NEW_SCHEDULE", False)  # this test covers the old schedule
     class Done:
         stdout = _cron()
 
@@ -380,6 +384,7 @@ def test_the_cron_lines_in_the_script_headers_are_the_proposed_lines():
 
 
 def test_the_windows_start_times_accept_old_and_new_until_the_flag(monkeypatch):
+    monkeypatch.setattr(jobs, "REQUIRE_NEW_SCHEDULE", False)  # this test covers the old schedule
     for name, (old, new) in jobs.WINDOWS_START_TIMES.items():
         check = jobs.start_time_check(name, {"Start Time": f"{old}:00"})
         assert check.status == "OK" and "pending install" in check.evidence
@@ -445,6 +450,7 @@ def test_deadman_recovers_when_every_due_checkpoint_is_healthy(tmp_path, monkeyp
 
 
 def test_a_twelve_hour_locale_task_time_is_read_not_skipped(monkeypatch):
+    monkeypatch.setattr(jobs, "REQUIRE_NEW_SCHEDULE", False)  # this test covers the old schedule
     assert jobs.task_time_24h("08:50:00") == "08:50"
     assert jobs.task_time_24h("8:50:00 AM") == "08:50"
     assert jobs.task_time_24h("04:31:00 PM") == "16:31"  # zero-padded: the old [:5] read 04:31

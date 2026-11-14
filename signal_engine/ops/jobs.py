@@ -24,7 +24,7 @@ from signal_engine.ops.model import FAIL, OK, REPORTS, WARN, Check, read_phase, 
 #: reports a note. After the maintainer installs the new crontab and the two Windows task changes
 #: (the commands are in the Phase 1b cron proposal), set this to True in the same change: the new
 #: lines become mandatory, an old time is a problem, and a line that should be gone is a problem.
-REQUIRE_NEW_SCHEDULE = False
+REQUIRE_NEW_SCHEDULE = True
 #: ROLLOUT ORDER of the Phase 1b schedule. The reason for each step is in the proposal
 #: (cron_diff.txt) and in the signal_engine/ops/recovery.py docstring:
 #:   1. merge the code (the commits);

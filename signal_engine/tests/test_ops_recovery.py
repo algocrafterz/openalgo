@@ -896,7 +896,7 @@ def test_python_reachable_entry_points_exist():
     from signal_engine.ops import __main__ as cli
 
     assert callable(recovery.retry_main) and callable(recovery.recover_main)
-    assert jobs.REQUIRE_NEW_SCHEDULE is False
+    assert jobs.REQUIRE_NEW_SCHEDULE is True
 
 
 # ---- R1: the login evidence ---------------------------------------------------------------------
