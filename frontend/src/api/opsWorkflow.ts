@@ -34,12 +34,23 @@ export interface WorkflowVerdict {
   line: string
 }
 
+/** What the close-day review achieved, read from its report and not from its exit code. */
+export interface WorkflowReview {
+  outcome: 'verdict' | 'no_verdict' | 'limit_or_auth' | 'failed'
+  cause: string
+  text: string
+  exit: number | null
+  note: string
+}
+
 export interface WorkflowDay {
   day: string
   phases: WorkflowPhase[]
   checks: Record<string, WorkflowCheckResult>
   reports: string[]
   verdict: WorkflowVerdict | null
+  /** Absent in an older server response: the exit code then decides, as before. */
+  review?: WorkflowReview
 }
 
 interface WorkflowResponse {

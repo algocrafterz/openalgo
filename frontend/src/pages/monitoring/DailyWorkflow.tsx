@@ -473,7 +473,9 @@ function Steps({
                   </div>
                 ) : (
                   <div className={`text-[13px] ${TONE_TEXT.warn}`}>
-                    Ran and reported RED. See the findings.
+                    {phase === 'close-day' && s.step === 'review' && day.review
+                      ? `${day.review.text} (exit code ${s.exit} is diagnostic only)`
+                      : 'Ran and reported RED. See the findings.'}
                   </div>
                 ))}
             </div>

@@ -139,6 +139,25 @@ export function buildFindings(day: WorkflowDay): Finding[] {
       }
     }
     for (const s of day.phases.find((p) => p.phase === phase)?.steps ?? []) {
+      if (phase === 'close-day' && s.step === 'review' && day.review) {
+        // Judged by what the review produced. A complete verdict is not a finding, whatever the
+        // exit code; no verdict or a usage limit is a warning; a genuine failure is critical.
+        const r = day.review
+        if (r.outcome === 'verdict' && !r.cause) continue
+        out.push({
+          id: `${phase}:step:${s.step}`,
+          group: 'step',
+          name: s.step,
+          severity: r.outcome === 'failed' ? 'critical' : 'warning',
+          category: 'jobs',
+          title: r.text,
+          evidence: `review ${r.outcome}${r.cause ? `, ${r.cause}` : ''}; step exit ${s.exit} at ${s.started}`,
+          phase,
+          checkedAt: s.started,
+          source: 'Workflow step',
+        })
+        continue
+      }
       if (!stepFailed(day, phase, s)) continue
       out.push({
         id: `${phase}:step:${s.step}`,
@@ -210,6 +229,10 @@ function resultKey(phase: PhaseKey, step: string): string | null {
  */
 export function stepFailed(day: WorkflowDay, phase: PhaseKey, step: WorkflowStep): boolean {
   if (step.exit === 0) return false
+  // The review is judged by its outcome, never by the exit code of the process that ran it.
+  if (phase === 'close-day' && step.step === 'review' && day.review) {
+    return day.review.outcome === 'failed'
+  }
   const key = resultKey(phase, step.step)
   const reportedRed = step.exit === 1 && key !== null && day.checks[key]?.verdict === 'RED'
   return !reportedRed

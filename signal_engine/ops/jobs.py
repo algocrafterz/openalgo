@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 
+from signal_engine.ops import verdict
 from signal_engine.ops.model import FAIL, OK, REPORTS, WARN, Check, read_phase, write_phase
 
 #: Windows task -> scheduled HH:MM. Their own scripts live in signal_engine/scripts/*.ps1.
@@ -127,13 +128,32 @@ def _phase_checks(day: str, folder: str = REPORTS) -> list[Check]:
         steps = [s for s in steps if len(s) == 4]
         failed = [s for s in steps if s[3] != "0"]
         reported = [s for s in failed if reported_red(phase, s[0], s[1], s[3], day, folder)]
+        # The review is judged by what it produced, not by its exit code (verdict.review_outcome).
+        review = [s for s in failed if phase == "close-day" and s[0] == "review"]
+        if review:
+            outcome = verdict.review_outcome(day, folder)
+            evidence_note = f"; review: {outcome['outcome']}"
+            if outcome["outcome"] != "failed":
+                reported = reported + review
+        else:
+            evidence_note = ""
+        quiet_review = ""
+        if phase == "close-day" and not review:
+            outcome = verdict.review_outcome(day, folder)
+            if any(s[0] == "review" for s in steps) and outcome["outcome"] != "verdict":
+                quiet_review = f"; review exited 0 but gave no verdict ({outcome['outcome']})"
         bad = [s for s in failed if s not in reported]
         evidence = ", ".join(f"{s[0]} {s[1]}-{s[2]} exit {s[3]}" for s in steps)
         if bad:
             status = FAIL
         elif reported:
             status = WARN
-            evidence += "; it ran and reported RED (see that day's report)"
+            if any(s not in review for s in reported):
+                evidence += "; it ran and reported RED (see that day's report)"
+            evidence += evidence_note
+        elif quiet_review:
+            status = WARN
+            evidence += quiet_review
         else:
             status = OK
         checks.append(Check(f"phase {phase}", status, evidence or "no steps recorded"))

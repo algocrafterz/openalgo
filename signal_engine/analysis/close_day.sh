@@ -76,6 +76,8 @@ fi
 remaining() { local left=$(( DEADLINE - $(date +%s) )); [ "$left" -gt 30 ] && echo "$left" || echo 30; }
 
 printf 'step\tstarted\tended\texit\n' > "$STATUS"
+
+PY="$(command -v python3 || echo /usr/bin/python3)"
 step() {  # step NAME CMD... : run with the deadline as its timeout, record the outcome
   local name="$1"; shift
   local started; started="$(date +%T)"
@@ -128,6 +130,9 @@ if [ "$REVIEW" -eq 1 ]; then
     { cat "$REVIEW_REPORT.partial"; echo; echo "> Review stopped at the 15:58 deadline: incomplete, no tracker changes applied. Run /close-day."; } > "$REVIEW_REPORT"
     rm -f "$REVIEW_REPORT.partial"
   fi
+  # Store what the review achieved (verdict, no verdict, limit or sign-in, failure), read from its
+  # report; its exit code is kept as diagnostic evidence only.
+  PYTHONPATH="$REPO" "$PY" -m signal_engine.ops.verdict record-review --day "$DAY" >> "$LOGS/ops_cron.log" 2>&1 || true
   NOTIFY_FLAG=""; [ "$DAY" = "$(date +%F)" ] || NOTIFY_FLAG="--dry-run"  # only same-day runs send
   step notify "${OPS[@]}" notify close-day --day "$DAY" $NOTIFY_FLAG >> "$LOGS/ops_cron.log" 2>&1
 fi

@@ -88,8 +88,8 @@ _PLAIN: dict[str, tuple[str, str]] = {
     "signals reaching": ("Signals are reaching the engine.", "No signals have reached the engine."),
     # close-day: jobs
     "crontab": (
-        "All three daily checkpoints are scheduled.",
-        "A daily checkpoint is missing from the schedule.",
+        "Every scheduled ops job is on the schedule.",
+        "A scheduled ops job is missing from the schedule or runs at the wrong time.",
     ),
     "phase ": (
         "The {subject} checkpoint ran cleanly.",

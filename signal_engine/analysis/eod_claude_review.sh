@@ -121,6 +121,32 @@ run. That is expected: do not report it as a failure.
 PROMPT_EOF
 
 echo "=== EOD Claude review $DAY ==="
+# Every attempt keeps its own files, never overwritten:
+#   reports/review-attempts/<day>-<HHMMSS>.out   what the CLI wrote to stdout
+#   reports/review-attempts/<day>-<HHMMSS>.err   what it wrote to stderr
+#   reports/review-attempts/<day>-<HHMMSS>.exit  its exit code (absent: the attempt was killed)
+#   reports/review-attempts/<day>-latest.txt     a one-line pointer to the newest attempt id
+# A pointer file, not a symlink: symlinks do not survive the Windows reader of the WSL share.
+# The exit code is diagnostic evidence only; signal_engine/ops/verdict.py reads the verdict.
+ATTEMPTS="$REPORTS/review-attempts"
+mkdir -p "$ATTEMPTS"
+ATTEMPT="$DAY-$(date +%H%M%S)"
+n=1
+while [ -e "$ATTEMPTS/$ATTEMPT.out" ] || [ -e "$ATTEMPTS/$ATTEMPT.exit" ]; do n=$(( n + 1 )); ATTEMPT="$DAY-$(date +%H%M%S)-$n"; done
+: > "$ATTEMPTS/$ATTEMPT.out"
+: > "$ATTEMPTS/$ATTEMPT.err"
+printf '%s\n' "$ATTEMPT" > "$ATTEMPTS/$DAY-latest.txt.tmp.$$" && mv -f "$ATTEMPTS/$DAY-latest.txt.tmp.$$" "$ATTEMPTS/$DAY-latest.txt"
+write_exit() { printf '%s\n' "$1" > "$ATTEMPTS/$ATTEMPT.exit.tmp.$$" && mv -f "$ATTEMPTS/$ATTEMPT.exit.tmp.$$" "$ATTEMPTS/$ATTEMPT.exit"; }
+# The report keeps its old shape: stderr (warnings such as a sign-in expiry notice) then stdout.
+compose() { { cat "$ATTEMPTS/$ATTEMPT.err"; cat "$ATTEMPTS/$ATTEMPT.out"; } > "$OUT.partial"; }
+CLAUDE_PID=""
+on_term() {  # the caller's deadline: keep what was written, as a .partial that the caller finishes
+  [ -n "$CLAUDE_PID" ] && kill -TERM "$CLAUDE_PID" 2>/dev/null
+  compose
+  write_exit 143
+  exit 143
+}
+trap on_term TERM INT
 # --model is pinned: without it the CLI resolved Haiku on 2026-10-31, 11-02 and 11-03, and those
 # runs skipped mandatory work. The review needs a consistent reasoning level.
 "$CLAUDE_BIN" -p "$PROMPT" \
@@ -129,10 +155,17 @@ echo "=== EOD Claude review $DAY ==="
   --disallowedTools Edit,Write,NotebookEdit \
   --dangerously-skip-permissions \
   --output-format text \
-  > "$OUT.partial" 2>&1
+  > "$ATTEMPTS/$ATTEMPT.out" 2> "$ATTEMPTS/$ATTEMPT.err" &
+CLAUDE_PID=$!
+wait "$CLAUDE_PID"
 status=$?
+trap - TERM INT  # the attempt is over: a later signal must not rebuild a .partial
+write_exit "$status"
+compose
+# A report from an earlier attempt is kept next to the attempt files before it is replaced.
+[ -f "$OUT" ] && cp -p "$OUT" "$ATTEMPTS/$ATTEMPT.previous-report.md"
 mv -f "$OUT.partial" "$OUT"  # whole report or none: a reader never sees it half-written
-echo "report -> $OUT (exit $status)"
+echo "report -> $OUT (exit $status, attempt $ATTEMPT)"
 
 # The review is read-only; the tracker is written here, through its validating CLI, and only
 # with the add/seen/note actions an unattended run may take (signal_engine/bugs/store.py).

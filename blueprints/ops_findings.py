@@ -24,6 +24,7 @@ from blueprints.ops_workflow import (
 )
 from limiter import limiter
 from signal_engine.bugs import store
+from signal_engine.ops.verdict import review_outcome
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -120,6 +121,35 @@ def _step_failed(day_checks: dict, phase: str, step: dict) -> bool:
     return not red
 
 
+def _review_findings(day: str, folder: str, step: dict) -> list[dict]:
+    """The close-day review is judged by what it produced, never by its exit code alone.
+
+    verdict (complete)  no finding: the verdict carries the outcome, a non-zero exit is diagnostic.
+    verdict, GREEN made AMBER because the evidence is incomplete, no_verdict, limit_or_auth
+                        a WARN: the day is not confirmed, and the next action is in `plain`.
+    failed              a FAIL: a genuine failure, with where to look.
+    """
+    outcome = review_outcome(day, folder)
+    kind = outcome["outcome"]
+    if kind == "verdict" and not outcome["cause"]:
+        return []
+    status = "FAIL" if kind == "failed" else "WARN"
+    return [
+        {
+            "phase": "close-day",
+            "group": "step",
+            "name": "review",
+            "status": status,
+            "evidence": (
+                f"review {kind}{', ' + outcome['cause'] if outcome['cause'] else ''}; "
+                f"step exit {step['exit']} at {step['started']}"
+            ),
+            "plain": outcome["text"],
+            "checked_at": step["started"],
+        }
+    ]
+
+
 def enumerate_findings(day: str, folder: str | None = None) -> list[dict]:
     """Every finding the page can show for a day, from the stored results only."""
     folder = folder or REPORTS_DIR
@@ -145,6 +175,9 @@ def enumerate_findings(day: str, folder: str | None = None) -> list[dict]:
                         }
                     )
         for s in steps:
+            if phase == "close-day" and s["step"] == "review":
+                found.extend(_review_findings(day, folder, s))
+                continue
             if _step_failed({k: v for k, v in checks.items() if v}, phase, s):
                 found.append(
                     {

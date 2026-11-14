@@ -13,6 +13,8 @@ import re
 from flask import Blueprint, jsonify, request
 
 from limiter import limiter
+from signal_engine.ops.model import read_run
+from signal_engine.ops.verdict import review_outcome
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -88,6 +90,17 @@ def close_day_verdict(day: str, folder: str = REPORTS_DIR) -> dict | None:
     return {"verdict": data["verdict"], "line": str(data.get("line", ""))[:400]}
 
 
+def _run_summary(phase: str, day: str, folder: str) -> dict:
+    """The run manifest state of a phase (legacy or missing for an old day or a missed run)."""
+    run = read_run(phase, day, folder)
+    return {
+        "state": run["state"],
+        "started_at": run.get("started_at"),
+        "ended_at": run.get("ended_at"),
+        "note": run.get("note", ""),
+    }
+
+
 def day_view(day: str, folder: str = REPORTS_DIR) -> dict:
     phases = [{"phase": p, "steps": _steps(p, day, folder)} for p in PHASES]
     checks = {name: data for name in CHECKED if (data := _checked(name, day, folder))}
@@ -96,12 +109,28 @@ def day_view(day: str, folder: str = REPORTS_DIR) -> dict:
         if os.path.isdir(folder)
         else []
     )
+    review = review_outcome(day, folder)
+    # The review's own reading wins over the raw block: a GREEN verdict on an incomplete report
+    # shows as AMBER, as the Telegram line does.
+    verdict = (
+        {"verdict": review["verdict"], "line": review["line"]}
+        if review["outcome"] == "verdict"
+        else None
+    )
     return {
         "day": day,
         "phases": phases,
         "checks": checks,
         "reports": reports,
-        "verdict": close_day_verdict(day, folder),
+        "verdict": verdict,
+        "review": {
+            "outcome": review["outcome"],
+            "cause": review["cause"],
+            "text": review["text"],
+            "exit": review["exit"],
+            "note": review["note"],
+        },
+        "runs": {p: _run_summary(p, day, folder) for p in PHASES},
     }
 
 

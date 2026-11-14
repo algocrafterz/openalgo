@@ -162,6 +162,39 @@ describe('stepFailed', () => {
   })
 })
 
+describe('review outcome', () => {
+  const review = { step: 'review', started: '15:43:34', ended: '15:43:40', exit: 1 }
+  const withReview = (r: NonNullable<WorkflowDay['review']>, exit = 1) => {
+    const d = day({ review: r })
+    d.phases[2].steps = [{ ...review, exit }]
+    return d
+  }
+  const base = { cause: '', text: 'The AI review failed. Next: read the logs.', exit: 1, note: '' }
+  it('does not fail a review that wrote a complete verdict, whatever its exit code', () => {
+    const d = withReview({ ...base, outcome: 'verdict' })
+    expect(stepFailed(d, 'close-day', d.phases[2].steps![0])).toBe(false)
+    expect(buildFindings(d)).toHaveLength(0)
+  })
+  it('warns, not fails, when the review gave no verdict or hit a usage limit', () => {
+    for (const outcome of ['no_verdict', 'limit_or_auth'] as const) {
+      const d = withReview({ ...base, outcome, text: 'The AI review could not run.' })
+      const f = buildFindings(d)
+      expect(f).toHaveLength(1)
+      expect(f[0].severity).toBe('warning')
+      expect(f[0].title).toBe('The AI review could not run.')
+    }
+  })
+  it('warns when a GREEN verdict was lowered because the report is incomplete', () => {
+    const d = withReview({ ...base, outcome: 'verdict', cause: 'incomplete' }, 0)
+    expect(buildFindings(d)[0].severity).toBe('warning')
+  })
+  it('fails a genuinely failed review', () => {
+    const d = withReview({ ...base, outcome: 'failed' })
+    expect(stepFailed(d, 'close-day', d.phases[2].steps![0])).toBe(true)
+    expect(buildFindings(d)[0].severity).toBe('critical')
+  })
+})
+
 describe('defaultPhase', () => {
   const f = (
     phase: 'open-day' | 'liveness' | 'close-day',

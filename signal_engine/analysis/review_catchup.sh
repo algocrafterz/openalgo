@@ -35,8 +35,13 @@ fi
 
 UV="$(command -v uv || echo /home/anand/.local/bin/uv)"  # cron has a minimal PATH
 echo "=== review catch-up $DAY $(date +%T) ==="
+STARTED="$(date +%T)"
 timeout --kill-after=15 1500 "$REPO/signal_engine/analysis/eod_claude_review.sh" "$DAY"
 rc=$?
+# The newest review row of the status file must describe this attempt, or the page and the
+# Telegram line keep reporting the earlier attempt's exit code (2026-11-13). Same append-a-row
+# convention as a step run again from the page. The manifest holds the review outcome as well.
+printf '%s\t%s\t%s\t%s\n' review "$STARTED" "$(date +%T)" "$rc" >> "$STATUS"
 
 if [ -f "$REPORT.partial" ]; then
   # The timeout stopped the review: keep what it wrote, as close_day.sh does.
@@ -44,9 +49,13 @@ if [ -f "$REPORT.partial" ]; then
   rm -f "$REPORT.partial"
 fi
 
+PYTHONPATH="$REPO" "${PY:-$(command -v python3 || echo /usr/bin/python3)}" -m signal_engine.ops.verdict record-review --day "$DAY" || true
 if [ -f "$REPORT" ] && grep -q '^```close-day-verdict' "$REPORT"; then
   # A real verdict now exists: send the day's corrected Telegram line.
+  NSTART="$(date +%T)"
   env PYTHONPATH=. "$UV" run python -m signal_engine.ops notify close-day --day "$DAY"
+  nrc=$?
+  printf '%s\t%s\t%s\t%s\n' notify "$NSTART" "$(date +%T)" "$nrc" >> "$STATUS"
 else
   echo "$DAY: still no verdict (review exit $rc). Next try is the next scheduled catch-up."
 fi
