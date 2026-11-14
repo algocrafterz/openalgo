@@ -5,7 +5,7 @@ description: The single end-of-day entry point for the OpenAlgo algo system - "/
 
 # Close the day
 
-One prompt, one report, finished by 16:00 IST. The building blocks keep their own detail:
+One prompt, one report, finished by 16:25 IST. The building blocks keep their own detail:
 `eod` (regression triage), `paper-review` (per strategy, weekly), `execution-health`,
 `bug-tracker`, `data-check`. This skill decides the order and what goes in the report.
 
@@ -13,33 +13,33 @@ One prompt, one report, finished by 16:00 IST. The building blocks keep their ow
 
 | Time | What | Where |
 | --- | --- | --- |
-| 08:50 | OpenAlgo start, broker login, engine start | Windows task `openAlgoAutoStart` |
+| 08:30 | OpenAlgo start, broker login, engine start (the task has a 10 h limit) | Windows task `openAlgoAutoStart` |
+| 08:36 | **recover**: retries only the open steps of the previous trading day; stops by 08:55; sends nothing on a clean day | cron, `ops/run_upkeep.sh recover` |
 | 09:10 | BreakingTrade poller start | Windows task `breakingTradeAutoStart` |
 | 09:12 | **open-day**: readiness checks; Telegram only if RED (`/open-day`) | cron, `signal_engine/ops/run_phase.sh` |
 | 09:27 | **liveness**: first cycle, first scan, storms; Telegram only if RED | cron, `run_phase.sh` |
 | 14:45 | Engine time exit, each strategy's own legs | signal_engine |
 | 14:55 | Square-off failsafe | Windows task `openAlgoSquareOff` |
-| 15:35 | Engine stopped | Windows task `breakingTradeAutoStop` |
+| 15:35 | BreakingTrade poller stopped | Windows task `breakingTradeAutoStop` |
 | 15:36 | **close-day**: backfill (bg), eod, execution_health, logs, weekly (Fri), value_areas, jobs, track, review, notify | cron, `close_day.sh` |
 | ~15:50 | Report, tracker updates, the day's one Telegram line | `eod-<day>-claude-review.md` |
-| 15:58 | Hard deadline inside `close_day.sh` | |
-| 16:00 | OpenAlgo stopped | Windows task `openAlgoAutoStop` |
-| 08:56 | **overnight retry**: redoes the previous session's data download once if its latest backfill row failed; only before 09:10, never twice for a day, labelled automatic on `/logs/workflow` | cron, `ops/run_upkeep.sh retry-failed` |
-| 09:40, 16:20 | **dead-man**: one plain Telegram line when the 09:12/09:27 (09:40 run) or 15:36 (16:20 run) checkpoint left no status file; skips weekends and NSE holidays | cron, `ops/run_upkeep.sh deadman` |
-| 16:30 | **auto-fix (Tier 1)**: one low-risk bug fixed on a side branch `autofix/<BUG>`, never merged; no-op when none qualifies (`bug-tracker` skill) | cron, `analysis/autofix.sh` |
-| 18:35, 21:05 | **review catch-up**: reruns only the review (and sends the corrected Telegram line) when the day has no `close-day-verdict` block; a no-op otherwise | cron, `analysis/review_catchup.sh` |
+| 16:01 | **close-day retry**: retries only the failed or incomplete steps and keeps the earlier attempts; soft deadline 16:25, hard end 16:27 | cron, `close_day.sh --retry` |
+| 09:40, 16:28 | **dead-man**: one plain Telegram line when the 09:12/09:27 (09:40 run) or 15:36 and 16:01 (16:28 run) checkpoint left no status file or an incomplete or failed one; the 16:28 run judges the day; skips weekends and NSE holidays | cron, `ops/run_upkeep.sh deadman` |
+| 16:31 | OpenAlgo stopped; the engine stops with it | Windows task `openAlgoAutoStop` |
 
-Every phase writes `signal_engine/reports/<phase>-<day>-status.tsv`; all of it is on `/logs/workflow`.
+Every phase writes `signal_engine/reports/<phase>-<day>-status.tsv` and a manifest `signal_engine/reports/<phase>-<day>-run.json`; review attempts are under `signal_engine/reports/review-attempts/`. All of it is on `/logs/workflow`. There are no evening catch-up jobs, no retry-failed job and no auto-fix job. The review outcome is judged by its `close-day-verdict` block, not by its exit code.
 
-After 16:00 OpenAlgo is down: a missed tradebook snapshot or backfill cannot be redone until the
+After 16:31 OpenAlgo is down: a missed tradebook snapshot or backfill cannot be redone until the
 next start. Say so; do not pretend the numbers are fill-backed.
+
+Known limits: the deployed `createTaskOpenAlgoScheduler.ps1` still hardcodes the old times (08:50, 16:00, 8 h), so running it again undoes the new times. The deployed `openalgoctl.ps1` has no trading-day gate, so the stack starts on holidays. The watchdog window ends at 16:00, so the 16:01 retry and the 16:28 dead-man run without watchdog cover.
 
 ## Interactive run (/close-day)
 
 1. **Did the day close?** Read `signal_engine/reports/close-day-<day>-status.tsv`. Every step
    should show exit 0 (`eod` exit 2 = tradebook snapshot failed). Missing file = the cron did not
-   run. If it is before 15:58 and OpenAlgo is up, run `./signal_engine/analysis/close_day.sh
-   --no-review` for the missing deterministic steps; after 16:00, report what is missing.
+   run. If it is before 16:25 and OpenAlgo is up, run `./signal_engine/analysis/close_day.sh
+   --no-review` for the missing deterministic steps; after 16:31, report what is missing.
 2. **Read, do not redo.** If the unattended review exists (`eod-<day>-claude-review.md`), start
    from it: check its claims that matter (P&L, any HIGH item) against the sources, then extend it.
    If it is missing or cut off by the deadline, do the review below yourself.
@@ -125,7 +125,7 @@ Same report and order, with these limits:
 - Failed checks do not depend on the review: the `track` step (`python -m signal_engine.ops track`)
   records every FAIL in the tracker in plain code, once per finding and day. Keep it that way;
   do not move tracker writes back behind the AI review.
-- A step re-run from `/logs/workflow` (or the overnight retry) appends a row to the day's status
+- A step re-run from `/logs/workflow` (or the 16:01 retry or the 08:36 recover job) appends a row to the day's status
   file; the latest row per step is the truth, and a successful re-run also redoes the dependent
   value-areas and scheduled-jobs checks. Read the whole file, not just the last line, when auditing.
 - A sleeping PC makes `timeout`-bounded steps fire late (wall clock jumps) and the broker session
