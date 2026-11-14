@@ -480,3 +480,58 @@ def test_an_unreadable_task_time_is_a_warn_that_says_so_not_a_silent_skip():
     # no start time at all (Task Scheduler says N/A or leaves it empty) stays a silent None
     assert jobs.start_time_check("openAlgoAutoStart", {"Start Time": ""}) is None
     assert jobs.start_time_check("openAlgoAutoStart", {"Start Time": "N/A"}) is None
+
+
+#: Scripts that cron runs by path, and scripts that close_day.sh runs by path.
+DIRECT_SCRIPTS = (
+    "signal_engine/analysis/close_day.sh",
+    "signal_engine/analysis/weekly.sh",
+    "signal_engine/ops/run_phase.sh",
+    "signal_engine/ops/run_upkeep.sh",
+)
+
+
+def _mode_problems(repo, scripts):
+    """Name each script that is not executable on disk or not 100755 in the git index."""
+    import os
+    import shutil
+    import subprocess
+
+    if shutil.which("git") is None:
+        pytest.skip("git is not available")
+    problems = []
+    for rel in scripts:
+        if not os.access(repo / rel, os.X_OK):
+            problems.append(f"{rel}: not executable on disk")
+        out = subprocess.run(
+            ["git", "--no-optional-locks", "ls-files", "-s", rel],
+            cwd=repo, capture_output=True, text=True,
+        ).stdout.split()
+        if not out:
+            pytest.skip("not a git checkout")
+        if out[0] != "100755":
+            problems.append(f"{rel}: index mode {out[0]}")
+    return problems
+
+
+def test_scripts_that_cron_runs_directly_are_executable_and_recorded_as_100755():
+    from pathlib import Path
+
+    assert _mode_problems(Path(__file__).resolve().parents[2], DIRECT_SCRIPTS) == []
+
+
+@pytest.mark.parametrize("disk_mode, index_flag, expected", [
+    (0o755, "-chmod=+x", []),
+    (0o644, "-chmod=+x", ["a.sh: not executable on disk"]),
+    (0o755, "-chmod=-x", ["a.sh: index mode 100644"]),
+])
+def test_the_mode_check_finds_a_wrong_mode(tmp_path, disk_mode, index_flag, expected):
+    import subprocess
+
+    (tmp_path / "a.sh").write_text("#!/bin/sh\n")
+    (tmp_path / "a.sh").chmod(disk_mode)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "a.sh"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "update-index", index_flag.replace("-chmod", "--chmod"), "a.sh"],
+                   cwd=tmp_path, check=True)
+    assert _mode_problems(tmp_path, ("a.sh",)) == expected
