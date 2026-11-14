@@ -107,6 +107,40 @@ _ID = re.compile(r"^BUG-\d{1,6}$")
 _COMMIT = re.compile(r"^[0-9A-Za-z._/-]{4,80}$")
 MAX_SHORT = 80
 MAX_TEXT = 4000
+#: Largest request body these write routes parse. Checked per route, before parsing, because the
+#: app sets no MAX_CONTENT_LENGTH (it would also cap uploads elsewhere). Fields cap at MAX_TEXT.
+MAX_BODY_BYTES = 64 * 1024
+BODY_TOO_LARGE = "The request is too large."
+
+
+class BodyTooLarge(ValueError):
+    """The request body is over MAX_BODY_BYTES."""
+
+
+def read_json_body():
+    """The JSON body, or None when it is not valid JSON. Raises BodyTooLarge before parsing.
+
+    A declared Content-Length is checked first. A chunked request has none, so its body is read
+    in pieces and refused as soon as it passes the cap, never held whole.
+    """
+    length = request.content_length
+    if length is not None:
+        if length > MAX_BODY_BYTES:
+            raise BodyTooLarge(BODY_TOO_LARGE)
+        return request.get_json(silent=True)
+    chunks, size = [], 0
+    while size <= MAX_BODY_BYTES:
+        chunk = request.stream.read(min(8192, MAX_BODY_BYTES + 1 - size))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+    if size > MAX_BODY_BYTES:
+        raise BodyTooLarge(BODY_TOO_LARGE)
+    try:
+        return json.loads(b"".join(chunks))
+    except ValueError:
+        return None
 
 
 class ActionError(ValueError):
@@ -219,7 +253,10 @@ ACTIONS = ("assign", "start", "note", "fix", "verify", "reopen", "wontfix")
 @check_session_validity
 @limiter.limit(BUG_TRACKER_WRITE_LIMIT)
 def bug_action_route(bug_id: str, action: str):
-    payload = request.get_json(silent=True)
+    try:
+        payload = read_json_body()
+    except BodyTooLarge as exc:
+        return _error(exc, 413)
     if not isinstance(payload, dict):
         return _error(ActionError("The request was not understood."), 400)
     try:

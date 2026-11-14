@@ -14,7 +14,7 @@ import re
 
 from flask import Blueprint, jsonify, request
 
-from blueprints.bug_tracker import TRACKER_PATH
+from blueprints.bug_tracker import TRACKER_PATH, BodyTooLarge, read_json_body
 from blueprints.ops_workflow import (
     _DAY,
     PHASES,
@@ -343,7 +343,10 @@ def _error(exc: Exception, status: int):
 @check_session_validity
 @limiter.limit(OPS_FINDING_WRITE_LIMIT)
 def report_finding_route():
-    payload = request.get_json(silent=True)
+    try:
+        payload = read_json_body()
+    except BodyTooLarge as exc:
+        return _error(exc, 413)
     if not isinstance(payload, dict):
         return _error(FindingError("The request was not understood."), 400)
     try:
