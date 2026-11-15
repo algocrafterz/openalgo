@@ -79,6 +79,40 @@ describe('matchesQuery', () => {
   it('treats a blank query as match-all', () => {
     expect(matchesQuery(SAMPLE[0], '   ')).toBe(true)
   })
+  it('searches owner, evidence, history, verification and its reference', () => {
+    const b = bug({
+      owner: 'Priya',
+      evidence: ['trades.db row 3501 booked under stop 2611'],
+      history: [
+        {
+          at: '2026-11-02T10:00:00+05:30',
+          status: 'open',
+          note: 'severity MEDIUM -> HIGH: wrong order risk',
+        },
+      ],
+      verification: 'held across five sessions',
+      verification_ref: { kind: 'test', ref: 'signal_engine/tests/test_stops.py::test_restart' },
+      fix_commit: 'abc1234',
+      fix_explanation: 'sweeps orphan stops',
+    })
+    for (const q of [
+      'priya',
+      'row 3501',
+      'wrong order',
+      'five sessions',
+      'test_restart',
+      'abc1234',
+      'orphan',
+    ])
+      expect(matchesQuery(b, q)).toBe(true)
+    expect(matchesQuery(b, 'nobody-here')).toBe(false)
+    expect(matchesQuery(bug({ owner: 'Priya' }), 'ravi')).toBe(false)
+  })
+  it('still works for an old record with no owner, reference or history lists', () => {
+    const old = bug({ owner: undefined, evidence: undefined as never, history: undefined as never })
+    expect(matchesQuery(old, 'title')).toBe(true)
+    expect(matchesQuery(old, 'priya')).toBe(false)
+  })
 })
 
 describe('counts and visibility', () => {

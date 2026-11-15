@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bug as BugIcon, ChevronDown, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react'
-import { type ReactNode, useMemo, useState } from 'react'
+import { type ReactNode, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import {
   type Bug,
@@ -9,6 +9,7 @@ import {
   type BugKind,
   type BugSeverity,
   type BugStatus,
+  type BugVerificationKind,
   bugsApi,
 } from '@/api/bugs'
 import { StatusBadge, TONE_STYLE, TONE_TEXT, type Tone } from '@/components/ops/StatusBadge'
@@ -57,6 +58,8 @@ import {
   BUG_CATEGORIES,
   type BugCategoryKey,
   buildActionBody,
+  buildSeverityBody,
+  buildVerificationRef,
   categoryLabel,
   categoryOfBug,
   evidenceRefs,
@@ -64,14 +67,19 @@ import {
   type LifecycleStep,
   lastUpdated,
   lifecycle,
+  MAX_VERIFICATION_REF,
   nextAction,
   ownerLabel,
   readableSources,
   reportedFromWorkflow,
+  returnFocus,
+  VERIFICATION_KINDS,
   verificationMethods,
   wasReopened,
 } from '@/lib/bugModel'
 import { showToast } from '@/utils/toast'
+
+const SEVERITY_ORDER: BugSeverity[] = ['HIGH', 'MEDIUM', 'LOW']
 
 const GROUPS: { key: PageGroup; label: string; hint: string }[] = [
   {
@@ -225,7 +233,15 @@ function ActionDialog({
   onClose: () => void
 }) {
   const spec = ACTION_SPECS[action]
+  // The dialog is mounted without a trigger: remember the button that opened it so that focus can
+  // return there however it closes (Escape, Cancel or a saved action).
+  const opener = useRef<Element | null>(document.activeElement)
   const [form, setForm] = useState<ActionForm>({})
+  const [severity, setSeverity] = useState<BugSeverity>(
+    SEVERITY_ORDER.find((s) => s !== bug.severity) ?? 'HIGH'
+  )
+  const [refKind, setRefKind] = useState<BugVerificationKind>('test')
+  const [refText, setRefText] = useState('')
   const [error, setError] = useState<string | null>(null)
   const client = useQueryClient()
   const mutation = useMutation({
@@ -243,42 +259,108 @@ function ActionDialog({
   })
   const submit = () => {
     setError(null)
+    if (action === 'severity') {
+      const sev = buildSeverityBody(bug.severity, severity, form.reason ?? '')
+      if (!sev.ok) return setError(sev.error)
+      return mutation.mutate(sev.body)
+    }
     const built = buildActionBody(action, form)
     if (!built.ok) return setError(built.error)
+    if (action === 'verify') {
+      const ref = buildVerificationRef(refKind, refText)
+      if (!ref.ok) return setError(ref.error)
+      if (ref.ref) built.body.verification_ref = ref.ref
+    }
     mutation.mutate(built.body)
   }
   return (
     <Dialog open onOpenChange={(open) => !open && !mutation.isPending && onClose()}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent
+        className="sm:max-w-lg"
+        onCloseAutoFocus={(e) => {
+          e.preventDefault()
+          returnFocus(opener.current)
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{spec.title}</DialogTitle>
           <DialogDescription>
             {bug.id}: {bug.title}. {spec.description}
           </DialogDescription>
         </DialogHeader>
-        {spec.fields.map((f) => (
-          <div key={f.key} className="space-y-1">
-            <Label htmlFor={`ba-${f.key}`}>{f.label}</Label>
-            {f.multiline ? (
-              <Textarea
-                id={`ba-${f.key}`}
-                rows={3}
-                maxLength={4000}
-                value={form[f.key] ?? ''}
-                onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
-              />
-            ) : (
-              <Input
-                id={`ba-${f.key}`}
-                maxLength={80}
-                value={form[f.key] ?? ''}
-                onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
-              />
-            )}
+        {action === 'severity' && (
+          <div className="space-y-1">
+            <Label htmlFor="ba-severity">New risk level (now {RISK[bug.severity].label})</Label>
+            <Select value={severity} onValueChange={(v) => setSeverity(v as BugSeverity)}>
+              <SelectTrigger id="ba-severity" aria-label="New risk level">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SEVERITY_ORDER.filter((s) => s !== bug.severity).map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {RISK[s].label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-        ))}
+        )}
+        {spec.fields.map((f) => {
+          const bad = error === `${f.label} is required.`
+          const invalid = bad ? { 'aria-invalid': true, 'aria-describedby': 'ba-error' } : {}
+          return (
+            <div key={f.key} className="space-y-1">
+              <Label htmlFor={`ba-${f.key}`}>{f.label}</Label>
+              {f.multiline ? (
+                <Textarea
+                  id={`ba-${f.key}`}
+                  rows={3}
+                  maxLength={4000}
+                  value={form[f.key] ?? ''}
+                  onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+                  {...invalid}
+                />
+              ) : (
+                <Input
+                  id={`ba-${f.key}`}
+                  maxLength={80}
+                  value={form[f.key] ?? ''}
+                  onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+                  {...invalid}
+                />
+              )}
+            </div>
+          )
+        })}
+        {action === 'verify' && (
+          <div className="space-y-1">
+            <Label htmlFor="ba-ref">Reference (optional)</Label>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Select value={refKind} onValueChange={(v) => setRefKind(v as BugVerificationKind)}>
+                <SelectTrigger className="sm:w-36" aria-label="Reference kind">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {VERIFICATION_KINDS.map((k) => (
+                    <SelectItem key={k.value} value={k.value}>
+                      {k.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Input
+                id="ba-ref"
+                className="flex-1"
+                maxLength={MAX_VERIFICATION_REF}
+                placeholder="Test name, session date, command or commit"
+                value={refText}
+                onChange={(e) => setRefText(e.target.value)}
+              />
+            </div>
+          </div>
+        )}
         {error && (
-          <p role="alert" className="text-[15px] text-red-600 dark:text-red-400">
+          <p id="ba-error" role="alert" className="text-[15px] text-red-600 dark:text-red-400">
             {error}
           </p>
         )}
@@ -365,6 +447,9 @@ function BugRow({ bug, defaultOpen }: { bug: Bug; defaultOpen: boolean }) {
                 {ACTION_SPECS[a].label}
               </Button>
             ))}
+            <Button size="sm" variant="ghost" onClick={() => setActing('severity')}>
+              {ACTION_SPECS.severity.label}
+            </Button>
           </div>
           {acting && <ActionDialog bug={bug} action={acting} onClose={() => setActing(null)} />}
 
@@ -386,6 +471,12 @@ function BugRow({ bug, defaultOpen }: { bug: Bug; defaultOpen: boolean }) {
               <div className="text-foreground">
                 {bug.verification || 'No verification text was recorded.'}
               </div>
+              {bug.verification_ref && (
+                <div className="mt-1 break-words text-[15px] text-foreground">
+                  <span className="font-bold">Reference ({bug.verification_ref.kind}): </span>
+                  <span className="font-mono">{bug.verification_ref.ref}</span>
+                </div>
+              )}
               {refs.length > 0 && (
                 <div className="mt-1 break-words font-mono text-[13px] text-muted-foreground">
                   {refs.join('  |  ')}
@@ -741,7 +832,7 @@ export default function BugTracker() {
             <Input
               value={filters.query}
               onChange={(e) => setParam('q', e.target.value, '')}
-              placeholder="Search id, words, strategy or component"
+              placeholder="Search id, words, owner, evidence or history"
               className="pl-8"
               aria-label="Search bugs"
             />

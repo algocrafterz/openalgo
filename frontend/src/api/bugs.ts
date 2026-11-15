@@ -29,6 +29,8 @@ export interface Bug {
   fix_commit: string
   fix_explanation?: string
   verification: string
+  /** Optional pointer to the proof. Absent on bugs verified before it existed. */
+  verification_ref?: BugVerificationRef
   sources: string[]
   history: BugHistoryEntry[]
   created_at: string
@@ -41,7 +43,22 @@ export interface Bug {
   next_action?: string
 }
 
-export type BugActionKey = 'assign' | 'start' | 'note' | 'fix' | 'verify' | 'reopen' | 'wontfix'
+export type BugActionKey =
+  | 'assign'
+  | 'start'
+  | 'note'
+  | 'fix'
+  | 'verify'
+  | 'reopen'
+  | 'wontfix'
+  | 'severity'
+
+export type BugVerificationKind = 'test' | 'session' | 'command' | 'commit'
+
+export interface BugVerificationRef {
+  kind: BugVerificationKind
+  ref: string
+}
 
 /** Only free text is sent. The server decides the status from the action and checks every rule. */
 export interface BugActionBody {
@@ -52,6 +69,8 @@ export interface BugActionBody {
   fix_explanation?: string
   evidence?: string
   reason?: string
+  severity?: BugSeverity
+  verification_ref?: BugVerificationRef
 }
 
 interface BugListResponse {

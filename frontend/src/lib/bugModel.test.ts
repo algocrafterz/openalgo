@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Bug } from '@/api/bugs'
 import {
   ACTION_SPECS,
@@ -6,6 +6,8 @@ import {
   ageLabel,
   availableActions,
   buildActionBody,
+  buildSeverityBody,
+  buildVerificationRef,
   categoryOfBug,
   evidenceRefs,
   groupOfStatus,
@@ -15,6 +17,7 @@ import {
   ownerLabel,
   readableSources,
   reportedFromWorkflow,
+  returnFocus,
   summarizeBugs,
   verificationMethods,
   wasReopened,
@@ -295,11 +298,50 @@ describe('actions', () => {
       'fix',
       'note',
       'reopen',
+      'severity',
       'start',
       'verify',
       'wontfix',
     ])
     for (const spec of Object.values(ACTION_SPECS))
       for (const f of spec.fields) expect(f.key).not.toBe('status')
+  })
+
+  it('offers a risk change at every status, outside the status-based buttons', () => {
+    for (const s of ['open', 'in_progress', 'fixed', 'verified', 'wontfix'] as const)
+      expect(availableActions(s)).not.toContain('severity')
+  })
+
+  it('builds a risk change only for a different level and a reason', () => {
+    expect(buildSeverityBody('MEDIUM', 'MEDIUM', 'x')).toMatchObject({ ok: false })
+    expect(buildSeverityBody('MEDIUM', 'HIGH', '  ')).toMatchObject({ ok: false })
+    expect(buildSeverityBody('MEDIUM', 'HIGH', ' stop risk ')).toEqual({
+      ok: true,
+      body: { severity: 'HIGH', reason: 'stop risk' },
+    })
+  })
+
+  it('builds an optional verification reference', () => {
+    expect(buildVerificationRef('test', '   ')).toEqual({ ok: true })
+    expect(buildVerificationRef('commit', ' abc1234 ')).toEqual({
+      ok: true,
+      ref: { kind: 'commit', ref: 'abc1234' },
+    })
+    expect(buildVerificationRef('test', 'x'.repeat(301))).toMatchObject({ ok: false })
+    expect(buildVerificationRef('test', 'x'.repeat(300))).toMatchObject({ ok: true })
+  })
+})
+
+describe('returnFocus', () => {
+  it('focuses the opener while it is still on the page', () => {
+    const focus = vi.fn()
+    expect(returnFocus({ isConnected: true, focus })).toBe(true)
+    expect(focus).toHaveBeenCalledOnce()
+  })
+  it('does nothing when the opener is gone or missing', () => {
+    const focus = vi.fn()
+    expect(returnFocus({ isConnected: false, focus })).toBe(false)
+    expect(returnFocus(null)).toBe(false)
+    expect(focus).not.toHaveBeenCalled()
   })
 })

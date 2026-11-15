@@ -1,4 +1,12 @@
-import type { Bug, BugActionBody, BugActionKey, BugStatus } from '@/api/bugs'
+import type {
+  Bug,
+  BugActionBody,
+  BugActionKey,
+  BugSeverity,
+  BugStatus,
+  BugVerificationKind,
+  BugVerificationRef,
+} from '@/api/bugs'
 
 /**
  * Bug status groups, trading categories, lifecycle and summary counts, shared by the Bug Tracker
@@ -292,8 +300,11 @@ export function availableActions(status: BugStatus): BugActionKey[] {
   return ACTIONS_BY_STATUS[status]
 }
 
+/** The free-text body fields; the risk level and the reference are built separately. */
+export type TextBodyKey = Exclude<keyof BugActionBody, 'severity' | 'verification_ref'>
+
 export interface ActionField {
-  key: keyof BugActionBody
+  key: TextBodyKey
   label: string
   required: boolean
   multiline: boolean
@@ -372,9 +383,50 @@ export const ACTION_SPECS: Record<BugActionKey, ActionSpec> = {
     submit: "Won't fix",
     fields: [{ key: 'reason', label: 'Reason', required: true, multiline: true }],
   },
+  // Not listed in ACTIONS_BY_STATUS: changing the risk level is open to every status.
+  severity: {
+    label: 'Change risk',
+    title: 'Change the risk level',
+    description: 'Pick the new level and say why. The change is recorded in the history.',
+    submit: 'Change risk',
+    fields: [{ key: 'reason', label: 'Reason', required: true, multiline: true }],
+  },
 }
 
-export type ActionForm = Partial<Record<keyof BugActionBody, string>>
+export const VERIFICATION_KINDS: { value: BugVerificationKind; label: string }[] = [
+  { value: 'test', label: 'Test' },
+  { value: 'session', label: 'Session' },
+  { value: 'command', label: 'Command' },
+  { value: 'commit', label: 'Commit' },
+]
+
+export const MAX_VERIFICATION_REF = 300
+
+/** The optional proof pointer: nothing when the reference is blank, an error when it is too long. */
+export function buildVerificationRef(
+  kind: BugVerificationKind,
+  text: string
+): { ok: true; ref?: BugVerificationRef } | { ok: false; error: string } {
+  const ref = text.trim()
+  if (ref === '') return { ok: true }
+  if (ref.length > MAX_VERIFICATION_REF)
+    return { ok: false, error: `The reference is too long (at most ${MAX_VERIFICATION_REF}).` }
+  return { ok: true, ref: { kind, ref } }
+}
+
+/** The risk-change body: a different level and a reason are both required. */
+export function buildSeverityBody(
+  current: BugSeverity,
+  next: BugSeverity,
+  reason: string
+): { ok: true; body: BugActionBody } | { ok: false; error: string } {
+  if (next === current) return { ok: false, error: `It is already ${next.toLowerCase()} risk.` }
+  const text = reason.trim()
+  if (text === '') return { ok: false, error: 'Reason is required.' }
+  return { ok: true, body: { severity: next, reason: text } }
+}
+
+export type ActionForm = Partial<Record<TextBodyKey, string>>
 
 /** The request body, or the first missing required field's message. Empty optional fields are dropped. */
 export function buildActionBody(
@@ -388,4 +440,14 @@ export function buildActionBody(
     if (value !== '') body[f.key] = value
   }
   return { ok: true, body }
+}
+
+/**
+ * Give focus back to the element that opened a dialog, if it is still on the page (a saved
+ * action can remove its own button). Returns whether focus was moved.
+ */
+export function returnFocus(el: { isConnected?: boolean; focus?: () => void } | null): boolean {
+  if (!el || el.isConnected === false || typeof el.focus !== 'function') return false
+  el.focus()
+  return true
 }

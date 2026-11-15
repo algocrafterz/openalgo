@@ -135,7 +135,9 @@ def test_autotrack_never_downgrades_or_closes(tmp_path):
     chk = [Check("first runner cycle", FAIL, "no 'pipeline cycle' line")]
     write_phase("liveness", "2026-11-11", chk, "s", folder=reports)
     autotrack.record_failures("2026-11-11", folder=reports, path=path)
-    store.update("BUG-001", severity="HIGH", path=path)
+    store.update(
+        "BUG-001", severity="HIGH", note="raised for test", path=path
+    )  # severity change needs a note
     write_phase("liveness", "2026-11-12", chk, "s", folder=reports)
     autotrack.record_failures("2026-11-12", folder=reports, path=path)
     bug = store.load(path)["bugs"][0]
@@ -183,7 +185,9 @@ def test_detector_dry_run_then_write_then_update(tmp_path):
     assert logscan.detect(DAY, counter=fn, path=path)[0].startswith(
         "[dry-run] would update BUG-001"
     )
-    store.update("BUG-001", severity="HIGH", path=path)
+    store.update(
+        "BUG-001", severity="HIGH", note="raised for test", path=path
+    )  # severity change needs a note
     logscan.detect(
         "2026-11-17", dry_run=False, counter=lambda d: Counter({"a: boom": 7}), path=path
     )

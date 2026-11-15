@@ -105,7 +105,7 @@ def test_owner_defaults_empty_can_be_set_and_is_logged(path):
 
 def test_history_records_severity_fix_and_verification_changes(path):
     _add(path)
-    bug = store.update("BUG-001", severity="LOW", path=path)
+    bug = store.update("BUG-001", severity="LOW", note="why", path=path)
     assert "severity HIGH -> LOW" in bug["history"][-1]["note"]
     n = len(bug["history"])
     bug = store.update("BUG-001", severity="LOW", path=path)  # unchanged: plain update line

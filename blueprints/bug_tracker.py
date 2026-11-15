@@ -1,7 +1,7 @@
 """Bug Tracker Blueprint.
 
 Serves the signal_engine bug tracker (signal_engine/bugs/bugs.json) to the page at /logs/bugs, and
-takes the page's seven write actions (assign, start, note, fix, verify, reopen, wontfix).
+takes the page's eight write actions (assign, start, note, fix, verify, reopen, wontfix, severity).
 
 Every write goes through signal_engine.bugs.store, so the transition table, the required reasons,
 the exclusive file lock, the atomic save and the history are the CLI's own. The browser sends only
@@ -169,6 +169,22 @@ def _text(payload: dict, key: str, label: str, *, required: bool, limit: int = M
     return value
 
 
+def _verification_ref(payload: dict) -> dict | None:
+    """The optional {kind, ref} proof pointer. Absent or null means none; anything else is checked."""
+    raw = payload.get("verification_ref")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ActionError("The verification reference must be a kind and a reference.")
+    kind = raw.get("kind")
+    if not isinstance(kind, str) or kind not in store.VERIFICATION_KINDS:
+        raise ActionError(
+            f"The reference kind must be one of {', '.join(store.VERIFICATION_KINDS)}."
+        )
+    ref = _text(raw, "ref", "The reference", required=True, limit=store.MAX_VERIFICATION_REF)
+    return {"kind": kind, "ref": ref}
+
+
 def _current(bug_id: str, path: str) -> dict:
     for bug in read_tracker(path):
         if bug.get("id") == bug_id:
@@ -234,7 +250,18 @@ def apply_action(bug_id: str, action: str, payload: dict, path: str | None = Non
     elif action == "verify":
         _require_move(bug, "verified", "verified")
         evidence = _text(payload, "evidence", "The verification evidence", required=True)
-        updated = store.update(bug_id, status="verified", verification=evidence, path=path)
+        ref = _verification_ref(payload)
+        updated = store.update(
+            bug_id, status="verified", verification=evidence, verification_ref=ref, path=path
+        )
+    elif action == "severity":
+        severity = _text(payload, "severity", "The risk level", required=True, limit=MAX_SHORT)
+        if severity not in store.SEVERITIES:
+            raise ActionError(f"The risk level must be one of {', '.join(store.SEVERITIES)}.")
+        reason = _text(payload, "reason", "The reason", required=True)
+        if severity == bug.get("severity"):
+            raise ActionError(f"{bug_id} is already {severity}.", 409)
+        updated = store.set_severity(bug_id, severity, reason, path=path)
     elif action == "reopen":
         _require_move(bug, "open", "reopened")
         reason = _text(payload, "reason", "The reason", required=True)
@@ -246,7 +273,7 @@ def apply_action(bug_id: str, action: str, payload: dict, path: str | None = Non
     return enrich(updated)
 
 
-ACTIONS = ("assign", "start", "note", "fix", "verify", "reopen", "wontfix")
+ACTIONS = ("assign", "start", "note", "fix", "verify", "reopen", "wontfix", "severity")
 
 
 @bug_tracker_bp.route("/api/bugs/<bug_id>/<action>", methods=["POST"])

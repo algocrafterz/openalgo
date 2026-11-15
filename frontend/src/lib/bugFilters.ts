@@ -42,22 +42,40 @@ export function isFiltering(f: BugFilters): boolean {
   return (Object.keys(NO_FILTERS) as (keyof BugFilters)[]).some((k) => f[k] !== NO_FILTERS[k])
 }
 
-/** Every word typed must appear somewhere in the fields a trader or reviewer would search. */
-export function matchesQuery(bug: Bug, query: string): boolean {
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
-  if (words.length === 0) return true
-  const haystack = [
+/** The words a person may search for, lowercased once per bug object (a refetch makes new objects). */
+const haystacks = new WeakMap<Bug, string>()
+
+function haystackOf(bug: Bug): string {
+  const cached = haystacks.get(bug)
+  if (cached !== undefined) return cached
+  const text = [
     bug.id,
     bug.title,
     bug.plain ?? '',
     bug.area,
+    bug.owner ?? '',
     bug.impact,
     bug.root_cause,
     bug.fix,
-    ...bug.strategies,
+    bug.fix_commit ?? '',
+    bug.fix_explanation ?? '',
+    bug.verification ?? '',
+    bug.verification_ref?.ref ?? '',
+    ...(bug.strategies ?? []),
+    ...(bug.evidence ?? []),
+    ...(bug.history ?? []).map((h) => h.note),
   ]
     .join(' ')
     .toLowerCase()
+  haystacks.set(bug, text)
+  return text
+}
+
+/** Every word typed must appear somewhere in the fields a trader or reviewer would search. */
+export function matchesQuery(bug: Bug, query: string): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return true
+  const haystack = haystackOf(bug)
   return words.every((w) => haystack.includes(w))
 }
 

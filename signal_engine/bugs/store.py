@@ -493,15 +493,78 @@ def report(
 _TRACKED = ("severity", "owner", "fix", "fix_commit", "fix_explanation", "verification")
 
 
+#: What a verification reference may point at. Optional and additive: `verification` text stays
+#: the required proof, the reference only says where to look.
+VERIFICATION_KINDS = ("test", "session", "command", "commit")
+MAX_VERIFICATION_REF = 300
+
+
+def _check_verification_ref(ref) -> dict:
+    """A clean {kind, ref} copy of a verification reference, or TrackerError."""
+    if not isinstance(ref, dict):
+        raise TrackerError("verification_ref must be an object with kind and ref")
+    kind = ref.get("kind")
+    if not isinstance(kind, str) or kind not in VERIFICATION_KINDS:
+        raise TrackerError(f"verification_ref kind must be one of {', '.join(VERIFICATION_KINDS)}")
+    text = ref.get("ref")
+    if not isinstance(text, str) or not text.strip():
+        raise TrackerError("verification_ref needs a non-empty ref")
+    text = text.strip()
+    if len(text) > MAX_VERIFICATION_REF:
+        raise TrackerError(f"verification_ref ref is too long (at most {MAX_VERIFICATION_REF})")
+    return {"kind": kind, "ref": text}
+
+
+def set_severity(bug_id: str, severity: str, reason: str, *, path: str | None = None) -> dict:
+    """Change a bug's severity, with a written reason. The status is never touched.
+
+    The history line reads "severity A -> B: reason". An unknown value, a missing reason and a
+    change to the value the bug already has are all refused, and nothing is written.
+    """
+    path = path or TRACKER_PATH
+    _check_choice("severity", severity, SEVERITIES)
+    reason = (reason or "").strip()
+    if not reason:
+        raise TrackerError("changing the severity needs a reason")
+    with _locked(path):
+        data = load(path)
+        bug = _find(data, bug_id)
+        before = bug.get("severity")
+        if before == severity:
+            raise TrackerError(f"{bug_id} is already {severity}")
+        bug["severity"] = severity
+        bug["updated_at"] = _now()
+        bug["history"].append(
+            {
+                "at": bug["updated_at"],
+                "status": bug["status"],
+                "note": f"severity {before} -> {severity}: {reason}",
+            }
+        )
+        _save(data, path)
+    return bug
+
+
 def update(
-    bug_id: str, *, status: str | None = None, note: str = "", path: str | None = None, **fields
+    bug_id: str,
+    *,
+    status: str | None = None,
+    note: str = "",
+    path: str | None = None,
+    verification_ref: dict | None = None,
+    **fields,
 ) -> dict:
     """Change a bug's status or text fields, following TRANSITIONS.
 
     "fixed" needs a fix, "verified" a verification, and reopening or won't-fixing needs a note
-    giving the reason. A status equal to the current one is not a transition.
+    giving the reason. A status equal to the current one is not a transition. An optional
+    `verification_ref` ({kind, ref}) is accepted only on the move to verified.
     """
     path = path or TRACKER_PATH
+    if verification_ref is not None:
+        verification_ref = _check_verification_ref(verification_ref)
+        if status != "verified":
+            raise TrackerError("a verification reference goes with the move to verified")
     editable = {
         "title",
         "plain",
@@ -527,6 +590,8 @@ def update(
         bug = _find(data, bug_id)
         current = bug["status"]
         moving = status is not None and status != current
+        if verification_ref is not None and not (moving and status == "verified"):
+            raise TrackerError("a verification reference goes with the move to verified")
         if moving:
             if status not in TRANSITIONS.get(current, ()):
                 allowed = ", ".join(TRANSITIONS.get(current, ())) or "none"
@@ -535,6 +600,9 @@ def update(
                 )
             if status in ("open", "wontfix") and not note.strip():
                 raise TrackerError(f"moving {bug_id} to {status} needs --note giving the reason")
+        sev = fields.get("severity")
+        if sev is not None and sev.strip() != bug.get("severity") and not note.strip():
+            raise TrackerError("changing the severity needs a reason (note)")
         changes = []
         pending = {}
         for name, value in fields.items():
@@ -561,11 +629,25 @@ def update(
         bug.update(pending)
         if moving:
             bug["status"] = status
+            if status == "verified":
+                bug.pop("verification_ref", None)  # never keep a reference from an older proof
+                if verification_ref is not None:
+                    bug["verification_ref"] = verification_ref
         text = note.strip()
         if moving and current != status:
             text = f"{current} -> {status}: {text}" if text else f"{current} -> {status}"
         if changes:
             text = "; ".join(filter(None, [text, *changes]))
+        if moving and status == "verified" and verification_ref is not None:
+            text = "; ".join(
+                filter(
+                    None,
+                    [
+                        text,
+                        f"verification ref {verification_ref['kind']}: {verification_ref['ref']}",
+                    ],
+                )
+            )
         bug["updated_at"] = _now()
         bug["history"].append(
             {"at": bug["updated_at"], "status": bug["status"], "note": text or "updated"}

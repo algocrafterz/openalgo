@@ -141,6 +141,14 @@ def main(argv=None) -> int:
                 _line(store.seen(args.id, args.date, evidence=args.evidence, sources=args.source))
             )
         elif args.command == "update":
+            if args.severity is not None and args.status is None:
+                # A severity change needs its reason (--note) and its own history line.
+                # With --status too, one store.update call carries both (all or nothing).
+                current = next((b for b in store.load()["bugs"] if b["id"] == args.id), {})
+                if current and current.get("severity") != args.severity:
+                    store.set_severity(args.id, args.severity, args.note)
+                    args.note = ""
+                args.severity = None
             bug = store.update(
                 args.id,
                 status=args.status,
