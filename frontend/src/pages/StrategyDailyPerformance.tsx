@@ -35,6 +35,7 @@ import { ValidationBadge, ValidationStatusCard } from '@/components/strategy-pnl
 import { SessionSummary } from '@/components/strategy-pnl/SessionSummary'
 import { SessionTrades } from '@/components/strategy-pnl/SessionTrades'
 import { StrategyFilterPicker } from '@/components/strategy-pnl/StrategyFilterPicker'
+import { StrategyReports } from '@/components/strategy-pnl/StrategyReports'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -1420,6 +1421,7 @@ export default function StrategyDailyPerformance() {
           )}
         </CardContent>
       </Card>
+      <StrategyReports />
     </div>
   )
 }

@@ -236,3 +236,16 @@ The chat reply must end with `Bottom Line`:
 - The `signal_engine.analysis` "execution quality" exit slippage block mixes order types. Do not use it as proof.
 - Not computed: MAE/MFE (lazy endpoint, needs bar reads), per-trade intraday charts, portfolio correlation.
 - Shadow and dashboard numbers differ in basis (shadow adds 4 bps per side slippage). Name the basis when you quote both.
+
+## 11. Short HTML report on demand
+
+The sections above are the full analysis. For a short, trader-readable HTML summary (1-2 pages, paper and live always separate, charges labelled estimated), run the shared generator from the repo root:
+
+```
+PYTHONPATH=. uv run python -m services.strategy_performance_report_service --mode paper|live|both
+```
+
+- It writes `reports/strategy-performance/<mode>-YYYY-MM-DD.html` (run date) and prints the path. History is kept; a different day's file is never touched. Add `--out <dir>` to write elsewhere.
+- Same code as the Friday close-day step and the Strategy Reports list on the Performance page (`services/strategy_performance_report_service.py`: `generate_report(mode)`).
+- It is read-only and uses the sample-size rules above. If a mode has no data it says so (live: "No live performance report can yet be produced"). On failure it prints `REPORT FAILED`, exits 1 and writes no file.
+- It does not do missing-session checks, frozen-strategy checks or recommendations beyond "for the owner to decide". Use the sections above for those.

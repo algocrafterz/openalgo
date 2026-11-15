@@ -722,6 +722,37 @@ export const strategyPnlApi = {
       throw new Error(await exportErrorMessage(error))
     }
   },
+
+  /** Saved strategy performance reports, newest first. */
+  listReports: async (): Promise<StrategyReportFile[]> => {
+    const data = await unwrap(
+      webClient.get<StrategyReportList>('/api/strategy-pnl/reports'),
+      'Could not load the saved reports'
+    )
+    if (data.status !== 'success') {
+      throw new Error(data.message || 'Could not load the saved reports')
+    }
+    return data.reports
+  },
+}
+
+interface StrategyReportList {
+  status: 'success' | 'error'
+  message?: string
+  reports: StrategyReportFile[]
+}
+
+export interface StrategyReportFile {
+  filename: string
+  mode: 'paper' | 'live' | 'both'
+  date: string
+  size: number
+}
+
+/** Link to a saved report: shown in a new tab, or sent as a download. */
+export function strategyReportUrl(filename: string, download = false): string {
+  const base = `/api/strategy-pnl/reports/${encodeURIComponent(filename)}`
+  return download ? `${base}?download=1` : base
 }
 
 async function exportErrorMessage(error: unknown): Promise<string> {

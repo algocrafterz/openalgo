@@ -25,6 +25,7 @@ from services.strategy_daily_performance_service import (
     get_strategy_comparison,
     get_trades_for_export,
 )
+from services.strategy_performance_report_service import list_reports, report_path
 from services.strategy_performance_service import get_strategy_performance
 from utils.logging import get_logger
 from utils.session import check_session_validity
@@ -364,3 +365,46 @@ def strategy_pnl_trades_export():
         mimetype="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# --- Saved strategy performance reports (reports/strategy-performance/*.html) -------------------
+# Read-only listing, view and download of files written by
+# services/strategy_performance_report_service.py. Names are whitelisted by regex and resolved
+# inside that one folder; nothing else on disk can be reached.
+
+_REPORT_VIEW_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox"
+
+
+@strategy_pnl_bp.route("/api/strategy-pnl/reports", methods=["GET"])
+@check_session_validity
+@limiter.limit(STRATEGY_PNL_READ_LIMIT)
+def strategy_report_list():
+    try:
+        return jsonify({"status": "success", "reports": list_reports()})
+    except Exception:
+        logger.exception("Could not list strategy performance reports")
+        return jsonify({"status": "error", "message": "Could not list saved reports."}), 500
+
+
+@strategy_pnl_bp.route("/api/strategy-pnl/reports/<filename>", methods=["GET"])
+@check_session_validity
+@limiter.limit(STRATEGY_PNL_READ_LIMIT)
+def strategy_report_file(filename):
+    """?download=1 sends the file as an attachment; otherwise it is shown inline, sandboxed."""
+    path = report_path(filename)
+    if path is None:
+        return jsonify({"status": "error", "message": "Report not found."}), 404
+    try:
+        html = path.read_bytes()
+    except OSError:
+        logger.exception("Could not read strategy performance report")
+        return jsonify({"status": "error", "message": "Report could not be read."}), 500
+    download = request.args.get("download") == "1"
+    response = Response(html, mimetype="text/html")
+    response.headers["Content-Security-Policy"] = _REPORT_VIEW_CSP
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Content-Disposition"] = (
+        f'{"attachment" if download else "inline"}; filename="{path.name}"'
+    )
+    return response

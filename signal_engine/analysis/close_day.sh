@@ -230,6 +230,18 @@ if [ "$REVIEW" -eq 1 ]; then
   step notify "${OPS[@]}" notify close-day --day "$DAY" $NOTIFY_FLAG >> "$LOGS/ops_cron.log" 2>&1
 fi
 
+# Fridays, same-day runs only: the weekly strategy performance report (paper and live, shown
+# separately) into reports/strategy-performance/. Last on purpose, after notify, and deliberately
+# not a step() (same as the bug-alert block above): a hang or failure is logged, never writes 124
+# to the status file or manifest, never changes the close-day status, and cannot delay
+# value_areas/jobs/track/review/notify. The 120 s cap bounds it. Read-only.
+if [ "$(date -d "$DAY" +%u)" -eq 5 ] && [ "$DAY" = "$(date +%F)" ]; then
+  if ! timeout --kill-after=10 120 env PYTHONPATH=. "$UV" run python -m services.strategy_performance_report_service \
+    --mode both >> "$LOGS/strategy_report_cron.log" 2>&1; then
+    echo "WARNING: strategy report failed for $DAY (close-day not affected)" >> "$LOGS/strategy_report_cron.log"
+  fi
+fi
+
 if [ -f "$REVIEW_REPORT" ]; then
   { echo; echo "## Close-day steps"; echo; echo '```'; column -t -s $'\t' "$STATUS"; echo '```'; } >> "$REVIEW_REPORT"
 fi
