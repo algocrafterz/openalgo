@@ -52,6 +52,11 @@ def _is_trading_day(day: str) -> bool:
         return datetime.strptime(day, "%Y-%m-%d").weekday() <= 4
 
 
+def is_trading_day(day: str) -> bool:
+    """Public form of the trading-day rule used by run_status; never raises for a valid day."""
+    return _is_trading_day(day)
+
+
 def _due_at(day: str, phase: str, now: datetime) -> datetime:
     due = datetime.strptime(f"{day} {DUE[phase]}", "%Y-%m-%d %H:%M")
     return due.replace(tzinfo=now.tzinfo) + timedelta(minutes=MARGIN_MINUTES)

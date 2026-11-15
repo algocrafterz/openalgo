@@ -1,6 +1,7 @@
 """F5: folder resolved at call time, a damaged check report, and one source for the clock times."""
 
 import json
+from datetime import datetime
 
 import pytest
 from flask import Flask
@@ -8,9 +9,11 @@ from flask import Flask
 import blueprints.ops_workflow as mod
 from limiter import limiter
 from signal_engine.ops import automation, workflow_status
+from signal_engine.ops.model import IST
 
 pytestmark = pytest.mark.filterwarnings("ignore")
 DAY = "2026-11-02"
+_NOW = datetime(2026, 11, 2, 8, 0, tzinfo=IST)  # fixed clock: the real day adds nothing
 
 
 def _seed(folder):
@@ -25,7 +28,7 @@ def _seed(folder):
 def test_the_default_folder_is_read_when_called_not_when_imported(tmp_path, monkeypatch):
     _seed(tmp_path)
     monkeypatch.setattr(mod, "REPORTS_DIR", str(tmp_path))
-    assert mod.list_days() == [DAY]
+    assert mod.list_days(now=_NOW) == [DAY]
     assert mod.day_view(DAY)["phases"][0]["steps"][0]["step"] == "check"
     (tmp_path / f"eod-{DAY}-claude-review.md").write_text("review")
     assert mod.read_report(f"eod-{DAY}-claude-review.md") == "review"
@@ -90,6 +93,7 @@ def test_the_route_returns_the_schedule_with_and_without_a_day(tmp_path, monkeyp
     import utils.session as session_utils
 
     monkeypatch.setattr(mod, "REPORTS_DIR", str(tmp_path))
+    monkeypatch.setattr(mod.model, "now_ist", lambda: _NOW)  # fixed clock, see _NOW
     app = Flask(__name__)
     app.secret_key = "t"
     app.register_blueprint(mod.ops_workflow_bp)

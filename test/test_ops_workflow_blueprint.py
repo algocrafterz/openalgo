@@ -1,8 +1,13 @@
 """/logs/workflow reads phase status files and reports; it never serves a path outside the folder."""
 
 import json
+from datetime import datetime
 
 from blueprints.ops_workflow import day_view, list_days, read_report
+from signal_engine.ops.model import IST
+
+#: A fixed clock (Monday 2026-11-02, 08:00) so no trading day without a file is added.
+_NOW = datetime(2026, 11, 2, 8, 0, tzinfo=IST)
 
 
 def _seed(folder):
@@ -19,7 +24,7 @@ def _seed(folder):
 
 def test_days_are_listed_newest_first(tmp_path):
     _seed(tmp_path)
-    assert list_days(str(tmp_path)) == ["2026-11-02", "2026-10-30"]
+    assert list_days(str(tmp_path), now=_NOW) == ["2026-11-02", "2026-10-30"]
 
 
 def test_a_day_shows_steps_checks_and_reports(tmp_path):

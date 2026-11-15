@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { WorkflowDay, WorkflowRunStatus } from '@/api/opsWorkflow'
 import {
+  combinedHealthOf,
   noticeLines,
   noticeNeedsLook,
   phaseTime,
@@ -8,6 +9,8 @@ import {
   recurrenceOf,
   recurrenceText,
   recurringFailures,
+  reviewStatusText,
+  runHealth,
   runLabel,
   summarizeRuns,
 } from './workflowStatus'
@@ -151,5 +154,118 @@ describe('phaseTime', () => {
   })
   it('returns an empty string for an unknown phase', () => {
     expect(phaseTime(day({}), 'nope')).toBe('')
+  })
+})
+
+const rows = (a: string, b: string, c: string, late = false) => [
+  run('open-day', a, late),
+  run('liveness', b),
+  run('close-day', c),
+]
+const GREEN_CHECK = {
+  phase: 'open-day',
+  day: '2026-11-13',
+  verdict: 'GREEN' as const,
+  summary: '',
+  checks: [],
+}
+const withData = (extra: Partial<WorkflowDay>) =>
+  day({
+    phases: [{ phase: 'open-day', steps: [{ step: 'x', started: '', ended: '', exit: 0 }] }],
+    checks: { 'open-day': GREEN_CHECK },
+    ...extra,
+  })
+
+describe('runHealth and combinedHealthOf', () => {
+  it('is Healthy when expected runs completed, including not due and not expected', () => {
+    expect(runHealth(rows('completed', 'completed', 'not_due')).health).toBe('healthy')
+    expect(runHealth(rows('not_expected', 'not_expected', 'not_expected')).health).toBe('healthy')
+    expect(runHealth(rows('legacy', 'running', 'not_due')).health).toBe('healthy')
+    expect(
+      combinedHealthOf(withData({ run_status: rows('completed', 'completed', 'not_due') }), [])
+    ).toBe('healthy')
+  })
+  it('a run that is not due yet does not degrade a day', () => {
+    const d = withData({ run_status: rows('completed', 'not_due', 'not_due') })
+    expect(combinedHealthOf(d, [])).toBe('healthy')
+  })
+  it('a missed run or a late start is Degraded', () => {
+    expect(runHealth(rows('completed', 'missed', 'not_due')).health).toBe('degraded')
+    expect(runHealth(rows('completed', 'completed', 'not_due', true)).health).toBe('degraded')
+    expect(
+      combinedHealthOf(withData({ run_status: rows('completed', 'missed', 'not_due') }), [])
+    ).toBe('degraded')
+  })
+  it('a running, not due, not expected or legacy run never degrades, even if late', () => {
+    for (const state of ['running', 'not_due', 'not_expected', 'legacy']) {
+      expect(runHealth(rows(state, 'completed', 'completed', true)).health).toBe('healthy')
+    }
+  })
+  it('a failed, timed out or interrupted critical run is Critical', () => {
+    for (const state of ['failed', 'timed_out', 'interrupted']) {
+      expect(runHealth(rows(state, 'completed', 'not_due')).health).toBe('critical')
+    }
+    expect(
+      combinedHealthOf(withData({ run_status: rows('completed', 'completed', 'failed') }), [])
+    ).toBe('critical')
+  })
+  it('is the worst of runs and findings', () => {
+    const d = withData({ run_status: rows('completed', 'completed', 'completed') })
+    const warning = { severity: 'warning' } as never
+    expect(combinedHealthOf(d, [warning])).toBe('degraded')
+    const worse = withData({ run_status: rows('failed', 'completed', 'not_due') })
+    expect(combinedHealthOf(worse, [warning])).toBe('critical')
+  })
+  it('keeps the findings-only result when the server sends no run_status', () => {
+    expect(combinedHealthOf(withData({}), [])).toBe('healthy')
+  })
+  it('a missed run on a day with no files is Degraded, not No data', () => {
+    expect(combinedHealthOf(day({ run_status: rows('missed', 'not_due', 'not_due') }), [])).toBe(
+      'degraded'
+    )
+    expect(combinedHealthOf(day({ run_status: rows('not_due', 'not_due', 'not_due') }), [])).toBe(
+      'nodata'
+    )
+  })
+})
+
+describe('reviewStatusText', () => {
+  const review = (o: Partial<NonNullable<WorkflowDay['review']>>) => ({
+    outcome: 'no_verdict' as const,
+    cause: 'no_block',
+    text: 'The AI review produced no verdict.',
+    exit: null,
+    note: '',
+    ...o,
+  })
+  it('shows the verdict when a review exists and never says there is none', () => {
+    const t = reviewStatusText(
+      day({
+        review: review({ outcome: 'verdict', cause: '', text: 'Looks fine.' }),
+        verdict: { verdict: 'GREEN', line: 'Looks fine.' },
+      })
+    )
+    expect(t).toBe('Close-day review (GREEN): Looks fine.')
+    expect(t).not.toMatch(/No close-day review/)
+  })
+  it('explains a review that ran without a verdict, using the server text', () => {
+    expect(reviewStatusText(day({ review: review({ outcome: 'failed', cause: 'exit' }) }))).toBe(
+      'Close-day review: The AI review produced no verdict.'
+    )
+  })
+  it('absent review: wording depends on whether close-day is due', () => {
+    const absent = review({ cause: 'no_report', text: 'x' })
+    const at = (state: string) =>
+      reviewStatusText(day({ review: absent, run_status: rows('completed', 'completed', state) }))
+    expect(at('not_due')).toBe('The close-day review is not due yet. It is written after 15:36.')
+    expect(at('not_expected')).toBe('No close-day review is expected on this day.')
+    expect(at('running')).toMatch(/running/)
+    expect(at('completed')).toBe('No close-day review recorded for this day.')
+    expect(at('missed')).toBe('No close-day review recorded for this day.')
+  })
+  it('an older server without review still shows the verdict block', () => {
+    expect(reviewStatusText(day({ verdict: { verdict: 'AMBER', line: 'Slow.' } }))).toBe(
+      'Close-day review (AMBER): Slow.'
+    )
   })
 })

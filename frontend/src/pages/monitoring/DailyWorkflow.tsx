@@ -36,7 +36,6 @@ import {
   countSeverities,
   type Finding,
   type Health,
-  healthOf,
   metricFindings,
   PHASE_CHECKS,
   type PhaseKey,
@@ -46,7 +45,9 @@ import {
   sortFindings,
   stepFailed,
 } from '@/lib/workflowFindings'
+import { lastUpdatedText, nextDayParam, parseDayParam, pollInterval } from '@/lib/workflowNav'
 import {
+  combinedHealthOf,
   noticeLines,
   noticeNeedsLook,
   phaseTime,
@@ -54,6 +55,7 @@ import {
   recurrenceOf,
   recurrenceText,
   recurringFailures,
+  reviewStatusText,
   runFor,
   runLabel,
   summarizeRuns,
@@ -134,7 +136,7 @@ function SessionOverview({
   bugs: BugSummary | null
 }) {
   const counts = countSeverities(findings)
-  const h = HEALTH[healthOf(day, findings)]
+  const h = HEALTH[combinedHealthOf(day, findings)]
   return (
     <Card>
       <CardContent className="pt-6">
@@ -146,11 +148,7 @@ function SessionOverview({
               <span className="text-[15px] text-muted-foreground">{day.day}</span>
             </div>
             <p className="text-[15px]">{summaryLine(counts)}</p>
-            <p className="text-[15px] text-muted-foreground">
-              {day.verdict
-                ? `Close-day review (${day.verdict.verdict}): ${day.verdict.line}`
-                : `No close-day review yet. It is written after the ${phaseTime(day, 'close-day')} close checks.`}
-            </p>
+            <p className="text-[15px] text-muted-foreground">{reviewStatusText(day)}</p>
             <p className="text-[15px]">
               {bugs ? (
                 <>
@@ -760,21 +758,21 @@ function Checkpoint({
 }
 
 export default function DailyWorkflow() {
-  const [params] = useSearchParams()
-  const dayParam = params.get('day')
-  const [day, setDay] = useState<string | undefined>(
-    dayParam && /^\d{4}-\d{2}-\d{2}$/.test(dayParam) ? dayParam : undefined
-  )
+  // `?day=` is the source of truth for the selection (see lib/workflowNav.ts): the latest day is
+  // never kept in the URL, so selecting it clears the parameter and live polling resumes.
+  const [params, setParams] = useSearchParams()
+  const day = parseDayParam(params.get('day'))
   const [openPhase, setOpenPhase] = useState<PhaseKey | null>(null)
   const [report, setReport] = useState<ReportKey | null>(null)
   const [showReports, setShowReports] = useState(false)
   const reportsRef = useRef<HTMLDivElement>(null)
 
-  const { data, isLoading, error, refetch, isFetching } = useQuery({
+  const { data, isLoading, error, refetch, isFetching, dataUpdatedAt } = useQuery({
     queryKey: ['ops-workflow', day],
     queryFn: () => opsWorkflowApi.get(day),
-    // Today's phases land through the day; a past day never changes.
-    refetchInterval: day === undefined ? 60_000 : false,
+    // Today's phases land through the day. Poll while viewing the latest day (selected or not);
+    // a past day is never polled, so it cannot change under the reader.
+    refetchInterval: (query) => pollInterval(day, query.state.data?.days),
   })
   const view = data?.data
   const days = data?.days ?? []
@@ -811,10 +809,20 @@ export default function DailyWorkflow() {
   }, [view, exec.data])
 
   const pick = (d: string) => {
-    setDay(d)
+    const next = nextDayParam(d, days)
+    setParams(
+      (prev) => {
+        const out = new URLSearchParams(prev)
+        if (next === null) out.delete('day')
+        else out.set('day', next)
+        return out
+      },
+      { replace: false }
+    )
     setOpenPhase(null)
     setReport(null)
   }
+  const lastUpdated = lastUpdatedText(dataUpdatedAt)
   const openReport = (key: ReportKey) => {
     setReport(key)
     setShowReports(true)
@@ -832,7 +840,7 @@ export default function DailyWorkflow() {
           </h1>
           <p className="text-muted-foreground mt-1">Is the system healthy, and what needs you</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
           <Button
             variant="outline"
             size="icon"
@@ -865,6 +873,15 @@ export default function DailyWorkflow() {
           >
             <ChevronRight className="h-4 w-4" />
           </Button>
+          {lastUpdated && (
+            <span
+              className="whitespace-nowrap text-sm text-muted-foreground"
+              title="Client time of the last successful fetch from the server"
+              data-testid="last-updated"
+            >
+              {lastUpdated}
+            </span>
+          )}
           <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
             <RefreshCw className={`h-4 w-4 mr-2 ${isFetching ? 'animate-spin' : ''}`} />
             Refresh
@@ -895,7 +912,7 @@ export default function DailyWorkflow() {
               <RunBanner />
               <Attention
                 findings={findings}
-                hasData={healthOf(view, findings) !== 'nodata'}
+                hasData={combinedHealthOf(view, findings) !== 'nodata'}
                 onOpenReport={openReport}
               />
               <RecurringCard day={view} />

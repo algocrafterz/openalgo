@@ -4,6 +4,7 @@ import type {
   WorkflowRecurrenceItem,
   WorkflowRunStatus,
 } from '@/api/opsWorkflow'
+import { type Finding, type Health, healthOf } from '@/lib/workflowFindings'
 
 /**
  * Presentation logic for R4.1: expected-versus-completed runs, recurring failures and the last
@@ -160,4 +161,74 @@ export function noticeLines(n: WorkflowNotifications | undefined): NoticeLine[] 
 export function noticeNeedsLook(n: WorkflowNotifications | undefined): boolean {
   if (!n?.available) return false
   return Boolean(n.open_red?.length) || (n.last_result ?? '').startsWith('failed')
+}
+
+// ---- headline health including run state (W1) ------------------------------------------------
+
+/**
+ * Health of the expected runs alone. The critical executions are the three expected runs
+ * (open-day, liveness, close-day: run_status carries exactly those).
+ *   Critical: a critical execution failed, timed out or was interrupted.
+ *   Degraded: one was missed, started late, or its record is unreadable.
+ *   Healthy:  everything else, including running, legacy, `not_due` and `not_expected`
+ *             (a run that is not due yet, or not expected today, must never lower health).
+ */
+export function runHealth(rows: WorkflowRunStatus[] | undefined): {
+  health: Health
+  reasons: string[]
+} {
+  let health: Health = 'healthy'
+  const reasons: string[] = []
+  for (const r of rows ?? []) {
+    const critical = r.state === 'failed' || r.state === 'timed_out' || r.state === 'interrupted'
+    // A run still in progress, not due, not expected or legacy never degrades, even when late.
+    const neutral = ['running', 'not_due', 'not_expected', 'legacy'].includes(r.state)
+    const degraded =
+      r.state === 'missed' || r.state === 'unreadable' || (r.late && !critical && !neutral)
+    if (!critical && !degraded) continue
+    const l = runLabel(r)
+    reasons.push(`${r.phase} (${r.due}): ${l?.label ?? r.state}`)
+    if (critical) health = 'critical'
+    else if (health !== 'critical') health = 'degraded'
+  }
+  return { health, reasons }
+}
+
+const HEALTH_RANK: Record<Health, number> = { healthy: 0, nodata: 1, degraded: 2, critical: 3 }
+
+/**
+ * The one headline health: the worse of the findings-based health (healthOf) and the run-state
+ * health. "No data" only stays when the runs add nothing; a missed run on a day with no files
+ * reads Degraded, not No data. The page calls this and never healthOf directly.
+ */
+export function combinedHealthOf(day: WorkflowDay, findings: Finding[]): Health {
+  const fromFindings = healthOf(day, findings)
+  const fromRuns = runHealth(day.run_status).health
+  return HEALTH_RANK[fromRuns] > HEALTH_RANK[fromFindings] ? fromRuns : fromFindings
+}
+
+// ---- review line on the overview (W1) --------------------------------------------------------
+
+/**
+ * The close-day review line, from the day's real `review` result. A review that exists is
+ * described by its outcome; the "no review" wording is neutral and depends on whether close-day
+ * is due, so a day that has no report does not claim the review is missing when it is not due.
+ */
+export function reviewStatusText(day: WorkflowDay): string {
+  const rev = day.review
+  if (rev?.outcome === 'verdict') {
+    const v = day.verdict
+    return v ? `Close-day review (${v.verdict}): ${v.line}` : `Close-day review: ${rev.text}`
+  }
+  if (rev && rev.cause !== 'no_report') {
+    // limit_or_auth, failed, deadline or no verdict block: the server's own explanation.
+    return `Close-day review: ${rev.text}`
+  }
+  if (!rev && day.verdict) return `Close-day review (${day.verdict.verdict}): ${day.verdict.line}`
+  const state = runFor(day, 'close-day')?.state
+  const at = phaseTime(day, 'close-day')
+  if (state === 'not_expected') return 'No close-day review is expected on this day.'
+  if (state === 'not_due') return `The close-day review is not due yet. It is written after ${at}.`
+  if (state === 'running') return 'Close-day is running. The review is written when it finishes.'
+  return 'No close-day review recorded for this day.'
 }

@@ -9,11 +9,12 @@ wrote. Read-only over signal_engine/reports/; the phases themselves run from cro
 import json
 import os
 import re
+from datetime import timedelta
 
 from flask import Blueprint, jsonify, request
 
 from limiter import limiter
-from signal_engine.ops import workflow_status
+from signal_engine.ops import model, workflow_status
 from signal_engine.ops.model import read_run
 from signal_engine.ops.verdict import review_outcome
 from utils.logging import get_logger
@@ -55,12 +56,35 @@ def _schedule() -> dict:
         return {}
 
 
-def list_days(folder: str | None = None, limit: int = 30) -> list[str]:
-    """Days that have at least one phase status file, newest first."""
+#: Calendar days back from today that list_days considers for trading days without any file.
+MISSED_WINDOW_DAYS = 14
+
+
+def list_days(folder: str | None = None, limit: int = 30, now=None) -> list[str]:
+    """Days to show, newest first: every day with a phase status file, plus trading days with none.
+
+    A trading day with no status file at all must stay selectable, or a missed run is invisible
+    (its run_status reads missed / not_due). Added days: today when it is a trading day, and past
+    trading days in the last MISSED_WINDOW_DAYS calendar days that are not older than the oldest
+    day with a file (so a fresh install does not list days before the workflow existed). The
+    trading calendar is workflow_status.is_trading_day (NSE holidays, Mon-Fri fallback); `now`
+    is injectable for tests. Never raises on a calendar or clock problem.
+    """
     folder = _folder(folder)
-    if not os.path.isdir(folder):
-        return []
-    days = {m.group(2) for name in os.listdir(folder) if (m := _STATUS.match(name))}
+    days: set[str] = set()
+    if os.path.isdir(folder):
+        days = {m.group(2) for name in os.listdir(folder) if (m := _STATUS.match(name))}
+    try:
+        today = (now or model.now_ist()).date()
+        oldest = min(days) if days else None
+        for back in range(MISSED_WINDOW_DAYS + 1):
+            day = (today - timedelta(days=back)).isoformat()
+            if day in days or (back > 0 and (oldest is None or day < oldest)):
+                continue
+            if workflow_status.is_trading_day(day):
+                days.add(day)
+    except Exception:
+        logger.exception("Could not add trading days without status files")
     return sorted(days, reverse=True)[:limit]
 
 
