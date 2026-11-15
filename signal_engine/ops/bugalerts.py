@@ -4,8 +4,9 @@ Events, all HIGH only: a new bug, a reopened bug, a bug overdue (open more than 
 week), and a fixed bug nobody verified for 7 days (about 5 sessions, once a week). One alert per
 bug and event, at most MAX_ALERTS per run with an "and N more" line. Nothing here changes a bug.
 Already-sent events are kept in reports/bug-alert-state.json so a new or reopened alert is
-sent once, not once per day. New and reopened events stay alertable for LOOKBACK_DAYS, so a send
-that failed or was held back by the cap is retried on the following days. Dry-run prints what
+sent once, not once per day. New and reopened events stay alertable for LOOKBACK_BUSINESS_DAYS
+business days, so a send that failed or was held back by the cap is retried on the following
+days, across a weekend or a holiday too. Dry-run prints what
 would be sent and sends nothing.
 """
 
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 from datetime import date, timedelta
 
@@ -22,10 +24,13 @@ from signal_engine.ops.model import REPORTS
 
 MAX_ALERTS = 5
 UNVERIFIED_DAYS = 7
-#: New and reopened events stay alertable for this many calendar days (today included), so an
-#: alert held back by the cap or a failed send is retried the next day. The sent-key state
-#: dedupes it; an event older than the window is never alerted.
-LOOKBACK_DAYS = 3
+#: New and reopened events stay alertable for this many business days (the run day included when
+#: it is one), so an alert held back by the cap or a failed send on a Friday is still retried on
+#: Monday. Weekend and holiday days in between do not count. The sent-key state dedupes it; an
+#: event older than the window is never alerted.
+LOOKBACK_BUSINESS_DAYS = 3
+LOOKBACK_DAYS = LOOKBACK_BUSINESS_DAYS  # old name, kept for importers
+_MAX_WALK_DAYS = 30  # bounds the walk back whatever the calendar says
 STATE_FILE = "bug-alert-state.json"
 
 
@@ -64,9 +69,35 @@ def _reopens(bug: dict) -> list[str]:
     ]
 
 
+def _is_business_day(day: date) -> bool:
+    """Weekday and not an NSE holiday (OpenAlgo's calendar). Never raises: Mon-Fri on any failure."""
+    if day.weekday() > 4:
+        return False
+    try:
+        from signal_engine.ops import automation  # lazy: keeps this module's import light
+
+        return bool(automation.is_trading_day(day.isoformat()))
+    except Exception:  # noqa: BLE001 - an unavailable calendar must not stop an alert
+        return True
+
+
 def _window(day: str) -> set[str]:
-    end = date.fromisoformat(day)
-    return {(end - timedelta(days=n)).isoformat() for n in range(LOOKBACK_DAYS)}
+    """Every calendar day from `day` back to the LOOKBACK_BUSINESS_DAYS-th business day.
+
+    Weekend and holiday days inside the span are included (a bug first seen on a Sunday is still
+    new on Monday) but do not use up the count.
+    """
+    current = date.fromisoformat(day)
+    found: set[str] = set()
+    counted = 0
+    for _ in range(_MAX_WALK_DAYS):
+        found.add(current.isoformat())
+        if _is_business_day(current):
+            counted += 1
+            if counted >= LOOKBACK_BUSINESS_DAYS:
+                break
+        current -= timedelta(days=1)
+    return found
 
 
 def _what(bug: dict) -> str:
@@ -138,7 +169,37 @@ def run(
         with store._locked(state):
             return _run(day, dry_run, path, folder)
     except store.TrackerBusy:
+        _warn(
+            f"bug alerts for {day} SKIPPED: another bug-alert run holds the lock; nothing was "
+            "sent, the next run inside the window delivers"
+        )
         return ["skipped: another bug-alert run is in progress"]
+
+
+def _warn(message: str) -> None:
+    """One WARNING line on stderr (close_day.sh sends stderr to ops_cron.log). Never raises."""
+    try:
+        print(f"WARNING: {message}", file=sys.stderr, flush=True)
+    except (OSError, ValueError):
+        pass
+
+
+def _next_business_day(day: str) -> str:
+    current = date.fromisoformat(day)
+    for _ in range(_MAX_WALK_DAYS):
+        current += timedelta(days=1)
+        if _is_business_day(current):
+            break
+    return current.isoformat()
+
+
+def _expiring(day: str, unsent: list[tuple[str, str, str]], path: str | None) -> list[str]:
+    """Keys of unsent new/reopened events that will not be alertable on the next business day."""
+    pending = [e for e in unsent if e[0] in ("bug-new", "bug-reopened")]
+    if not pending:
+        return []
+    still = {f"{k}|{c}" for k, c, _ in events(_next_business_day(day), path)}
+    return [f"{k}|{c}" for k, c, _ in pending if f"{k}|{c}" not in still]
 
 
 def _run(day: str, dry_run: bool, path: str | None, folder: str | None) -> list[str]:
@@ -159,7 +220,26 @@ def _run(day: str, dry_run: bool, path: str | None, folder: str | None) -> list[
         if ok:
             sent.add(f"{kind}|{condition}")
     if rest:
-        lines.append(f"and {len(rest)} more")
+        keys = ", ".join(f"{k}|{c}" for k, c, _ in rest)
+        lines.append(
+            f"SUPPRESSED by the {MAX_ALERTS}-alert cap ({len(rest)}, not sent, retried next run): {keys}"
+        )
+        _warn(
+            f"bug alerts for {day}: {len(rest)} event(s) over the {MAX_ALERTS}-alert cap were "
+            f"NOT sent (retried next run inside the window): {keys}"
+        )
+    unsent = [e for e in todo if f"{e[0]}|{e[1]}" not in sent]
+    gone = _expiring(day, unsent, path)
+    if gone:
+        lines.append(
+            f"EXPIRING UNSENT (never sent, leaves the window next business day): {', '.join(gone)}"
+        )
+        _warn(
+            f"bug alerts for {day}: EXPIRING UNSENT, never sent and no longer alertable after "
+            f"today: {', '.join(gone)}"
+        )
     if sent != sent_before:
         _save(sent, folder)
+    if rest:
+        lines.append(f"and {len(rest)} more")  # stays the last line
     return lines

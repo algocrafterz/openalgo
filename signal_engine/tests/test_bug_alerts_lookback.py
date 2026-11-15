@@ -52,12 +52,17 @@ def test_event_over_the_cap_is_delivered_the_next_day(tmp_path, sent):
     assert len(sent) == 7 and len(set(sent)) == 7
 
 
-def test_event_older_than_the_window_is_never_sent(tmp_path, sent):
+def test_event_older_than_the_window_is_never_sent(tmp_path, sent, monkeypatch):
+    # Owner decision: the calendar-day window is replaced by a business-day window (3 business
+    # days, weekends and holidays not counted); see test_bug_alerts_weekday_lookback.py.
+    monkeypatch.setattr(bugalerts, "_is_business_day", lambda d: d.weekday() < 5)
     path = str(tmp_path / "b.json")
-    _bug(path, "Old high", seen="2026-11-12")  # outside the 3-day window from the 15th
-    assert bugalerts.LOOKBACK_DAYS == 3
+    _bug(path, "Old high", seen="2026-11-10")  # Tuesday: outside the window from Sunday the 15th
+    assert bugalerts.LOOKBACK_BUSINESS_DAYS == 3
     assert [e for e in bugalerts.events("2026-11-15", path) if e[0] == "bug-new"] == []
-    assert [e for e in bugalerts.events("2026-11-14", path) if e[0] == "bug-new"] != []
+    assert [e for e in bugalerts.events("2026-11-14", path) if e[0] == "bug-new"] == []
+    _bug(path, "Newer high", seen="2026-11-12")  # Thursday: 3rd business day back from Sunday
+    assert [e for e in bugalerts.events("2026-11-15", path) if e[0] == "bug-new"] != []
 
 
 def test_a_future_dated_bug_is_not_alerted_early(tmp_path, sent):

@@ -27,13 +27,22 @@ import sqlite3
 import time
 from datetime import datetime, timedelta
 
-from signal_engine.ops import actions, model, verdict
+from signal_engine.ops import actions, jobs, model, verdict
 from signal_engine.ops.model import REPORTS
 from signal_engine.ops.workflow_status import DUE, MARGIN_MINUTES
 
 DB = os.path.join(actions.REPO, "db", "openalgo.db")
-#: The retry must end before the market is near: backfill reads the broker.
+#: Clock-time constants. Cron times live in jobs.CRON_LINES and phase due times in
+#: workflow_status.DUE; the two below are derived from or checked against them by
+#: test_ops_schedule_constants.py, so no copy can drift alone.
+#: The retry must end before the market is near: backfill reads the broker. It is a cut-off, not a
+#: cron time: after the 08:36 recover line and before the 09:12 open-day check.
 RETRY_BEFORE = "09:10"
+
+
+def _proposed_time(label: str) -> str:
+    """The proposed (last) time of the CRON_LINES entry with this label."""
+    return next(spec.times[-1] for spec in jobs.CRON_LINES if spec.label == label)
 
 
 def is_trading_day(day: str, *, db_path: str | None = None) -> bool:
@@ -138,10 +147,9 @@ EXPECTED = {
     "close": (("close-day", f"The {DUE['close-day']} end-of-day checks", DUE["close-day"]),),
 }
 DUE_MARGIN_MINUTES = MARGIN_MINUTES  # one source: workflow_status
-#: The close dead-man runs at 16:28: the afternoon retry ends by 16:25. The cron line installed
-#: today is 16:20 (see jobs.CRON_LINES); it judges the same way, and a retry that is still running
-#: at that time is reported as incomplete.
-FINAL_DEADMAN_CLOSE = "16:28"
+#: The close dead-man runs at the proposed time of its cron line (16:28, jobs.CRON_LINES): the
+#: afternoon retry ends by 16:25. A retry still running at that time is reported as incomplete.
+FINAL_DEADMAN_CLOSE = _proposed_time("deadman close")
 #: Reports a phase must leave behind, readable as JSON, besides its status file. close-day also
 #: needs the review report (read through verdict.review_outcome).
 PHASE_REPORTS = {
