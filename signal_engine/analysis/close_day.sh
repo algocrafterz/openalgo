@@ -202,6 +202,19 @@ step jobs "${OPS[@]}" jobs --day "$DAY" >> "$LOGS/ops_cron.log" 2>&1
 # review that cannot run (usage limit, expired sign-in, deadline) loses no finding.
 step track "${OPS[@]}" track --day "$DAY" >> "$LOGS/ops_cron.log" 2>&1
 
+# The ONE scheduled place for bug alerts and the log-candidate scan, after the day's findings are
+# tracked. Alerts are sent for a same-day run only (a re-run of an earlier day prints them). The
+# log scan is always a dry run (no --write): its candidates go to a dated, git-ignored report for
+# the owner to review; enabling `--logs --write` stays a manual decision. Deliberately not a
+# step(): a failure here is logged and never changes the close-day status, the manifest or the
+# retry. The 120 s cap keeps a slow Telegram call from holding up the review. Dedupe and the lock
+# are in ops/bugalerts.py.
+ALERT_FLAG="--bug-alerts"; [ "$DAY" = "$(date +%F)" ] || ALERT_FLAG=""
+if ! timeout --kill-after=10 120 "${OPS[@]}" track --day "$DAY" --logs $ALERT_FLAG \
+  > "$REPORTS/logscan-candidates-$DAY.txt" 2>> "$LOGS/ops_cron.log"; then
+  echo "WARNING: bug alerts / log scan failed for $DAY (close-day not affected)" >> "$LOGS/ops_cron.log"
+fi
+
 REVIEW_REPORT="$REPORTS/eod-$DAY-claude-review.md"
 if [ "$REVIEW" -eq 1 ]; then
   step review "$ANALYSIS/eod_claude_review.sh" "$DAY" >> "$LOGS/eod_claude_cron.log" 2>&1
