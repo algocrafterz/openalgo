@@ -774,6 +774,19 @@ async def _place_exit_order(pos, exit_qty: int):
     return exit_order, await _send_exit_with_retries(exit_order, pos)
 
 
+#: Start of the core's rejection of an identical order still being placed
+#: (sandbox/order_manager.py INFLIGHT_REJECTION_PREFIX), compared case-insensitively.
+_INFLIGHT_REJECTION_MARKER = "duplicate order in flight"
+
+
+def _is_inflight_rejection(result: TradeResult) -> bool:
+    """Did the core refuse this send because an identical copy is still being placed?"""
+    return (
+        result.status == OrderStatus.REJECTED
+        and _INFLIGHT_REJECTION_MARKER in (result.message or "").lower()
+    )
+
+
 async def _send_exit_with_retries(exit_order, pos) -> TradeResult:
     """Send the MARKET exit order, retrying up to bracket_tp_exit_retries.
 
@@ -802,8 +815,17 @@ async def _send_exit_with_retries(exit_order, pos) -> TradeResult:
             f"EXIT attempt {_attempt}/{settings.bracket_tp_exit_retries} failed for "
             f"{pos.symbol}: {trade_result.message}"
         )
-        if trade_result.status == OrderStatus.TIMEOUT:
-            outcome = await _reconcile_exit(exit_order, pos, attempt_started)
+        # BUG-019: a core "identical order in flight" rejection means a copy of this exit is
+        # still being placed. It is reconciled like a timeout and never answered with a resend.
+        in_flight = _is_inflight_rejection(trade_result)
+        if trade_result.status == OrderStatus.TIMEOUT or in_flight:
+            # The window restarts at EVERY send. Counted from the first send it was spent by the
+            # time attempt 2 timed out (2026-11-04 AXISBANK: attempt 3 left 0.5 s later).
+            window_start = datetime.now(IST)
+            outcome = await _reconcile_exit(
+                exit_order, pos, attempt_started, window_start=window_start,
+                attempt=_attempt, hold_if_clean=in_flight and _attempt >= settings.bracket_tp_exit_retries,
+            )
             if outcome.status == OrderStatus.SUCCESS:
                 logger.info(
                     f"EXIT for {pos.symbol} confirmed live on the broker despite client "
@@ -853,8 +875,16 @@ def _booked_ids_today(symbol: str) -> frozenset[str]:
     return frozenset(fetch_order_ids_today(symbol))
 
 
-async def _reconcile_exit(exit_order, pos, since: datetime) -> TradeResult:
+async def _reconcile_exit(
+    exit_order, pos, since: datetime, *, window_start: datetime | None = None,
+    attempt: int = 1, hold_if_clean: bool = False,
+) -> TradeResult:
     """Settle a timed-out exit against the order book.
+
+    `since` is the FIRST send of this exit: every copy placed since then counts. `window_start`
+    is when this attempt's own late-fill window opens (default: `since`). `hold_if_clean` holds
+    the exit instead of reporting "no copy" when the window ends clean, for the last attempt
+    after the core reported a copy in flight that the book never showed.
 
     SUCCESS: the broker holds it, adopt the id. TIMEOUT: uncertain, the position is marked and
     a CRITICAL alert raised, do not resend. ERROR: the book was read and has no copy, a resend is
@@ -872,10 +902,20 @@ async def _reconcile_exit(exit_order, pos, since: datetime) -> TradeResult:
         exclude=_booked_ids_today(exit_order.symbol),
     )
     if result.outcome == order_reconcile.ABSENT:
-        result = await _watch_exit_for_late_fill(exit_order, pos, since)
+        result = await _watch_exit_for_late_fill(exit_order, pos, since, window_start)
     if result.outcome == order_reconcile.ABSENT:
-        order_reconcile.clear_uncertain(pos.strategy, pos.symbol)
-        return TradeResult(status=OrderStatus.ERROR, message="timed out; no copy on the broker")
+        logger.warning(
+            f"EXIT {exit_order.action.value} {exit_order.quantity} {pos.symbol} [{pos.strategy}] "
+            f"attempt {attempt}: late-fill window ended with no copy on the book"
+            f"{' (the core still reported one in flight)' if hold_if_clean else '; a resend is safe'}"
+        )
+        if not hold_if_clean:
+            order_reconcile.clear_uncertain(pos.strategy, pos.symbol)
+            return TradeResult(status=OrderStatus.ERROR, message="timed out; no copy on the broker")
+        result = order_reconcile.Reconciliation(
+            order_reconcile.UNCERTAIN,
+            detail="the core reported an identical order in flight but none reached the book",
+        )
     adopted, why = await _adopt_if_proven(pos, exit_order.action.value, exit_order.quantity, result)
     if adopted is not None:
         return adopted
@@ -883,7 +923,7 @@ async def _reconcile_exit(exit_order, pos, since: datetime) -> TradeResult:
         order_reconcile.UncertainOrder(
             strategy=pos.strategy, symbol=pos.symbol, action=exit_order.action.value,
             quantity=exit_order.quantity, since=since, kind="EXIT",
-            watch_until=since + timedelta(seconds=_LATE_FILL_WATCH_SECONDS),
+            watch_until=(window_start or since) + timedelta(seconds=_LATE_FILL_WATCH_SECONDS),
         )
     )
     return await _hold_uncertain_exit(exit_order, pos, why, _candidate_ids(result))
@@ -937,8 +977,14 @@ async def _adopt_if_proven(pos, action: str, quantity: int, result):
     return TradeResult(order_id=candidate, status=OrderStatus.SUCCESS, message=how), ""
 
 
-async def _watch_exit_for_late_fill(exit_order, pos, since: datetime):
-    """Keep reading the book until the late-fill window after `since` has run out.
+async def _watch_exit_for_late_fill(
+    exit_order, pos, since: datetime, window_start: datetime | None = None
+):
+    """Keep reading the book until the late-fill window after `window_start` has run out.
+
+    Copies are matched from `since` (the exit's first send); the window itself is counted from
+    `window_start`, the moment of THIS attempt's send (default `since`), so every attempt gets
+    a full window.
 
     A clean read seconds after a timeout is not proof the order never lands: 2026-10-23 SUNPHARMA
     read clean after ~6 s, was resent, and the first copy filled ~14 s after it was sent, so the
@@ -946,8 +992,12 @@ async def _watch_exit_for_late_fill(exit_order, pos, since: datetime):
     clean when the window ends makes a resend safe. The position's stop is already cancelled, so
     the cost of waiting is up to the window without protection.
     """
-    remaining = _LATE_FILL_WATCH_SECONDS - (datetime.now(IST) - since).total_seconds()
+    remaining = _LATE_FILL_WATCH_SECONDS - (datetime.now(IST) - (window_start or since)).total_seconds()
     if remaining <= 0:
+        logger.warning(
+            f"EXIT {exit_order.action.value} {exit_order.quantity} {pos.symbol} [{pos.strategy}]: "
+            "late-fill window already over before the watch began; treating the book as clean"
+        )
         return order_reconcile.Reconciliation(order_reconcile.ABSENT, detail="late-fill window over")
     logger.warning(
         f"EXIT {exit_order.action.value} {exit_order.quantity} {pos.symbol} [{pos.strategy}] timed out "
