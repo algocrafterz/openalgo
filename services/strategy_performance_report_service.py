@@ -87,6 +87,26 @@ def _readonly_signal_engine():
             ste._engine_for = original
 
 
+def _parse_names(value) -> list[str]:
+    """Comma-separated exact strategy names (or an iterable of names): strip, drop empties."""
+    if value is None:
+        return []
+    parts = value.split(",") if isinstance(value, str) else list(value)
+    return [p.strip() for p in parts if isinstance(p, str) and p.strip()]
+
+
+def _parse_date(value: str | None, label: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise ReportError(f"{label} must be YYYY-MM-DD.")
+    try:
+        date.fromisoformat(value)
+    except ValueError as exc:
+        raise ReportError(f"{label} must be a valid YYYY-MM-DD date.") from exc
+    return value
+
+
 def _load_closed(ledger_db: Path, db_mode: str, floor: str, cutoff: str | None) -> list[dict]:
     conn = _ro(ledger_db)
     try:
@@ -239,18 +259,37 @@ def _trend(recent: dict, prev: dict) -> tuple[str, list[str]]:
     return "stable or mixed", lines
 
 
-def _analyse_mode(mode: str, ledger_db: Path, signal_db: Path, cutoff: str | None) -> dict:
+def _analyse_mode(
+    mode: str,
+    ledger_db: Path,
+    signal_db: Path,
+    cutoff: str | None,
+    date_from: str | None = None,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    window_sessions: int | None = None,
+) -> dict:
     from services.strategy_metrics_service import LEDGER_RELIABLE_SINCE
 
     floor = LEDGER_RELIABLE_SINCE.isoformat()
+    if date_from and date_from > floor:
+        floor = date_from
     db_mode = DB_MODE[mode]
     res: dict = {"mode": mode, "floor": floor}
     closed = _load_closed(ledger_db, db_mode, floor, cutoff)
+    res["available_names"] = sorted({t["strategy"] for t in closed})
+    if include:
+        keep = set(include)
+        closed = [t for t in closed if t["strategy"] in keep]
+    if exclude:
+        drop = set(exclude)
+        closed = [t for t in closed if t["strategy"] not in drop]
+    res["filtered_empty"] = bool(res["available_names"]) and not closed
     sessions = sorted({t["trade_date"] for t in closed})
     if not sessions:
         res["status"] = "no_data"
         return res
-    n = WINDOW_SESSIONS
+    n = window_sessions or WINDOW_SESSIONS
     if len(sessions) >= 2 * n:
         recent, prev = sessions[-n:], sessions[-2 * n : -n]
         res["window_note"] = ""
@@ -276,7 +315,8 @@ def _analyse_mode(mode: str, ledger_db: Path, signal_db: Path, cutoff: str | Non
         for s in names
         if s not in active
     ]
-    exits = _load_exits(signal_db, db_mode, floor, cutoff)
+    exit_names = {t["strategy"] for t in closed}
+    exits = [e for e in _load_exits(signal_db, db_mode, floor, cutoff) if e["strategy"] in exit_names]
     strategies = {}
     with _readonly_signal_engine():
         for s in active:
@@ -662,7 +702,12 @@ th{background:#eee}ul{margin:4px 0 4px 18px;padding:0}p{margin:4px 0}.small{font
 """
 
 
-def _render(modes: list[str], data: dict[str, dict], generated: datetime) -> str:
+def _render(
+    modes: list[str],
+    data: dict[str, dict],
+    generated: datetime,
+    filters_note: str = "",
+) -> str:
     title = {"paper": "Paper", "live": "Live", "both": "Paper and live (shown separately)"}
     mode_key = modes[0] if len(modes) == 1 else "both"
     sections = []
@@ -727,11 +772,26 @@ def _render(modes: list[str], data: dict[str, dict], generated: datetime) -> str
         f"<title>Strategy Performance Report - {_e(title[mode_key])}</title><style>{CSS}</style></head><body>"
         f"<h1>Strategy Performance Report - {_e(title[mode_key])}</h1>"
         f'<div class="meta">Generated {_e(ts)}. {_e(covered)}. Charges are estimated. '
-        "Paper and live are never combined.</div>" + "".join(sections) + "</body></html>\n"
+        f"Paper and live are never combined.{_e(filters_note)}</div>" + "".join(sections) + "</body></html>\n"
     )
 
 
 # ---------------------------------------------------------------- public api
+
+
+def _filters_note(date_from, date_to, inc, exc, window_sessions) -> str:
+    parts = []
+    if date_from:
+        parts.append(f"from {date_from}")
+    if date_to:
+        parts.append(f"to {date_to}")
+    if inc:
+        parts.append("include " + ", ".join(inc))
+    if exc:
+        parts.append("exclude " + ", ".join(exc))
+    if window_sessions:
+        parts.append(f"window {window_sessions} sessions")
+    return (" Filters: " + "; ".join(parts) + ".") if parts else ""
 
 
 def generate_report(
@@ -742,6 +802,11 @@ def generate_report(
     signal_db: Path | str | None = None,
     cutoff: str | None = None,
     now: datetime | None = None,
+    date_to: str | None = None,
+    date_from: str | None = None,
+    include: str | list[str] | None = None,
+    exclude: str | list[str] | None = None,
+    window_sessions: int | None = None,
 ) -> Path:
     """Build the report and save it as <out_dir>/<mode>-YYYY-MM-DD.html (the run date, IST).
 
@@ -750,16 +815,53 @@ def generate_report(
     """
     if mode not in MODES:
         raise ReportError(f"Unknown mode {mode!r}. Use paper, live or both.")
-    if cutoff is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", cutoff):
-        raise ReportError("Cut-off must be YYYY-MM-DD.")
+    if date_to is not None and cutoff is not None and date_to != cutoff:
+        raise ReportError("Give either cutoff or date_to, not two different values.")
+    cutoff = _parse_date(date_to if date_to is not None else cutoff, "End date (--to)")
+    date_from = _parse_date(date_from, "Start date (--from)")
+    if date_from and cutoff and date_from > cutoff:
+        raise ReportError(f"Start date {date_from} is after end date {cutoff}.")
+    if date_from:
+        from services.strategy_metrics_service import LEDGER_RELIABLE_SINCE
+
+        reliable = LEDGER_RELIABLE_SINCE.isoformat()
+        if date_from < reliable:
+            print(
+                f"Notice: --from {date_from} is before the reliable ledger start {reliable}; using {reliable}.",
+                file=sys.stderr,
+            )
+            date_from = reliable
+    if window_sessions is not None and (
+        isinstance(window_sessions, bool) or not isinstance(window_sessions, int) or window_sessions < 1
+    ):
+        raise ReportError("Window sessions must be an integer of 1 or more.")
+    inc = _parse_names(include)
+    exc_names = _parse_names(exclude)
     out_dir = Path(out_dir) if out_dir else REPORT_DIR
     ledger = Path(ledger_db) if ledger_db else LEDGER_DB
     signals = Path(signal_db) if signal_db else SIGNAL_DB
     generated = now or datetime.now(IST)
     modes = ["paper", "live"] if mode == "both" else [mode]
     try:
-        data = {m: _analyse_mode(m, ledger, signals, cutoff) for m in modes}
-        html = _render(modes, data, generated)
+        data = {
+            m: _analyse_mode(
+                m, ledger, signals, cutoff, date_from, inc, exc_names, window_sessions
+            )
+            for m in modes
+        }
+        if inc or exc_names:
+            seen = {n for m in modes for n in data[m]["available_names"]}
+            unknown = [n for n in dict.fromkeys(inc + exc_names) if n not in seen]
+            if unknown:
+                print(
+                    "Warning: no strategy named in the data: " + ", ".join(unknown),
+                    file=sys.stderr,
+                )
+            if any(data[m]["filtered_empty"] for m in modes) and not any(
+                data[m]["status"] == "ok" for m in modes
+            ):
+                raise ReportError("The include/exclude filters leave no strategies to report.")
+        html = _render(modes, data, generated, _filters_note(date_from, cutoff, inc, exc_names, window_sessions))
     except ReportError:
         raise
     except Exception as exc:  # any failure: no file
@@ -825,10 +927,38 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--out", default=None, help="output folder (default reports/strategy-performance)"
     )
-    ap.add_argument("--cutoff", default=None, help="YYYY-MM-DD, default the last session with data")
+    ap.add_argument(
+        "--to",
+        "--cutoff",
+        dest="date_to",
+        default=None,
+        help="YYYY-MM-DD upper bound, default the last session with data (--cutoff is an alias)",
+    )
+    ap.add_argument(
+        "--from",
+        dest="date_from",
+        default=None,
+        help="YYYY-MM-DD lower bound (not earlier than the reliable ledger start)",
+    )
+    ap.add_argument("--include", default=None, help="comma-separated exact strategy names to report")
+    ap.add_argument("--exclude", default=None, help="comma-separated exact strategy names to drop")
+    ap.add_argument(
+        "--window-sessions",
+        type=int,
+        default=None,
+        help=f"sessions per recent/previous window (default {WINDOW_SESSIONS})",
+    )
     args = ap.parse_args(argv)
     try:
-        path = generate_report(args.mode, out_dir=args.out, cutoff=args.cutoff)
+        path = generate_report(
+            args.mode,
+            out_dir=args.out,
+            date_to=args.date_to,
+            date_from=args.date_from,
+            include=args.include,
+            exclude=args.exclude,
+            window_sessions=args.window_sessions,
+        )
     except ReportError as exc:
         print(f"REPORT FAILED: {exc}", file=sys.stderr)
         return 1

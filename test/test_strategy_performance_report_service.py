@@ -143,6 +143,90 @@ def test_dynamic_text_is_escaped(ledger, tmp_path):
     assert "Content-Security-Policy" in html
 
 
+def _gen_kw(ledger, tmp_path, **kw):
+    return svc.generate_report(
+        "paper",
+        out_dir=tmp_path / "out",
+        ledger_db=ledger,
+        signal_db=ledger.parent / "none.db",
+        now=NOW,
+        **kw,
+    ).read_text(encoding="utf-8")
+
+
+def test_include_only(ledger, tmp_path):
+    html = _gen_kw(ledger, tmp_path, include=" ALPHA ,, ")
+    assert "ALPHA" in html
+    assert "&lt;b&gt;evil&lt;/b&gt;" not in html.split("Filters:")[0]
+
+
+def test_exclude_only(ledger, tmp_path):
+    html = _gen_kw(ledger, tmp_path, exclude="ALPHA")
+    assert "&lt;b&gt;evil&lt;/b&gt;" in html
+    assert "<td>ALPHA</td>" not in html
+
+
+def test_exclude_wins_over_include(ledger, tmp_path):
+    html = _gen_kw(ledger, tmp_path, include="ALPHA," + EVIL, exclude="ALPHA")
+    assert "<td>ALPHA</td>" not in html
+    assert "&lt;b&gt;evil&lt;/b&gt;" in html
+    with pytest.raises(svc.ReportError, match="no strategies"):
+        _gen_kw(ledger, tmp_path, include="ALPHA", exclude="ALPHA")
+
+
+def test_unknown_name_warns_not_errors(ledger, tmp_path, capsys):
+    _gen_kw(ledger, tmp_path, include="ALPHA,NOPE", exclude="GONE")
+    err = capsys.readouterr().err
+    assert "NOPE" in err and "GONE" in err and "ALPHA," not in err
+
+
+def test_from_clamped_to_reliable_start(ledger, tmp_path, capsys):
+    html = _gen_kw(ledger, tmp_path, date_from="2026-01-01")
+    err = capsys.readouterr().err
+    assert "2026-09-25" in err and "Notice" in err
+    assert "BEFORE-FLOOR" not in html
+    html2 = _gen_kw(ledger, tmp_path, date_from="2026-10-13")
+    assert "from 2026-10-13" in html2
+
+
+def test_from_after_to_is_an_error(ledger, tmp_path):
+    with pytest.raises(svc.ReportError, match="after"):
+        _gen_kw(ledger, tmp_path, date_from="2026-10-10", date_to="2026-10-05")
+    with pytest.raises(svc.ReportError):
+        _gen_kw(ledger, tmp_path, date_from="10/10/2026")
+    assert svc.main(
+        ["--from", "2026-10-10", "--to", "2026-10-05", "--out", str(tmp_path / "o2")]
+    ) == 1
+
+
+def test_cutoff_alias(ledger, tmp_path):
+    a = _gen_kw(ledger, tmp_path, cutoff="2026-10-09")
+    b = _gen_kw(ledger, tmp_path, date_to="2026-10-09")
+    assert "data up to 2026-10-09" in a and a == b
+    args = []
+    orig = svc.generate_report
+    svc.generate_report = lambda mode, **kw: args.append(kw) or tmp_path
+    try:
+        assert svc.main(["--cutoff", "2026-10-09"]) == 0
+    finally:
+        svc.generate_report = orig
+    assert args[0]["date_to"] == "2026-10-09"
+
+
+def test_window_sessions_override(ledger):
+    from services.strategy_performance_report_service import _analyse_mode
+
+    sig = ledger.parent / "none.db"
+    default = _analyse_mode("paper", ledger, sig, None)
+    assert len(default["recent_days"]) == 5 and len(default["previous_days"]) == 5
+    small = _analyse_mode("paper", ledger, sig, None, window_sessions=3)
+    assert len(small["recent_days"]) == 3 and len(small["previous_days"]) == 3
+    big = _analyse_mode("paper", ledger, sig, None, window_sessions=10)
+    assert len(big["recent_days"]) == 6 and len(big["previous_days"]) == 6  # half split
+    with pytest.raises(svc.ReportError):
+        svc.generate_report("paper", ledger_db=ledger, window_sessions=0)
+
+
 def test_error_writes_no_file(tmp_path):
     out = tmp_path / "out"
     with pytest.raises(svc.ReportError):
