@@ -198,7 +198,6 @@ def test_different_quantity_submitted_concurrently_both_proceed(monkeypatch):
 def test_the_marker_is_dropped_when_placement_raises(monkeypatch):
     from sandbox import order_manager as om
     from sandbox.order_manager import OrderManager
-    from sandbox.order_manager import OrderManager
 
     def boom(self, *a, **k):
         raise RuntimeError("quote service exploded")
@@ -212,8 +211,8 @@ def test_the_marker_is_dropped_when_placement_raises(monkeypatch):
 
 def test_the_marker_is_dropped_after_a_normal_and_a_rejected_placement(monkeypatch):
     from sandbox import order_manager as om
-    from sandbox.order_manager import OrderManager
     from sandbox.execution_engine import ExecutionEngine
+    from sandbox.order_manager import OrderManager
 
     monkeypatch.setattr(ExecutionEngine, "_fetch_quote", lambda self, s, e: quote(2500))
     monkeypatch.setattr("sandbox.order_manager.time.sleep", lambda *_: None)
@@ -276,17 +275,66 @@ def test_reduce_only_exit_fills_from_a_fresh_feed_price_without_a_rest_quote(mon
     assert _position_qty() == 46
 
 
-def test_reduce_only_exit_with_no_fresh_feed_price_is_refused_and_never_priced_by_rest(
-    monkeypatch,
+def _set_position_ltp(value):
+    from database.sandbox_db import SandboxPositions, db_session
+
+    db_session.remove()
+    row = SandboxPositions.query.filter_by(user_id=USER, symbol="RELIANCE", product="CNC").first()
+    row.ltp = value
+    db_session.commit()
+    db_session.remove()
+
+
+def _fresh_feed(monkeypatch):
+    return _feed(monkeypatch, {"ltp": 2490.0, "bid": 0, "ask": 0, "source": "feed", "age": 1.0})
+
+
+@pytest.mark.parametrize("why", ["feed missing", "feed stale"])
+def test_reduce_only_exit_without_a_fresh_feed_tick_is_accepted_open_at_last_price_with_no_rest(
+    monkeypatch, why, caplog
 ):
+    """feed_quote returns None both for a symbol not on the feed and for a stale tick."""
+    import logging
+
     _open_long(monkeypatch, 200)
     rest = _forbid_rest(monkeypatch)
-    _feed(monkeypatch, None)  # unhealthy feed, stale tick or symbol not on the feed
-    ok, response, status = run_in_thread(lambda: _place(_order("SELL", 154)))
-    assert not ok and status == 400
-    assert "reduce-only" in response["message"] and "no live-feed price" in response["message"]
+    _feed(monkeypatch, None)
+    with caplog.at_level(logging.INFO):
+        ok, response, status = run_in_thread(lambda: _place(_order("SELL", 154)))
+    assert ok, response
     assert rest == []
-    assert _orders() == [] and _position_qty() == 200
+    assert _orders() == [("open", Decimal("0.00"))] or _orders()[0][0] == "open"
+    assert _position_qty() == 200  # not filled yet: the execution engine fills it on a tick
+    assert "ladder=fallback-open" in caplog.text
+
+
+def test_reduce_only_exit_with_a_fresh_feed_tick_fills_at_last_traded_price(monkeypatch, caplog):
+    import logging
+
+    _open_long(monkeypatch, 200)
+    rest = _forbid_rest(monkeypatch)
+    _fresh_feed(monkeypatch)
+    with caplog.at_level(logging.INFO):
+        ok, response, _ = run_in_thread(lambda: _place(_order("SELL", 154)))
+    assert ok, response
+    assert rest == []
+    assert _orders() == [("complete", Decimal("2490.00"))]
+    assert "price_source=feed" in caplog.text
+
+
+def test_reduce_only_exit_with_no_price_at_all_is_refused_400(monkeypatch, caplog):
+    import logging
+
+    _open_long(monkeypatch, 200)
+    rest = _forbid_rest(monkeypatch)
+    _feed(monkeypatch, None)
+    _set_position_ltp(Decimal("0"))
+    with caplog.at_level(logging.INFO):
+        ok, response, status = run_in_thread(lambda: _place(_order("SELL", 154)))
+    assert not ok and status == 400
+    assert "no live-feed price and no last known price" in response["message"]
+    assert rest == [] and _orders() == [] and _position_qty() == 200
+    assert "ladder=refused" in caplog.text
 
 
 def test_an_order_larger_than_the_position_is_not_reduce_only_and_keeps_the_rest_path(monkeypatch):
@@ -378,3 +426,28 @@ def test_lock_ordering_unchanged_concurrent_different_symbols_do_not_wait_on_eac
     a.join(30)
     b.join(30)
     assert out["a"][0] is True and out["b"][0] is True
+
+
+# -- in-flight key normalisation ---------------------------------------------------------
+
+
+def _key(**over):
+    from sandbox.order_manager import OrderManager, _inflight_key
+
+    order = _order(price_type="LIMIT")
+    order.update({"price": "2500", "trigger_price": 0})
+    order.update(over)
+    return _inflight_key(OrderManager(USER), order)
+
+
+def test_inflight_key_matches_across_decimal_spellings_for_limit_and_sl():
+    assert _key(price="2500") == _key(price="2500.00") == _key(price=2500.0)
+    assert _key(price="2500") != _key(price="2500.05")
+    assert _key(price_type="SL", price="2500", trigger_price="2490") == _key(
+        price_type="SL", price="2500.00", trigger_price="2490.0"
+    )
+
+
+def test_inflight_key_ignores_price_and_trigger_for_market():
+    assert _key(price_type="MARKET", price=0) == _key(price_type="MARKET", price="2500.5")
+    assert _key(price_type="MARKET", trigger_price="9") == _key(price_type="MARKET")

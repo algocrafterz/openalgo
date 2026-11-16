@@ -67,9 +67,25 @@ class _InflightClaim:
         self.orderid = None
 
 
-# Plain stdlib lock (green under eventlet). Held only for dict operations, never across I/O.
+# Single-process assumption: this guard lives in process memory, so it only de-duplicates
+# orders handled by the same worker process (the app runs one). Plain stdlib lock (green under eventlet). Held only for dict operations, never across I/O.
 _inflight_lock = threading.Lock()
 _inflight: dict = {}
+
+
+def _inflight_price_parts(order_data):
+    """Price and trigger for the key: none for MARKET; Decimal-normalised otherwise.
+
+    '2500' and '2500.00' are the same order. MARKET orders carry no meaningful price.
+    """
+    if str(order_data["price_type"]).upper() == "MARKET":
+        return ("", "")
+
+    def norm(value):
+        d = Decimal(str(value or 0)).normalize()
+        return format(d if d != 0 else Decimal(0), "f")
+
+    return (norm(order_data.get("price")), norm(order_data.get("trigger_price")))
 
 
 def _inflight_key(manager, order_data):
@@ -91,8 +107,7 @@ def _inflight_key(manager, order_data):
             str(order_data["action"]).upper(),
             int(order_data["quantity"]),
             str(order_data["price_type"]).upper(),
-            str(order_data.get("price") or 0),
-            str(order_data.get("trigger_price") or 0),
+            *_inflight_price_parts(order_data),
         )
     except (KeyError, TypeError, ValueError, AttributeError):
         return None
@@ -456,12 +471,15 @@ class OrderManager:
                     except Exception as e:
                         logger.debug(f"Pre-fetched quote unusable: {e}")
 
-                # BUG-019: a MARKET order that only reduces the held position must not wait on
-                # a live quote while it holds the position lock (a 168 s lookup left identical
-                # exit copies queued behind it). It is priced from the live feed, an in-process
-                # read with a freshness bound and no network call, and fills at the feed's last
-                # price (the feed carries no bid/ask). With no fresh feed price it is refused:
-                # no REST lookup, no stale position price, no invented price.
+                # BUG-019: a MARKET order that only reduces the held position never makes a
+                # REST quote call: a 168 s lookup under the position lock left identical exit
+                # copies queued behind it. Price ladder, no network at all:
+                #   (a) fresh feed tick (<= REDUCE_ONLY_FEED_MAX_AGE_SECONDS): fill at the last
+                #       traded price (the feed carries no bid/ask);
+                #   (b) otherwise accept the order OPEN, margin at the position's last known
+                #       price (the pre-BUG-019 fallback); the WebSocket / poll execution engine
+                #       fills it when a tick arrives;
+                #   (c) refuse (400) only when there is no price at all. No price is invented.
                 reduce_only = False
                 if not quote_fetch_success and temp_existing_position:
                     held = temp_existing_position.quantity
@@ -473,18 +491,29 @@ class OrderManager:
                     from sandbox.feed_price import feed_quote
 
                     feed = feed_quote(symbol, exchange, REDUCE_ONLY_FEED_MAX_AGE_SECONDS)
+                    last_known = temp_existing_position.ltp
                     if feed and feed.get("ltp") and Decimal(str(feed["ltp"])) > 0:
                         margin_calculation_price = Decimal(str(feed["ltp"]))
                         cached_quote = feed
-                        quote_fetch_success = True
                         logger.info(
-                            f"Reduce-only MARKET {action} {quantity} {symbol}: priced from the "
-                            f"live feed at {margin_calculation_price} (age {feed.get('age', 0):.1f}s)"
+                            f"Reduce-only MARKET {action} {quantity} {symbol}: ladder=feed "
+                            f"price_source=feed price={margin_calculation_price} "
+                            f"age={feed.get('age', 0):.1f}s"
+                        )
+                    elif last_known and last_known > 0:
+                        margin_calculation_price = last_known
+                        # cached_quote stays None: the order is accepted open and filled by
+                        # the execution engines on the next tick.
+                        logger.info(
+                            f"Reduce-only MARKET {action} {quantity} {symbol}: "
+                            f"ladder=fallback-open price_source=position_last_price "
+                            f"price={last_known} reason=no fresh feed tick within "
+                            f"{REDUCE_ONLY_FEED_MAX_AGE_SECONDS:.0f}s, accepted open"
                         )
                     else:
                         logger.error(
-                            f"Reduce-only MARKET {action} {quantity} {symbol} refused: no live "
-                            f"feed price within {REDUCE_ONLY_FEED_MAX_AGE_SECONDS:.0f}s"
+                            f"Reduce-only MARKET {action} {quantity} {symbol}: ladder=refused "
+                            f"reason=no feed tick and no position last price"
                         )
                         return (
                             False,
@@ -492,14 +521,14 @@ class OrderManager:
                                 "status": "error",
                                 "message": (
                                     f"Cannot place reduce-only MARKET order for {symbol} - no "
-                                    f"live-feed price within {REDUCE_ONLY_FEED_MAX_AGE_SECONDS:.0f}s "
-                                    "and it will not wait on a live quote. Retry shortly or use "
-                                    "a LIMIT order with a specific price."
+                                    "live-feed price and no last known price. Retry shortly or "
+                                    "use a LIMIT order with a specific price."
                                 ),
                                 "mode": "analyze",
                             },
                             400,
                         )
+                    quote_fetch_success = True
 
                 # Attempt 1: Fetch live quote with retry
                 if not quote_fetch_success:
