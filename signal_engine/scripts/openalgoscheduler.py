@@ -240,6 +240,19 @@ def _authenticate_with_network_retry(
     return result
 
 
+def _alert_invalid_ip(error) -> None:
+    """BUG-029: tell the owner at once when the broker rejects the login as INVALID_IP.
+
+    Only an INVALID_IP failure acts; the hook never raises and never blocks the login.
+    """
+    try:
+        from signal_engine.ops import loginalert
+
+        loginalert.notify_login_failure(error)
+    except Exception as exc:  # noqa: BLE001
+        _log().warning("INVALID_IP alert hook failed: %s", type(exc).__name__)
+
+
 def _totp_session_token(
     broker_name: str, username: str, get_existing_auth,
     authenticate_with_totp, upsert_auth,
@@ -270,6 +283,7 @@ def _totp_session_token(
     )
     if error:
         logger.error("Broker authentication failed: %s", error)
+        _alert_invalid_ip(error)
         return False, error, None
     if not auth_token:
         logger.error("Broker authentication returned empty token for user: %s", username)

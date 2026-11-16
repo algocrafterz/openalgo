@@ -501,6 +501,18 @@ liveness 09:27, close-day 15:36) from `signal_engine/reports/*-status.tsv`, thei
 
 Merge risk: low, additive lines only.
 
+## Scheduler login INVALID_IP alert (added 2026-11-17)
+
+signal_engine-only change (BUG-029); no OpenAlgo core package (`broker/`, `services/`, `utils/`,
+`blueprints/`) was modified, so it adds no merge risk against `upstream/main`.
+
+- `signal_engine/scripts/openalgoscheduler.py` (scheduler login) and `signal_engine/ops/loginalert.py`
+  (new): when the broker rejects the login with INVALID_IP, one Telegram alert is sent from a
+  background thread. It never raises into the login and logs no credentials or IP.
+- Dedupe: one alert per IST day per process, plus a 23-hour cross-process cooldown in
+  `alerts.deliver`. A genuine second INVALID_IP after an allow-list fix inside that window sends no
+  new alert; the existing startup-failure notice still goes out.
+
 ## Merge-conflict risk assessment (2026-09-28)
 
 Checked ahead of the next OpenAlgo version bump
