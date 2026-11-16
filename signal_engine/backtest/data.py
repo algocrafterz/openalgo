@@ -11,8 +11,10 @@ For longer history, load from OpenAlgo's own historify.duckdb via `from_openalgo
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -181,6 +183,28 @@ HISTORIFY_DB = Path(os.environ.get("HISTORIFY_DB", "db/historify.duckdb"))
 #: script pulls the full universe. Cap it explicitly instead.
 _DUCKDB_CONFIG = {"memory_limit": "4GB", "threads": "4"}
 
+_log = logging.getLogger(__name__)
+#: OpenAlgo opens historify.duckdb read-write, and DuckDB refuses a read-only open while another
+#: process holds it that way. The hold is brief, so wait it out: 5 tries, 1+2+3+4 s = 10 s.
+_LOCK_TRIES = 5
+_LOCK_BACKOFF_S = 1.0
+
+
+def _connect_ro(path):
+    """Open the store read-only, retrying only on the cross-process file-lock error."""
+    import duckdb
+
+    for attempt in range(1, _LOCK_TRIES + 1):
+        try:
+            return duckdb.connect(str(path), read_only=True, config=_DUCKDB_CONFIG)
+        except duckdb.IOException as e:
+            if "Could not set lock" not in str(e) or attempt == _LOCK_TRIES:
+                raise
+            wait = _LOCK_BACKOFF_S * attempt
+            _log.warning("historify.duckdb locked by another process; retry %d/%d in %.0fs",
+                         attempt, _LOCK_TRIES - 1, wait)
+            time.sleep(wait)
+
 #: NSE continuous session. Bars outside this are broker-feed artefacts (pre-open
 #: crossings, post-close corrections, and in one case a whole second download made
 #: against a different timezone) and are dropped rather than traded.
@@ -215,8 +239,7 @@ def historify_symbols(interval: str = "1m", db_path=None) -> list[str]:
     returns, and it flows into the trade list, so two runs on the same data would list the same
     trades in a different order.
     """
-    import duckdb
-    con = duckdb.connect(str(db_path or HISTORIFY_DB), read_only=True, config=_DUCKDB_CONFIG)
+    con = _connect_ro(db_path or HISTORIFY_DB)
     try:
         return [r[0] for r in con.execute(
             "SELECT symbol FROM market_data WHERE interval = ? "
@@ -304,11 +327,9 @@ def from_historify(symbols=None, interval: str = "5m", start=None, end=None,
     A `DataCollector` passed as `collector` receives the dropped-row, split-day and
     min-sessions counts; the returned frames are unchanged by it.
     """
-    import duckdb
-
     if collector is not None:
         collector.interval = interval
-    con = duckdb.connect(str(db_path or HISTORIFY_DB), read_only=True, config=_DUCKDB_CONFIG)
+    con = _connect_ro(db_path or HISTORIFY_DB)
     try:
         symbols = symbols or historify_symbols("1m", db_path)
         out: dict[str, pd.DataFrame] = {}
