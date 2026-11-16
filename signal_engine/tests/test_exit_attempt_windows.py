@@ -120,7 +120,7 @@ class TestReplay20261104:
         world = World(copy_delay=10**6, core_guard=False)  # nothing ever lands
         await _replay(world)
         gaps = [world.elapsed(b) - world.elapsed(a)
-                for a, b in zip(world.send_times, world.send_times[1:])]
+                for a, b in zip(world.send_times, world.send_times[1:], strict=False)]
         assert len(world.send_times) == 3
         assert all(gap >= 120 for gap in gaps), gaps  # send + a full 120 s window each
 
@@ -172,14 +172,49 @@ def _order_for_interpret():
     return order, _interpret_placeorder
 
 
-def test_http_409_is_an_inflight_rejection_even_with_a_different_message():
+def test_http_409_with_the_inflight_flag_is_in_flight_even_with_a_different_message():
+    from signal_engine.main import _is_inflight_rejection
+
+    order, interpret = _order_for_interpret()
+    body = {"status": "error", "message": "something else entirely", "inflight": True}
+    result = interpret(order, _response(409, body), body)
+    assert result.status == OrderStatus.REJECTED and result.inflight
+    assert _is_inflight_rejection(result)
+
+
+def test_lock_busy_409_without_the_flag_is_not_in_flight():
+    """The core also answers 409 when a DIFFERENT order holds the position lock (nothing was
+    placed). That is an ordinary rejection: normal retry path, no 120 s wait for a copy."""
+    from signal_engine.main import _is_inflight_rejection
+
+    order, interpret = _order_for_interpret()
+    body = {
+        "status": "error",
+        "message": "Another order for AXISBANK is still being processed. Try again in a moment.",
+        "mode": "analyze",
+    }
+    result = interpret(order, _response(409, body), body)
+    assert result.status == OrderStatus.REJECTED
+    assert not result.inflight and not _is_inflight_rejection(result)
+
+
+def test_bare_409_with_an_unrelated_message_is_not_in_flight():
     from signal_engine.main import _is_inflight_rejection
 
     order, interpret = _order_for_interpret()
     body = {"status": "error", "message": "something else entirely"}
     result = interpret(order, _response(409, body), body)
-    assert result.status == OrderStatus.REJECTED and result.inflight
-    assert _is_inflight_rejection(result)
+    assert not result.inflight and not _is_inflight_rejection(result)
+
+
+def test_409_with_the_core_message_text_is_in_flight_by_the_fallback():
+    from signal_engine.main import _is_inflight_rejection
+
+    order, interpret = _order_for_interpret()
+    body = {"status": "error", "message": INFLIGHT}
+    result = interpret(order, _response(409, body), body)
+    assert not result.inflight  # no flag on the wire
+    assert _is_inflight_rejection(result)  # the message fallback still recognises it
 
 
 def test_inflight_flag_is_an_inflight_rejection_even_with_a_different_message():
@@ -199,3 +234,28 @@ def test_ordinary_rejection_is_not_inflight_and_text_fallback_still_matches():
     result = interpret(order, _response(400, body), body)
     assert not result.inflight and not _is_inflight_rejection(result)
     assert _is_inflight_rejection(TradeResult(status=OrderStatus.REJECTED, message=INFLIGHT))
+
+
+@pytest.mark.asyncio
+async def test_lock_busy_409_is_retried_normally_without_a_reconcile_window():
+    """Executor level: a 409 from the core's position lock (a different order holds it, nothing
+    was placed) goes down the ordinary retry path. It is not held for a 120 s late-fill window."""
+    world = World(copy_delay=10**6, core_guard=False)
+    busy = {
+        "status": "error",
+        "mode": "analyze",
+        "message": "Another order for AXISBANK is still being processed. Try again in a moment.",
+    }
+    _, interpret = _order_for_interpret()
+
+    async def send(order):
+        world.send_times.append(world.now)
+        world.advance(SEND_SECONDS)
+        return interpret(order, _response(409, busy), busy)
+
+    world.send = send
+    result, _ = await _replay(world)
+    assert len(world.send_times) == 3  # every retry was sent
+    assert world.elapsed(world.now) < 60, world.elapsed(world.now)  # no 120 s window anywhere
+    assert result.status == OrderStatus.REJECTED and not result.inflight
+    assert not oc._uncertain  # the exit was not held as uncertain

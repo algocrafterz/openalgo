@@ -85,6 +85,26 @@ def _orders(symbol="RELIANCE", action="SELL"):
     return out
 
 
+def _order_rows(symbol="RELIANCE", action="SELL"):
+    from database.sandbox_db import SandboxOrders, db_session
+
+    db_session.remove()
+    rows = SandboxOrders.query.filter_by(user_id=USER, symbol=symbol, action=action).all()
+    out = [(r.order_status, r.price) for r in rows]
+    db_session.remove()
+    return out
+
+
+def _position_ltp(symbol="RELIANCE"):
+    from database.sandbox_db import SandboxPositions, db_session
+
+    db_session.remove()
+    row = SandboxPositions.query.filter_by(user_id=USER, symbol=symbol, product="CNC").first()
+    ltp = row.ltp
+    db_session.remove()
+    return ltp
+
+
 class SlowQuote:
     """A _fetch_quote that blocks until released, like the 168 s lookup."""
 
@@ -310,6 +330,36 @@ def test_untagged_reduce_only_exit_keeps_the_rest_quote_path(monkeypatch):
     assert _position_qty() == 46
 
 
+def _untagged_exit_uses_rest(monkeypatch, order):
+    """Place a reduce-only SELL of `order` with the feed down and a good REST quote."""
+    from sandbox.execution_engine import ExecutionEngine
+
+    _open_long(monkeypatch, 200)
+    calls = []
+    monkeypatch.setattr(
+        ExecutionEngine, "_fetch_quote", lambda self, s, e: calls.append(s) or quote(2500)
+    )
+    seen = _feed(monkeypatch, None)
+    ok, response, _ = run_in_thread(lambda: _place(order))
+    assert ok, response
+    assert calls == ["RELIANCE"] and seen == []  # REST quote used, feed ladder never consulted
+    assert _position_qty() == 46
+
+
+def test_reduce_only_exit_with_strategy_none_keeps_the_rest_path(monkeypatch):
+    _untagged_exit_uses_rest(monkeypatch, _order("SELL", 154, strategy=None))
+
+
+def test_reduce_only_exit_with_no_strategy_key_keeps_the_rest_path(monkeypatch):
+    order = _order("SELL", 154)
+    del order["strategy"]
+    _untagged_exit_uses_rest(monkeypatch, order)
+
+
+def test_reduce_only_gtt_leg_exit_keeps_the_rest_path(monkeypatch):
+    _untagged_exit_uses_rest(monkeypatch, {**_order("SELL", 154), "gtt_leg_id": "LEG-1"})
+
+
 def _set_position_ltp(value):
     from database.sandbox_db import SandboxPositions, db_session
 
@@ -338,7 +388,9 @@ def test_reduce_only_exit_without_a_fresh_feed_tick_is_accepted_open_at_last_pri
         ok, response, status = run_in_thread(lambda: _place(_order("SELL", 154)))
     assert ok, response
     assert rest == []
-    assert _orders() == [("open", Decimal("0.00"))] or _orders()[0][0] == "open"
+    rows = _order_rows()
+    assert len(rows) == 1 and rows[0][0] == "open", rows
+    assert rows[0][1] == _position_ltp() and rows[0][1] > 0  # priced at the last known price
     assert _position_qty() == 200  # not filled yet: the execution engine fills it on a tick
     assert "ladder=fallback-open" in caplog.text
 
@@ -481,6 +533,31 @@ def test_inflight_key_matches_across_decimal_spellings_for_limit_and_sl():
     assert _key(price_type="SL", price="2500", trigger_price="2490") == _key(
         price_type="SL", price="2500.00", trigger_price="2490.0"
     )
+
+
+@pytest.mark.parametrize("bad", ["abc", "1e999999999", "-1e999999999"])
+def test_inflight_key_with_an_invalid_price_is_unguarded_not_raised(bad):
+    assert _key(price=bad) is None
+    assert _key(price_type="SL", price="2500", trigger_price=bad) is None
+
+
+@pytest.mark.parametrize("bad", ["abc", "1e999999999"])
+def test_place_order_with_an_invalid_price_does_not_raise_and_leaks_no_marker(monkeypatch, bad):
+    from sandbox import order_manager as om
+    from sandbox.order_manager import OrderManager
+
+    seen = []
+
+    def impl(self, order_data, prefetched_quote, timer):
+        seen.append(timer.claim)
+        return (False, {"status": "error", "message": "base behaviour"}, 400)
+
+    monkeypatch.setattr(OrderManager, "_place_order_impl", impl)
+    order = {**_order(price_type="LIMIT"), "price": bad, "trigger_price": 0}
+    result = _place(order)  # must not raise out of place_order
+    assert result == (False, {"status": "error", "message": "base behaviour"}, 400)
+    assert seen == [None]  # unguarded: no claim taken
+    assert om._inflight == {}
 
 
 def test_inflight_key_ignores_price_and_trigger_for_market():

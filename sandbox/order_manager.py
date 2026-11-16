@@ -109,7 +109,9 @@ def _inflight_key(manager, order_data):
             str(order_data["price_type"]).upper(),
             *_inflight_price_parts(order_data),
         )
-    except (KeyError, TypeError, ValueError, AttributeError):
+    except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
+        # ArithmeticError covers decimal.InvalidOperation / Overflow from a bad price string.
+        # Any failure to build the key leaves the order unguarded, as before the guard existed.
         return None
 
 
@@ -493,9 +495,8 @@ class OrderManager:
                     and temp_existing_position
                 ):
                     held = temp_existing_position.quantity
-                    reduce_only = (
-                        (held > 0 and action == "SELL" and quantity <= held)
-                        or (held < 0 and action == "BUY" and quantity <= -held)
+                    reduce_only = (held > 0 and action == "SELL" and quantity <= held) or (
+                        held < 0 and action == "BUY" and quantity <= -held
                     )
                 if reduce_only and not quote_fetch_success:
                     from sandbox.feed_price import feed_quote
