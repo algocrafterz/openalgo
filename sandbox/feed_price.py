@@ -15,6 +15,8 @@ so the bound errs on the side of refusing. It is receipt time, not exchange time
 
 The feed carries a last price only: no bid or ask. Sandbox order pricing and fills therefore do
 NOT use it: they fill a BUY at the ask and a SELL at the bid from a REST quote.
+The one exception is a MARKET order that only reduces a held position (BUG-019): it is priced from
+here at the last price, so it never waits on a REST quote under the position lock.
 
 Every refusal returns None and the caller continues on its existing REST path and failure
 policy. Nothing here ever raises.

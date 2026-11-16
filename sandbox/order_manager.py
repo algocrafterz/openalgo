@@ -12,6 +12,7 @@ Features:
 
 import os
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -40,6 +41,101 @@ logger = get_logger(__name__)
 #: timeout (up to 125 s), and the stage that spends the time is not yet proven.
 _STAGE_LOG_THRESHOLD_MS = 2000.0
 
+#: BUG-019. An identical order (same strategy, symbol, exchange, product, side, quantity, price
+#: type and prices) arriving while one is still being placed is refused at once. A marker older
+#: than this is ignored and replaced, so a placement that never returns cannot block for ever.
+#: 300 s is longer than the worst slow placement seen (168 s) and shorter than the engine's
+#: 600 s duplicate watch.
+INFLIGHT_MAX_AGE_SECONDS = 300.0
+
+#: BUG-019. A MARKET order that only reduces a held position is priced from the live feed when
+#: its last tick is at most this old. Same bound the feed price helper documents.
+REDUCE_ONLY_FEED_MAX_AGE_SECONDS = 10.0
+
+#: Prefix of the rejection message; the signal engine matches on it (signal_engine/main.py).
+INFLIGHT_REJECTION_PREFIX = "Duplicate order in flight"
+
+
+class _InflightClaim:
+    """One order being placed. ``orderid`` is filled in once it has been generated."""
+
+    __slots__ = ("key", "started", "orderid")
+
+    def __init__(self, key):
+        self.key = key
+        self.started = time.monotonic()
+        self.orderid = None
+
+
+# Plain stdlib lock (green under eventlet). Held only for dict operations, never across I/O.
+_inflight_lock = threading.Lock()
+_inflight: dict = {}
+
+
+def _inflight_key(manager, order_data):
+    """The identity of an order for the in-flight guard, or None when it is not guarded.
+
+    Only strategy-tagged orders are guarded (the signal engine's), and never a GTT leg order,
+    so manual and GTT orders behave exactly as before.
+    """
+    try:
+        strategy = order_data.get("strategy") or ""
+        if not strategy or order_data.get("gtt_leg_id"):
+            return None
+        return (
+            str(manager.user_id),
+            str(strategy),
+            str(order_data["symbol"]),
+            str(order_data["exchange"]).upper(),
+            str(order_data["product"]).upper(),
+            str(order_data["action"]).upper(),
+            int(order_data["quantity"]),
+            str(order_data["price_type"]).upper(),
+            str(order_data.get("price") or 0),
+            str(order_data.get("trigger_price") or 0),
+        )
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def _inflight_claim(key):
+    """Register an order as in flight. Returns (claim, None) or (None, holder_claim)."""
+    now = time.monotonic()
+    with _inflight_lock:
+        holder = _inflight.get(key)
+        if holder is not None and now - holder.started < INFLIGHT_MAX_AGE_SECONDS:
+            return None, holder
+        claim = _InflightClaim(key)
+        _inflight[key] = claim
+        return claim, None
+
+
+def _inflight_release(claim):
+    """Drop the marker, but only if it is still this claim's (an expired one may be replaced)."""
+    with _inflight_lock:
+        if _inflight.get(claim.key) is claim:
+            del _inflight[claim.key]
+
+
+def _inflight_rejection(key, holder):
+    orderid = holder.orderid
+    symbol, action, quantity = key[2], key[5], key[6]
+    known = f" (order {orderid})" if orderid else ""
+    return (
+        False,
+        {
+            "status": "error",
+            "message": (
+                f"{INFLIGHT_REJECTION_PREFIX}: an identical {action} {quantity} {symbol} order"
+                f"{known} is still being processed; this copy was not queued"
+            ),
+            "mode": "analyze",
+            "inflight": True,
+            "inflight_orderid": orderid,
+        },
+        409,
+    )
+
 
 class _StageTimer:
     """Wall-clock time per place_order stage, plus every live quote fetch it made."""
@@ -48,6 +144,7 @@ class _StageTimer:
         self.start = self._last = time.perf_counter()
         self.stages = []
         self.quote_ms = []
+        self.claim = None
 
     def mark(self, stage):
         now = time.perf_counter()
@@ -92,13 +189,38 @@ class OrderManager:
         self.user_id = user_id
         self.fund_manager = FundManager(user_id)
 
+    def place_order(self, order_data, prefetched_quote=None):
+        """Place a sandbox order; see _place_order_impl.
+
+        BUG-019: an identical strategy order already being placed is refused here, BEFORE the
+        position lock, so a duplicate is never queued behind a slow placement. The marker is
+        taken before any quote lookup and dropped in a finally, whatever the outcome.
+        """
+        key = _inflight_key(self, order_data)
+        claim = None
+        if key is not None:
+            claim, holder = _inflight_claim(key)
+            if claim is None:
+                logger.warning(
+                    f"Sandbox order rejected as duplicate in flight: {key[2]} {key[5]} {key[6]} "
+                    f"[{key[1]}] (in flight: {holder.orderid or 'order id not yet assigned'}, "
+                    f"{time.monotonic() - holder.started:.1f}s)"
+                )
+                return _inflight_rejection(key, holder)
+        try:
+            return self._place_order_locked(order_data, prefetched_quote, claim)
+        finally:
+            if claim is not None:
+                _inflight_release(claim)
+
     # Held from the first read of the position (the CNC sell check, the margin
     # netting) through the order's commit and any immediate fill, so a second
     # order on the same position decides on what this one left behind.
     @holds_position_lock(_order_position)
-    def place_order(self, order_data, prefetched_quote=None):
-        """Place a sandbox order; see _place_order_impl. Logs stage timings when slow."""
+    def _place_order_locked(self, order_data, prefetched_quote=None, claim=None):
+        """Place under the position lock. Logs stage timings when slow."""
         timer = _StageTimer()
+        timer.claim = claim
         try:
             return self._place_order_impl(order_data, prefetched_quote, timer)
         finally:
@@ -333,6 +455,51 @@ class OrderManager:
                             quote_fetch_success = True
                     except Exception as e:
                         logger.debug(f"Pre-fetched quote unusable: {e}")
+
+                # BUG-019: a MARKET order that only reduces the held position must not wait on
+                # a live quote while it holds the position lock (a 168 s lookup left identical
+                # exit copies queued behind it). It is priced from the live feed, an in-process
+                # read with a freshness bound and no network call, and fills at the feed's last
+                # price (the feed carries no bid/ask). With no fresh feed price it is refused:
+                # no REST lookup, no stale position price, no invented price.
+                reduce_only = False
+                if not quote_fetch_success and temp_existing_position:
+                    held = temp_existing_position.quantity
+                    reduce_only = (
+                        (held > 0 and action == "SELL" and quantity <= held)
+                        or (held < 0 and action == "BUY" and quantity <= -held)
+                    )
+                if reduce_only and not quote_fetch_success:
+                    from sandbox.feed_price import feed_quote
+
+                    feed = feed_quote(symbol, exchange, REDUCE_ONLY_FEED_MAX_AGE_SECONDS)
+                    if feed and feed.get("ltp") and Decimal(str(feed["ltp"])) > 0:
+                        margin_calculation_price = Decimal(str(feed["ltp"]))
+                        cached_quote = feed
+                        quote_fetch_success = True
+                        logger.info(
+                            f"Reduce-only MARKET {action} {quantity} {symbol}: priced from the "
+                            f"live feed at {margin_calculation_price} (age {feed.get('age', 0):.1f}s)"
+                        )
+                    else:
+                        logger.error(
+                            f"Reduce-only MARKET {action} {quantity} {symbol} refused: no live "
+                            f"feed price within {REDUCE_ONLY_FEED_MAX_AGE_SECONDS:.0f}s"
+                        )
+                        return (
+                            False,
+                            {
+                                "status": "error",
+                                "message": (
+                                    f"Cannot place reduce-only MARKET order for {symbol} - no "
+                                    f"live-feed price within {REDUCE_ONLY_FEED_MAX_AGE_SECONDS:.0f}s "
+                                    "and it will not wait on a live quote. Retry shortly or use "
+                                    "a LIMIT order with a specific price."
+                                ),
+                                "mode": "analyze",
+                            },
+                            400,
+                        )
 
                 # Attempt 1: Fetch live quote with retry
                 if not quote_fetch_success:
@@ -658,6 +825,8 @@ class OrderManager:
             # Generate unique order ID
             timer.mark("margin")
             orderid = self._generate_order_id()
+            if timer.claim is not None:
+                timer.claim.orderid = orderid  # lets a rejected duplicate name this order
 
             # Check if order should be rejected (CNC SELL validation failed)
             if cnc_sell_rejection_reason:
