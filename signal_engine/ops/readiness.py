@@ -22,7 +22,7 @@ import threading
 import urllib.request
 from datetime import date, datetime, timedelta
 
-from signal_engine.ops import automation, jobs, logs, recovery
+from signal_engine.ops import automation, ipalert, jobs, logs, recovery, wakecheck
 from signal_engine.ops.model import FAIL, IST, NOT_VERIFIED, OK, REPORTS, WARN, Check, write_phase
 from utils.logging import get_logger
 
@@ -108,7 +108,7 @@ def _health() -> Check:
         return Check("OpenAlgo health", FAIL, f"{HEALTH_URL}: {type(exc).__name__}")
 
 
-def _broker_and_mode() -> list[Check]:
+def _broker_and_mode(day: str | None = None) -> list[Check]:
     from signal_engine.api_client import fetch_available_capital, fetch_trading_mode
 
     async def read():
@@ -117,7 +117,9 @@ def _broker_and_mode() -> list[Check]:
     try:
         capital, (mode, _is_analyze) = asyncio.run(read())
     except Exception as exc:  # noqa: BLE001
-        return [Check("broker session (funds API)", FAIL, f"{type(exc).__name__}: {exc}"[:160])]
+        text = f"{type(exc).__name__}: {exc}"
+        ipalert.maybe_alert(text, day or datetime.now(IST).strftime("%Y-%m-%d"))
+        return [Check("broker session (funds API)", FAIL, text[:160])]
     funds = Check(
         "broker session (funds API)",
         OK if capital and capital > 0 else FAIL,
@@ -565,6 +567,10 @@ def _price_history(day: str, live: bool | None = None, *, path: str | None = Non
     )
 
 
+def _late_wake(day: str) -> Check:
+    return wakecheck.late_wake_check(day)
+
+
 def _is_live(checks: list[Check]) -> bool | None:
     """True when the trading-mode check says LIVE, False when it names another mode, else None."""
     for check in checks:
@@ -574,7 +580,7 @@ def _is_live(checks: list[Check]) -> bool | None:
 
 
 def open_day(day: str) -> str:
-    mode_checks = _broker_and_mode()
+    mode_checks = _broker_and_mode(day)
     checks = [
         _services(),
         _health(),
@@ -584,6 +590,7 @@ def open_day(day: str) -> str:
         _poller_started(day),
         *_ports(),
         _clock(),
+        _late_wake(day),
         *_disk_and_databases(day),
         _overnight_errors(day),
         *_morning_tasks(day),

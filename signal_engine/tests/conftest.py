@@ -119,6 +119,12 @@ async def _blocked_post(self, url, *_args, **_kwargs):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_powershell_in_open_day(monkeypatch):
+    """The open-day late-wake check reads Windows through powershell.exe; tests never do."""
+    monkeypatch.setattr("signal_engine.ops.wakecheck.last_wake", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _entry_clock_is_mid_morning(monkeypatch):
     """main._now_ist feeds the entry gate that declines MIS entries after the time exit. A test
     must not depend on the hour it runs at: the clock reads 10:30 IST unless the test sets it."""

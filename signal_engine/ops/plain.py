@@ -35,6 +35,10 @@ _PLAIN: dict[str, tuple[str, str]] = {
         "The price history the engine starts from is old, incomplete or could not be read. "
         "The engine leaves the affected stocks out of today's trading.",
     ),
+    "PC wake time": (
+        "The PC was awake before the 08:30 start.",
+        "The PC woke late (after 08:30), so the morning start and the broker login may have been missed.",
+    ),
     "BreakingTrade poller": (
         "The BreakingTrade scanner started.",
         "The BreakingTrade scanner did not start.",
