@@ -480,8 +480,18 @@ class OrderManager:
                 #       price (the pre-BUG-019 fallback); the WebSocket / poll execution engine
                 #       fills it when a tick arrives;
                 #   (c) refuse (400) only when there is no price at all. No price is invented.
+                #
+                # Gated on a strategy tag (the signal engine's exits, the 2026-11-04 incident
+                # path, the same test as the in-flight guard). Untagged reduce-only orders
+                # (auto square-off, manual and UI close, smart-order exits) keep the REST quote
+                # path below: they must fill even after hours and with the feed down.
                 reduce_only = False
-                if not quote_fetch_success and temp_existing_position:
+                if (
+                    order_data.get("strategy")
+                    and not order_data.get("gtt_leg_id")
+                    and not quote_fetch_success
+                    and temp_existing_position
+                ):
                     held = temp_existing_position.quantity
                     reduce_only = (
                         (held > 0 and action == "SELL" and quantity <= held)

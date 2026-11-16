@@ -275,6 +275,41 @@ def test_reduce_only_exit_fills_from_a_fresh_feed_price_without_a_rest_quote(mon
     assert _position_qty() == 46
 
 
+def test_tagged_reduce_only_exit_never_calls_the_rest_quote_even_when_it_would_succeed(
+    monkeypatch,
+):
+    from sandbox.execution_engine import ExecutionEngine
+
+    _open_long(monkeypatch, 200)
+    calls = []
+
+    def fetch(self, symbol, exchange):
+        calls.append(symbol)
+        return quote(2500)  # a perfectly good REST quote
+
+    monkeypatch.setattr(ExecutionEngine, "_fetch_quote", fetch)
+    _feed(monkeypatch, None)
+    ok, response, _ = run_in_thread(lambda: _place(_order("SELL", 154)))
+    assert ok, response
+    assert calls == []
+    assert _position_qty() == 200  # accepted open, not filled from REST
+
+
+def test_untagged_reduce_only_exit_keeps_the_rest_quote_path(monkeypatch):
+    from sandbox.execution_engine import ExecutionEngine
+
+    _open_long(monkeypatch, 200)
+    calls = []
+    monkeypatch.setattr(
+        ExecutionEngine, "_fetch_quote", lambda self, s, e: calls.append(s) or quote(2500)
+    )
+    seen = _feed(monkeypatch, None)
+    ok, response, _ = run_in_thread(lambda: _place(_order("SELL", 154, strategy="")))
+    assert ok, response
+    assert calls == ["RELIANCE"] and seen == []
+    assert _position_qty() == 46
+
+
 def _set_position_ltp(value):
     from database.sandbox_db import SandboxPositions, db_session
 
