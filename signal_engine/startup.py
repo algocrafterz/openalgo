@@ -960,6 +960,9 @@ async def _start_runner_service(tracker, trade_mode: str, dispatch_signal):
     except (service.RunnerStartError, single_source.SingleSourceError):
         logger.exception("Python signal runner could not start")
         return None
+    except Exception:  # noqa: BLE001 - a database or warm-up error must never abort the engine
+        logger.exception("Python signal runner could not start (unexpected error)")
+        return None
 
 
 async def _runner_failure_alert(text: str) -> None:

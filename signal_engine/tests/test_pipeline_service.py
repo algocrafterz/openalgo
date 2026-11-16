@@ -322,6 +322,17 @@ def start_args(tmp_path, **over):
     return args
 
 
+async def start_without_runner(c, **args):
+    """service.start for a failed readiness check: no runner task exists, only the retry task
+    (BUG-025), which is stopped here. True when no runner was started."""
+    svc = await service.start(c, **args)
+    try:
+        return svc is None or not any(x.get_name().startswith("runner-BREAKOUT") for x in svc.tasks)
+    finally:
+        if svc is not None:
+            svc.stop()
+
+
 class TestStart:
     def test_disabled_returns_none_and_touches_nothing(self, tmp_path):
         args = start_args(tmp_path)
@@ -342,14 +353,14 @@ class TestStart:
         lines = []
         hid = logger.add(lambda m: lines.append(str(m)), level="CRITICAL")
         args = start_args(tmp_path, source=FakeSource(ok_days=set()))
-        assert asyncio.run(service.start(cfg(), **args)) is None
+        assert asyncio.run(start_without_runner(cfg(), **args))
         logger.remove(hid)
         args["state"].close()
         assert any("NOT started" in ln for ln in lines)
 
     def test_failed_warmup_fails_closed(self, tmp_path):
         args = start_args(tmp_path, loader=FailLoader())
-        assert asyncio.run(service.start(cfg(), **args)) is None
+        assert asyncio.run(start_without_runner(cfg(), **args))
         args["state"].close()
 
     def test_start_then_stop_cancels_tasks_and_closes_the_state_store(self, tmp_path):
@@ -426,12 +437,12 @@ class TestWarmupReporter:
         )
 
         async def go():
-            started = await service.start(cfg(), **args)
+            started = await start_without_runner(cfg(), **args)
             await asyncio.sleep(0.05)  # the alert is handed to the loop from the warm-up thread
             return started
 
         try:
-            assert asyncio.run(go()) is None
+            assert asyncio.run(go())
         finally:
             logger.remove(hid)
             args["state"].close()

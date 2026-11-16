@@ -266,10 +266,25 @@ async def run_days(make_runner: Callable[[dt.date], object], clock: Clock) -> No
 # ---- process lifecycle -----------------------------------------------------------------------
 
 
+RETRY_INTERVAL_S = 300.0
+
+
 @dataclass
 class RunnerService:
     tasks: list[asyncio.Task] = field(default_factory=list)
     state: RunnerStateStore | None = None
+    #: tag -> builder of that strategy's session loop task; filled by `start`.
+    launchers: dict[str, Callable[[], asyncio.Task]] = field(default_factory=dict)
+    started: set[str] = field(default_factory=set)
+
+    def launch(self, tag: str) -> bool:
+        """Start the runner task for `tag` unless one already exists. Synchronous, so two
+        callers on the event loop cannot both pass the check. True when a task was created."""
+        if tag in self.started:
+            return False
+        self.started.add(tag)
+        self.tasks.append(self.launchers[tag]())
+        return True
 
     def cancel(self) -> None:
         """Cancel the session loops (first step of shutdown)."""
@@ -352,37 +367,107 @@ async def start(
 
     first_tag = next(iter(cfg.strategies))
     probe_ctx = RollingContext(STRATEGY_FACTORIES[first_tag](), loader)
-    ok, why = await preflight(cfg, source, probe_ctx, symbols, now, now.date())
-    if not ok:
-        logger.critical(f"Python signal runner NOT started: {why}")
-        return None
+    try:
+        ok, why = await preflight(cfg, source, probe_ctx, symbols, now, now.date())
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - a warm-up or database error must not abort the start
+        logger.exception("runner start-up readiness check raised")
+        ok, why = False, f"readiness check raised {type(exc).__name__}: {exc}"
 
     state = state or RunnerStateStore()
     service = RunnerService(state=state)
     exit_qty = broker_qty or make_broker_qty(tracker)
+
+    def launcher(tag):
+        def build() -> asyncio.Task:
+            make = _session_factory(
+                cfg,
+                tag,
+                symbols,
+                source,
+                loader,
+                state,
+                dispatch,
+                tracker,
+                exit_qty,
+                trade_mode,
+                time_exit,
+                halted,
+                stale_limit_s,
+                product,
+                clock,
+                exits_halted=exits_halted,
+                failure_alert=failure_alert,
+            )
+            logger.info(f"Python signal runner started for {tag} ({cfg.strategies[tag].signal_source})")
+            return asyncio.create_task(run_days(make, clock), name=f"runner-{tag}")
+
+        return build
+
+    service.launchers = {tag: launcher(tag) for tag in cfg.strategies}
+    if ok:
+        for tag in cfg.strategies:
+            service.launch(tag)
+        return service
+
+    logger.critical(
+        f"Python signal runner NOT started: {why}; retrying every {int(RETRY_INTERVAL_S)} s "
+        "until the entry cutoff"
+    )
     for tag in cfg.strategies:
-        make = _session_factory(
-            cfg,
-            tag,
-            symbols,
-            source,
-            loader,
-            state,
-            dispatch,
-            tracker,
-            exit_qty,
-            trade_mode,
-            time_exit,
-            halted,
-            stale_limit_s,
-            product,
-            clock,
-            exits_halted=exits_halted,
-            failure_alert=failure_alert,
+        service.tasks.append(
+            asyncio.create_task(
+                _retry_until_cutoff(service, tag, cfg, source, loader, symbols, clock),
+                name=f"runner-start-retry-{tag}",
+            )
         )
-        service.tasks.append(asyncio.create_task(run_days(make, clock), name=f"runner-{tag}"))
-        logger.info(f"Python signal runner started for {tag} ({cfg.strategies[tag].signal_source})")
     return service
+
+
+async def _retry_until_cutoff(
+    service: RunnerService,
+    tag: str,
+    cfg: RunnerSettings,
+    source: BarSource,
+    loader,
+    symbols: list[str],
+    clock: Clock,
+) -> None:
+    """Re-run the same readiness check for one strategy every RETRY_INTERVAL_S until that
+    strategy's entry cutoff. On success the runner is started exactly as the normal path does;
+    a failure or an exception is logged and retried; the loop never relaxes the check."""
+    first = clock.now()
+    day = first.date()
+    cutoff = pd.Timestamp(day, tz=IST) + pd.Timedelta(
+        minutes=STRATEGY_FACTORIES[tag]().entry_window_min[1]
+    )
+    while True:
+        if not is_session_day(day):
+            return
+        now = clock.now()
+        if now + pd.Timedelta(seconds=RETRY_INTERVAL_S) >= cutoff:
+            logger.critical(
+                f"Python signal runner {tag}: readiness did not pass before the entry cutoff "
+                f"{cutoff:%H:%M}; no runner starts today"
+            )
+            return
+        await clock.sleep_until(now + pd.Timedelta(seconds=RETRY_INTERVAL_S))
+        await asyncio.sleep(0)
+        try:
+            ctx = RollingContext(STRATEGY_FACTORIES[tag](), loader)
+            now = clock.now()
+            ok, why = await preflight(cfg, source, ctx, symbols, now, now.date())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - logged, retried at the next interval
+            logger.exception(f"runner {tag}: readiness retry raised")
+            ok, why = False, f"readiness check raised {type(exc).__name__}: {exc}"
+        if ok:
+            service.launch(tag)
+            logger.warning(f"Python signal runner {tag} started late, on a readiness retry")
+            return
+        logger.warning(f"runner {tag}: readiness retry failed: {why}")
 
 
 def warmup_reporter(alert, loop):
