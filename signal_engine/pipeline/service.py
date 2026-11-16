@@ -4,10 +4,11 @@ Used by startup._run_engine. Nothing here places an order by itself: a strategy 
 signal_source is python gets a DispatchSink (main.dispatch_signal, so analyze or live depending
 on OpenAlgo's mode); any other configured strategy gets a RecordingSink (shadow).
 
-Fail closed: if history is unreachable or no symbol warms up, the runner is not started and the
-reason is logged at critical level. For a strategy already switched to python that means no
-signals (Pine alerts are dropped by the single-source guard), which is loud and safe, unlike
-running blind.
+Fail closed: if history is unreachable or no symbol warms up, the runner is not started at once,
+the reason is logged at critical level and the same readiness check is retried every 5 minutes
+until the strategy's entry cutoff (BUG-025). Until a retry passes, a strategy switched to python
+gets no signals (Pine alerts are dropped by the single-source guard), which is loud and safe,
+unlike running blind.
 """
 
 from __future__ import annotations
@@ -267,6 +268,8 @@ async def run_days(make_runner: Callable[[dt.date], object], clock: Clock) -> No
 
 
 RETRY_INTERVAL_S = 300.0
+#: Per-strategy offset of the retry attempts (index * this), so warm-ups do not hit DuckDB together.
+RETRY_STAGGER_S = 15.0
 
 
 @dataclass
@@ -282,8 +285,13 @@ class RunnerService:
         callers on the event loop cannot both pass the check. True when a task was created."""
         if tag in self.started:
             return False
+        try:
+            task = self.launchers[tag]()
+        except Exception:  # noqa: BLE001 - a failed build must not block the strategy for the day
+            logger.exception(f"Python signal runner {tag}: launch failed")
+            return False
         self.started.add(tag)
-        self.tasks.append(self.launchers[tag]())
+        self.tasks.append(task)
         return True
 
     def cancel(self) -> None:
@@ -324,7 +332,9 @@ async def start(
     broker_qty=None,
     alert: Callable[[str], Awaitable] | None = None,
 ) -> RunnerService | None:
-    """Build and launch the runner for this process. None when disabled or a check fails.
+    """Build and launch the runner for this process. None when disabled or a config check
+    fails. When only the readiness check fails, a RunnerService is returned whose retry tasks
+    re-run it every 5 minutes until the entry cutoff (BUG-025).
 
     `alert` receives one message a day naming symbols the warm-up excluded for stale or
     incomplete history (see HistorifyLoader); it is not used with an injected `loader`.
@@ -415,14 +425,36 @@ async def start(
         f"Python signal runner NOT started: {why}; retrying every {int(RETRY_INTERVAL_S)} s "
         "until the entry cutoff"
     )
-    for tag in cfg.strategies:
-        service.tasks.append(
-            asyncio.create_task(
-                _retry_until_cutoff(service, tag, cfg, source, loader, symbols, clock),
-                name=f"runner-start-retry-{tag}",
-            )
+    notify = failure_alert  # the existing runner-failure alert channel; None means log only
+    for index, tag in enumerate(cfg.strategies):
+        task = asyncio.create_task(
+            _retry_until_cutoff(
+                service, tag, cfg, source, loader, symbols, clock,
+                offset_s=index * RETRY_STAGGER_S, notify=notify,
+            ),
+            name=f"runner-start-retry-{tag}",
         )
+        task.add_done_callback(_log_retry_outcome)
+        service.tasks.append(task)
     return service
+
+
+def _log_retry_outcome(task: asyncio.Task) -> None:
+    """Done-callback: a retry task that died with an exception must never die silently."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.critical(f"{task.get_name()} ended with {type(exc).__name__}: {exc}")
+
+
+async def _notify(notify, text: str) -> None:
+    if notify is None:
+        return
+    try:
+        await notify(text)
+    except Exception:  # noqa: BLE001 - an alert failure must not stop the runner start
+        logger.exception("runner start-retry alert failed")
 
 
 async def _retry_until_cutoff(
@@ -433,26 +465,46 @@ async def _retry_until_cutoff(
     loader,
     symbols: list[str],
     clock: Clock,
+    offset_s: float = 0.0,
+    notify: Callable[[str], Awaitable] | None = None,
 ) -> None:
-    """Re-run the same readiness check for one strategy every RETRY_INTERVAL_S until that
-    strategy's entry cutoff. On success the runner is started exactly as the normal path does;
-    a failure or an exception is logged and retried; the loop never relaxes the check."""
-    first = clock.now()
-    day = first.date()
+    """Re-run the same readiness check for one strategy every RETRY_INTERVAL_S (the first
+    attempt `offset_s` later, to stagger strategies) until that strategy's entry cutoff. On
+    success the runner is started exactly as the normal path does; a failure or an exception
+    is logged and retried; the loop never relaxes the check. Any other exception is logged at
+    CRITICAL with the tag and the task ends (no retry: the state is unknown); cancellation
+    propagates. The operator is alerted on a late start and on giving up at the cutoff."""
+    try:
+        await _retry_loop(service, tag, cfg, source, loader, symbols, clock, offset_s, notify)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - never let the retry task die silently
+        logger.opt(exception=True).critical(
+            f"Python signal runner {tag}: start retry crashed; no runner starts today unless restarted"
+        )
+
+
+async def _retry_loop(service, tag, cfg, source, loader, symbols, clock, offset_s, notify) -> None:
+    day = clock.now().date()
     cutoff = pd.Timestamp(day, tz=IST) + pd.Timedelta(
         minutes=STRATEGY_FACTORIES[tag]().entry_window_min[1]
     )
+    wait_s = RETRY_INTERVAL_S + offset_s
     while True:
         if not is_session_day(day):
+            logger.info(f"Python signal runner {tag}: {day} is not a session day; start retry ends")
             return
         now = clock.now()
-        if now + pd.Timedelta(seconds=RETRY_INTERVAL_S) >= cutoff:
-            logger.critical(
+        if now + pd.Timedelta(seconds=wait_s) >= cutoff:
+            msg = (
                 f"Python signal runner {tag}: readiness did not pass before the entry cutoff "
                 f"{cutoff:%H:%M}; no runner starts today"
             )
+            logger.critical(msg)
+            await _notify(notify, msg)
             return
-        await clock.sleep_until(now + pd.Timedelta(seconds=RETRY_INTERVAL_S))
+        await clock.sleep_until(now + pd.Timedelta(seconds=wait_s))
+        wait_s = RETRY_INTERVAL_S
         await asyncio.sleep(0)
         try:
             ctx = RollingContext(STRATEGY_FACTORIES[tag](), loader)
@@ -464,8 +516,10 @@ async def _retry_until_cutoff(
             logger.exception(f"runner {tag}: readiness retry raised")
             ok, why = False, f"readiness check raised {type(exc).__name__}: {exc}"
         if ok:
-            service.launch(tag)
-            logger.warning(f"Python signal runner {tag} started late, on a readiness retry")
+            if service.launch(tag):
+                msg = f"Python signal runner {tag} started late, on a readiness retry"
+                logger.warning(msg)
+                await _notify(notify, msg)
             return
         logger.warning(f"runner {tag}: readiness retry failed: {why}")
 

@@ -419,8 +419,8 @@ class TestWarmupReporter:
         assert service.warmup_reporter(None, None) is None
 
     def test_every_stock_stale_at_start_keeps_the_runner_off_and_alerts_once(self, tmp_path, monkeypatch):
-        """All runner stocks rejected at start-up: service.start returns None (runner not started,
-        CRITICAL "NOT started"), the operator gets one alert, and the engine itself carries on."""
+        """All runner stocks rejected at start-up: service.start still returns a service (no runner
+        task yet, CRITICAL "NOT started", retried until cutoff), the operator gets one alert, and the engine itself carries on."""
         from signal_engine.tests.test_runner_warmup_freshness import _store
 
         # cfg() fixes this module's universe to TCS and INFY: one stale, one with no bars at all.

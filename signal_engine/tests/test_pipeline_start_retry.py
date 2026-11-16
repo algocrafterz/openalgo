@@ -1,7 +1,6 @@
 """BUG-025: the runner start-up readiness check is retried every 5 minutes until entry cutoff."""
 
 import asyncio
-import datetime as dt
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -169,21 +168,197 @@ class TestRetry:
         assert any("Could not set lock" in ln for ln in lines)
 
     def test_duplicate_start_race_gives_one_runner(self, tmp_path):
-        args = start_args(tmp_path, source=DatedSource(), loader=FlipLoader(fresh_after=1), clock=SimClock(t("08:51", DAY)))
+        """A passing retry and a manual launch race: exactly one runner task results."""
+        args = start_args(
+            tmp_path, source=DatedSource(), loader=FlipLoader(fresh_after=1), clock=SimClock(t("08:51", DAY))
+        )
 
         async def go():
             svc = await service.start(cfg(), **args)
-            await settle()
-            first = len(svc.tasks)
-            # The normal path (or a second retry) asks again for the same strategy.
-            assert svc.launch("BREAKOUT") is False
+
+            async def manual():
+                for _ in range(40):
+                    await asyncio.sleep(0.005)
+                    svc.launch("BREAKOUT")
+
+            await asyncio.gather(manual(), settle())
+            runners = [x for x in svc.tasks if x.get_name() == "runner-BREAKOUT"]
             svc.stop()
-            return first
+            return runners
+
+        try:
+            runners = asyncio.run(go())
+        finally:
+            args["state"].close()
+        assert len(runners) == 1
+
+    def test_two_concurrent_launch_calls_give_one_task(self):
+        async def go():
+            svc = service.RunnerService(
+                launchers={"BREAKOUT": lambda: asyncio.create_task(asyncio.sleep(0))}
+            )
+
+            async def call():
+                return svc.launch("BREAKOUT")
+
+            res = await asyncio.gather(call(), call())
+            await asyncio.gather(*svc.tasks)
+            return res, svc.tasks
+
+        res, tasks = asyncio.run(go())
+        assert sorted(res) == [False, True] and len(tasks) == 1
+
+    def test_cutoff_computation_failure_is_critical_not_silent(self, tmp_path):
+        args = start_args(
+            tmp_path, source=DatedSource(), loader=FlipLoader(fresh_after=10**6), clock=SimClock(t("08:51", DAY))
+        )
+        lines, hid = capture("CRITICAL")
+        real = service.STRATEGY_FACTORIES["BREAKOUT"]
+        calls = []
+
+        def flaky():
+            calls.append(1)
+            if len(calls) > 1:  # the start-up probe works; the retry's cutoff computation fails
+                raise RuntimeError("spec file unreadable")
+            return real()
+
+        async def go():
+            with patch.dict(service.STRATEGY_FACTORIES, {"BREAKOUT": flaky}):
+                svc = await service.start(cfg(), **args)
+                await settle()
+            retry = [x for x in svc.tasks if x.get_name() == "runner-start-retry-BREAKOUT"]
+            svc.stop()
+            return retry
+
+        try:
+            retry = asyncio.run(go())
+        finally:
+            logger.remove(hid)
+            args["state"].close()
+        assert retry and retry[0].done()
+        assert any("start retry crashed" in ln and "BREAKOUT" in ln for ln in lines)
+
+    def test_done_callback_logs_a_task_that_died_with_an_exception(self):
+        lines, hid = capture("CRITICAL")
+
+        async def go():
+            async def boom():
+                raise ValueError("x")
+
+            task = asyncio.create_task(boom(), name="runner-start-retry-ZZ")
+            task.add_done_callback(service._log_retry_outcome)
+            await asyncio.gather(task, return_exceptions=True)
+            await asyncio.sleep(0)
 
         try:
             asyncio.run(go())
         finally:
+            logger.remove(hid)
+        assert any("runner-start-retry-ZZ" in ln and "ValueError" in ln for ln in lines)
+
+    def test_failing_builder_leaves_the_tag_startable(self):
+        calls = []
+
+        def build():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("builder failed")
+            return SimpleNamespace(done=lambda: False)
+
+        svc = service.RunnerService(launchers={"BREAKOUT": build})
+        lines, hid = capture("ERROR")
+        try:
+            assert svc.launch("BREAKOUT") is False
+            assert "BREAKOUT" not in svc.started and svc.tasks == []
+            assert svc.launch("BREAKOUT") is True
+            assert svc.launch("BREAKOUT") is False
+        finally:
+            logger.remove(hid)
+        assert any("launch failed" in ln for ln in lines)
+        assert len(svc.tasks) == 1
+
+    def test_non_session_day_logs_one_line_and_ends(self, tmp_path):
+        args = start_args(
+            tmp_path, source=DatedSource(), loader=FlipLoader(fresh_after=10**6), clock=SimClock(t("08:51", DAY))
+        )
+        lines, hid = capture()
+
+        async def go():
+            with patch.object(service, "is_session_day", lambda d: False):
+                svc = await service.start(cfg(), **args)
+                await settle()
+            done = all(x.done() for x in svc.tasks)
+            svc.stop()
+            return done
+
+        try:
+            done = asyncio.run(go())
+        finally:
+            logger.remove(hid)
             args["state"].close()
+        assert done
+        assert sum("not a session day" in ln for ln in lines) == 1
+
+    def test_alert_sent_on_late_start_and_on_cutoff_give_up(self, tmp_path):
+        sent = []
+
+        async def alert(text):
+            sent.append(text)
+
+        late = start_args(
+            tmp_path, source=DatedSource(), loader=FlipLoader(fresh_after=1),
+            clock=SimClock(t("08:51", DAY)), failure_alert=alert,
+        )
+
+        async def go_late():
+            svc = await service.start(cfg(), **late)
+            await settle()
+            svc.stop()
+
+        try:
+            asyncio.run(go_late())
+        finally:
+            late["state"].close()
+        assert len(sent) == 1 and "started late" in sent[0]
+
+        sent.clear()
+        giveup = start_args(
+            tmp_path, source=DatedSource(), loader=FlipLoader(fresh_after=10**6),
+            clock=SimClock(at(cutoff_min() - 12)), failure_alert=alert,
+        )
+
+        async def go_giveup():
+            svc = await service.start(cfg(), **giveup)
+            await settle(40)
+            svc.stop()
+
+        try:
+            asyncio.run(go_giveup())
+        finally:
+            giveup["state"].close()
+        assert len(sent) == 1 and "no runner starts today" in sent[0]
+
+    def test_retry_attempts_are_staggered_per_strategy(self):
+        """A strategy at index i first retries i * RETRY_STAGGER_S after index 0."""
+        firsts = []
+
+        async def go():
+            for index in (0, 1):
+                seen = []
+
+                async def fake_preflight(cfg_, src, ctx, syms, now, day, seen=seen):
+                    seen.append(now)
+                    return False, "stale"
+
+                with patch.object(service, "preflight", fake_preflight):
+                    await service._retry_loop(
+                        service.RunnerService(), "BREAKOUT", cfg(), None, FlipLoader(),
+                        ["TCS"], SimClock(t("08:51", DAY)), index * service.RETRY_STAGGER_S, None,
+                    )
+                firsts.append(seen[0])
+
+        asyncio.run(go())
+        assert firsts[1] - firsts[0] == pd.Timedelta(seconds=service.RETRY_STAGGER_S)
 
     def test_shutdown_cancels_the_retry_task_cleanly(self, tmp_path):
         args = start_args(
