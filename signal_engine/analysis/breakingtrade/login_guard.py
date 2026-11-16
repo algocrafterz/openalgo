@@ -10,6 +10,9 @@ This guard decides, from a small JSON file, whether a sign-in may be attempted a
 
 - at most one attempt per MIN_GAP_MINUTES,
 - at most MAX_PER_DAY attempts per IST day,
+- one EXTRA attempt per day (hard cap MAX_PER_DAY + 1) once a session drop is confirmed: a
+  keepalive or page check saw signed_out at least MIN_GAP_MINUTES after a sign-in that had
+  succeeded (BUG-027: the vendor session kept dying 20-30 minutes after each sign-in),
 - after a sign-in that did not take, no attempt until the next IST day, or until the file is
   removed by hand (an account that rejects the password must not be retried by a machine).
 
@@ -30,6 +33,7 @@ STATE_PATH = os.path.join(_DIR, "data", "breakingtrade_login_guard.json")
 
 MIN_GAP_MINUTES = 30
 MAX_PER_DAY = 3
+MAX_EXTRA_PER_DAY = 1
 
 
 def _now() -> datetime:
@@ -72,6 +76,26 @@ class _Locked:
             self._fh.close()
 
 
+def _parse(values) -> list:
+    out = []
+    for v in values or []:
+        try:
+            out.append(datetime.fromisoformat(v))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def _extra_available(state: dict, attempts: list) -> bool:
+    """True when the one extra sign-in may be used: the normal quota is spent, the extra is
+    unused, and a drop was confirmed after the latest successful sign-in."""
+    if len(attempts) != MAX_PER_DAY or state.get("extra_used"):
+        return False
+    successes = _parse(state.get("successes"))
+    drop = _parse([state.get("drop_confirmed_at")])
+    return bool(successes and drop and drop[0] > successes[-1])
+
+
 def _refusal(state: dict, attempts: list, now: datetime, path: str) -> str | None:
     today = now.date().isoformat()
     if state.get("failed_day") == today:
@@ -81,8 +105,17 @@ def _refusal(state: dict, attempts: list, now: datetime, path: str) -> str | Non
             "credentials, sign in by hand, then delete "
             f"{path} to allow attempts again."
         )
-    if len(attempts) >= MAX_PER_DAY:
-        return f"Already signed in {MAX_PER_DAY} times today; no more attempts today."
+    extra_ok = _extra_available(state, attempts)
+    if len(attempts) >= MAX_PER_DAY and not extra_ok:
+        if state.get("extra_used"):
+            return (
+                f"Already signed in {len(attempts)} times today; the extra sign-in after a "
+                "confirmed session drop was used; no more attempts today."
+            )
+        return (
+            f"Already signed in {MAX_PER_DAY} times today; no more attempts today. "
+            "Extra sign-in allowance not used (no confirmed session drop)."
+        )
     if attempts and now - attempts[-1] < timedelta(minutes=MIN_GAP_MINUTES):
         return (
             f"Last sign-in attempt was under {MIN_GAP_MINUTES} minutes ago; "
@@ -123,6 +156,8 @@ def reserve_attempt(now: datetime | None = None, path: str = STATE_PATH) -> str 
         reason = _refusal(state, attempts, now, path)
         if reason:
             return reason
+        if len(attempts) >= MAX_PER_DAY:
+            state["extra_used"] = True
         attempts.append(now)
         state["attempts"] = [a.isoformat() for a in attempts]
         _save(path, state)
@@ -138,3 +173,44 @@ def record_failure(now: datetime | None = None, path: str = STATE_PATH) -> None:
         state["failed_day"] = now.date().isoformat()
         state.setdefault("attempts", [])
         _save(path, state)
+
+
+def record_success(now: datetime | None = None, path: str = STATE_PATH) -> None:
+    """A sign-in took (the page showed a signed-in state afterwards)."""
+    now = now or _now()
+    with _Locked(path):
+        state, _attempts = _today_state(path, now)
+        successes = [s.isoformat() for s in _parse(state.get("successes"))]
+        successes.append(now.isoformat())
+        state["successes"] = successes
+        state.pop("drop_confirmed_at", None)
+        _save(path, state)
+
+
+def note_session_drop(now: datetime | None = None, path: str = STATE_PATH) -> bool:
+    """A check observed signed_out. Confirmed only if a sign-in succeeded today and that
+    success is at least MIN_GAP_MINUTES old. Returns True when the drop is confirmed."""
+    now = now or _now()
+    with _Locked(path):
+        state, _attempts = _today_state(path, now)
+        successes = _parse(state.get("successes"))
+        if not successes or now - successes[-1] < timedelta(minutes=MIN_GAP_MINUTES):
+            return False
+        state["drop_confirmed_at"] = now.isoformat()
+        _save(path, state)
+        return True
+
+
+def attempt_info(now: datetime | None = None, path: str = STATE_PATH) -> dict:
+    """Facts for the per-attempt log line: attempt count today, whether the extra allowance
+    has been used, and minutes since the last successful sign-in (None if none today)."""
+    now = now or _now()
+    with _Locked(path):
+        state, attempts = _today_state(path, now)
+        successes = _parse(state.get("successes"))
+        age = round((now - successes[-1]).total_seconds() / 60) if successes else None
+        return {
+            "attempts": len(attempts),
+            "extra_used": bool(state.get("extra_used")),
+            "last_success_age_min": age,
+        }

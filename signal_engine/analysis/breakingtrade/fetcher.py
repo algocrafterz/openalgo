@@ -25,6 +25,8 @@ LoginRequired is raised rather than silently returning an empty table.
 from __future__ import annotations
 
 import json
+import logging
+import time as _time
 import os
 import re
 from datetime import datetime, time, timedelta
@@ -61,6 +63,9 @@ SCANNER_ROUTES = {
 # A scanner table is identified by how many known signal columns its header row carries.
 _MIN_SIGNAL_COLUMNS = 4
 _ALL_SIGNAL_COLUMNS = MARKET_PROFILE_COLUMNS | VOLUME_COLUMNS
+
+
+logger = logging.getLogger(__name__)
 
 
 class FetchError(RuntimeError):
@@ -268,6 +273,33 @@ def _is_signed_out(page) -> bool:
     )
 
 
+def _cookie_age_min() -> int | None:
+    """Minutes since the saved cookie file was last written, if there is one."""
+    try:
+        return round((_time.time() - os.path.getmtime(COOKIE_PATH)) / 60)
+    except OSError:
+        return None
+
+
+def _log_signin(event: str, state_before: str, response_class: str) -> None:
+    """One line per sign-in attempt. Class only: never credentials, cookies or response bodies."""
+    try:
+        info = login_guard.attempt_info()
+    except Exception:
+        info = {"attempts": "?", "extra_used": False, "last_success_age_min": None}
+    logger.info(
+        "sign-in attempt %s %s: extra=%s state_before=%s cookie_age_min=%s "
+        "last_signin_age_min=%s response=%s",
+        info["attempts"],
+        event,
+        "yes" if info["extra_used"] else "no",
+        state_before,
+        _cookie_age_min(),
+        info["last_success_age_min"],
+        response_class,
+    )
+
+
 def _attempt_login(page, email: str, password: str) -> None:
     """Sign in on the vendor's login page.
 
@@ -346,6 +378,15 @@ def saved_jsessionid() -> str | None:
     return None
 
 
+def _note_drop() -> None:
+    try:
+        confirmed = login_guard.note_session_drop()
+    except Exception:
+        return
+    if confirmed:
+        logger.warning("session drop confirmed after a successful sign-in (extra sign-in may be used)")
+
+
 def keepalive_session() -> tuple:
     """Touch the saved session so it does not idle out between polls.
 
@@ -363,6 +404,7 @@ def keepalive_session() -> tuple:
             api.market_profile_rows()
             return "ok", api.script_version
     except api_scan.ApiSignedOut:
+        _note_drop()
         return "signed_out", None
     except (api_scan.ApiError, httpx.HTTPError):
         return "error", None
@@ -451,21 +493,34 @@ class ScannerSession:
                 f"{PROFILE_DIR}."
             )
 
+        self._note_drop_if_signed_in_before()
         refusal = login_guard.reserve_attempt()
         if refusal:
+            _log_signin("refused", "signed_out", "not_sent")
             raise LoginBlocked(refusal)
 
-        _attempt_login(self._page, email, password)
-        self._page.goto(url, timeout=60000, wait_until="domcontentloaded")
-        self._page.wait_for_timeout(self.settle_ms)
+        try:
+            _attempt_login(self._page, email, password)
+            self._page.goto(url, timeout=60000, wait_until="domcontentloaded")
+            self._page.wait_for_timeout(self.settle_ms)
+        except Exception as exc:
+            _log_signin("error", "signed_out", f"exception:{type(exc).__name__}")
+            raise
         if _is_signed_out(self._page):
+            _log_signin("failed", "signed_out", "login_control_still_visible")
             login_guard.record_failure()
             raise LoginRequired(
                 "Sign-in did not take - the scanner page still shows a login control. Check "
                 "BREAKINGTRADE_EMAIL / BREAKINGTRADE_PASSWORD, or whether the account needs "
                 "an OTP or captcha (run with headless=False to watch it happen)."
             )
+        login_guard.record_success()
+        _log_signin("succeeded", "signed_out", "signed_in")
         _save_cookies(self._context)
+
+    def _note_drop_if_signed_in_before(self) -> None:
+        # The page check just saw signed_out: that is a drop if a sign-in had succeeded.
+        _note_drop()
 
     def _date_display(self) -> str:
         """Whatever the scanner's own date label currently reads - "Live", or a past date."""
@@ -600,8 +655,10 @@ class ScannerSession:
                 # The vendor says the session is gone. If the guard would refuse a sign-in,
                 # starting a browser that cannot sign in is wasted work and another page load
                 # against the site, so stop here with the reason.
+                _note_drop()
                 blocked = login_guard.refusal()
                 if blocked:
+                    _log_signin("refused", "signed_out", "not_sent")
                     raise LoginBlocked(blocked)
         last_error = None
         for attempt in range(attempts):

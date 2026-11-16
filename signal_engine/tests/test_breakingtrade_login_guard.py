@@ -159,3 +159,109 @@ def test_refusal_is_read_only_and_matches_reserve(tmp_path):
     assert login_guard.reserve_attempt(start, path) is None
     assert "under 30 minutes" in login_guard.refusal(start + timedelta(minutes=5), path)
     assert login_guard.refusal(start + timedelta(minutes=31), path) is None
+
+
+class TestExtraSignInAfterConfirmedDrop:
+    """BUG-027: one extra sign-in (hard cap 4) after a confirmed session drop."""
+
+    def _three(self, path):
+        base = _t(0, hour=9)
+        for i in range(login_guard.MAX_PER_DAY):
+            at = base + timedelta(minutes=(login_guard.MIN_GAP_MINUTES + 1) * i)
+            assert login_guard.reserve_attempt(at, path) is None
+            login_guard.record_success(at + timedelta(minutes=1), path)
+        return base + timedelta(minutes=(login_guard.MIN_GAP_MINUTES + 1) * 2)
+
+    def test_fourth_allowed_after_confirmed_drop_fifth_refused(self, tmp_path):
+        path = str(tmp_path / "g.json")
+        third = self._three(path)
+        drop = third + timedelta(minutes=login_guard.MIN_GAP_MINUTES + 5)
+        assert login_guard.note_session_drop(drop, path) is True
+        assert login_guard.reserve_attempt(drop, path) is None
+        assert login_guard.MAX_PER_DAY == 3
+        later = drop + timedelta(hours=3)
+        login_guard.note_session_drop(later, path)
+        reason = login_guard.reserve_attempt(later, path)
+        assert reason is not None and "extra" in reason.lower()
+        assert "used" in reason.lower()
+
+    def test_fourth_refused_without_confirmed_drop(self, tmp_path):
+        path = str(tmp_path / "g.json")
+        third = self._three(path)
+        reason = login_guard.reserve_attempt(third + timedelta(hours=3), path)
+        assert "Already signed in 3 times today" in reason
+        assert "not used" in reason.lower()
+
+    def test_drop_inside_gap_of_last_sign_in_is_not_confirmed(self, tmp_path):
+        path = str(tmp_path / "g.json")
+        third = self._three(path)
+        soon = third + timedelta(minutes=5)
+        assert login_guard.note_session_drop(soon, path) is False
+        later = third + timedelta(hours=3)
+        assert "Already signed in 3 times" in login_guard.reserve_attempt(later, path)
+
+    def test_drop_without_prior_success_is_not_confirmed(self, tmp_path):
+        path = str(tmp_path / "g.json")
+        login_guard.reserve_attempt(_t(0), path)
+        assert login_guard.note_session_drop(_t(45), path) is False
+
+    def test_gap_still_enforced_for_extra(self, tmp_path):
+        path = str(tmp_path / "g.json")
+        third = self._three(path)
+        drop = third + timedelta(minutes=login_guard.MIN_GAP_MINUTES + 1)
+        assert login_guard.note_session_drop(drop, path) is True
+        assert login_guard.reserve_attempt(third + timedelta(minutes=10), path) is not None
+        assert "under" in login_guard.refusal(third + timedelta(minutes=10), path)
+
+    def test_old_format_state_loads(self, tmp_path):
+        import json
+
+        path = tmp_path / "g.json"
+        path.write_text(json.dumps({"day": "2026-11-11", "attempts": ["2026-11-11T09:00:00"]}))
+        assert login_guard.reserve_attempt(_t(0, hour=10), str(path)) is None
+        info = json.loads(path.read_text())
+        assert len(info["attempts"]) == 2
+
+    def test_failed_day_still_blocks_extra(self, tmp_path):
+        path = str(tmp_path / "g.json")
+        third = self._three(path)
+        login_guard.note_session_drop(third + timedelta(hours=1), path)
+        login_guard.record_failure(third + timedelta(hours=1), path)
+        assert "rejected" in login_guard.reserve_attempt(third + timedelta(hours=2), path)
+
+
+class TestAttemptLogging:
+    def test_logs_each_attempt_without_secrets(self, tmp_path, monkeypatch, caplog):
+        secret = "S3CRET-PW-xyz"
+        email = "user@example.com"
+        gpath = str(tmp_path / "g.json")
+        for name in ("reserve_attempt", "record_failure", "record_success", "attempt_info",
+                     "note_session_drop", "refusal"):
+            orig = getattr(login_guard, name)
+            monkeypatch.setattr(
+                login_guard, name, lambda *a, _o=orig, **k: _o(*a, path=gpath, **k)
+            )
+        monkeypatch.setenv("BREAKINGTRADE_PASSWORD", secret)
+        monkeypatch.setenv("BREAKINGTRADE_EMAIL", email)
+        monkeypatch.setattr(fetcher, "_credentials", lambda: (email, secret))
+        monkeypatch.setattr(fetcher, "_is_signed_out", lambda page: True)
+        monkeypatch.setattr(fetcher, "_save_cookies", lambda ctx: None)
+
+        def boom(page, e, p):
+            raise RuntimeError(f"bad {p}")
+
+        monkeypatch.setattr(fetcher, "_attempt_login", boom)
+        session = fetcher.ScannerSession()
+        session._page = object()
+        session._context = object()
+        with caplog.at_level("INFO"):
+            try:
+                session._ensure_signed_in("http://x")
+            except RuntimeError:
+                pass
+        out = caplog.text
+        assert "sign-in attempt 1" in out
+        assert "extra=no" in out
+        assert "state_before=signed_out" in out
+        assert "RuntimeError" in out
+        assert secret not in out and email not in out
