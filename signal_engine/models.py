@@ -102,6 +102,9 @@ class TradeResult(BaseModel):
     #: signal price without depending on a broker tradebook, which is wiped daily and
     #: cannot be re-queried for a past session.
     fill_price: float | None = None
+    #: True when the core refused this send because an identical order is still being placed
+    #: (HTTP 409 or the response's ``inflight`` flag). Not persisted.
+    inflight: bool = False
 
 
 class ValidationResult(BaseModel):

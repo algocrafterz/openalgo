@@ -783,7 +783,11 @@ def _is_inflight_rejection(result: TradeResult) -> bool:
     """Did the core refuse this send because an identical copy is still being placed?"""
     return (
         result.status == OrderStatus.REJECTED
-        and _INFLIGHT_REJECTION_MARKER in (result.message or "").lower()
+        and (
+            result.inflight
+            # Fallback for a result built without the flag: match the core's message text.
+            or _INFLIGHT_REJECTION_MARKER in (result.message or "").lower()
+        )
     )
 
 

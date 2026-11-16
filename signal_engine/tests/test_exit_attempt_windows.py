@@ -153,3 +153,49 @@ class TestReplay20261104:
             logger.remove(sink)
         ended = [m for m in lines if "window ended" in m]
         assert len(ended) == 3, lines
+
+
+# -- the in-flight rejection is recognised without relying on the message text ----------------
+
+
+def _response(status_code, body):
+    return SimpleNamespace(status_code=status_code, text=str(body), json=lambda: body)
+
+
+def _order_for_interpret():
+    from signal_engine.executor import _interpret_placeorder
+
+    order = Order(
+        symbol="AXISBANK", exchange="NSE", action=Action.SELL, quantity=154, strategy_tag="T",
+        price=0, order_type="MARKET", product="CNC",
+    )
+    return order, _interpret_placeorder
+
+
+def test_http_409_is_an_inflight_rejection_even_with_a_different_message():
+    from signal_engine.main import _is_inflight_rejection
+
+    order, interpret = _order_for_interpret()
+    body = {"status": "error", "message": "something else entirely"}
+    result = interpret(order, _response(409, body), body)
+    assert result.status == OrderStatus.REJECTED and result.inflight
+    assert _is_inflight_rejection(result)
+
+
+def test_inflight_flag_is_an_inflight_rejection_even_with_a_different_message():
+    from signal_engine.main import _is_inflight_rejection
+
+    order, interpret = _order_for_interpret()
+    body = {"status": "error", "message": "reworded", "inflight": True}
+    result = interpret(order, _response(400, body), body)
+    assert result.inflight and _is_inflight_rejection(result)
+
+
+def test_ordinary_rejection_is_not_inflight_and_text_fallback_still_matches():
+    from signal_engine.main import _is_inflight_rejection
+
+    order, interpret = _order_for_interpret()
+    body = {"status": "error", "message": "Insufficient funds"}
+    result = interpret(order, _response(400, body), body)
+    assert not result.inflight and not _is_inflight_rejection(result)
+    assert _is_inflight_rejection(TradeResult(status=OrderStatus.REJECTED, message=INFLIGHT))

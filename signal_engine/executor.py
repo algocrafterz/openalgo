@@ -294,7 +294,8 @@ def _interpret_placeorder(order: Order, response, data: dict) -> TradeResult:
         mode = data.get("mode", "")
         mode_tag = f" [{mode}]" if mode else ""
         logger.warning(f"Order rejected for {order.symbol}{mode_tag}: {reason}")
-        return TradeResult(status=OrderStatus.REJECTED, message=reason)
+        inflight = response.status_code == 409 or data.get("inflight") is True
+        return TradeResult(status=OrderStatus.REJECTED, message=reason, inflight=inflight)
 
     if data.get("status") == "error":
         reason = data.get("message", "Unknown error")
