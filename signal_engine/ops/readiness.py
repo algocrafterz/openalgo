@@ -22,11 +22,14 @@ import threading
 import urllib.request
 from datetime import date, datetime, timedelta
 
-from signal_engine.ops import automation, ipalert, jobs, logs, recovery, wakecheck
+from signal_engine.ops import automation, ipalert, jobs, logs, logscan, recovery, wakecheck
 from signal_engine.ops.model import FAIL, IST, NOT_VERIFIED, OK, REPORTS, WARN, Check, write_phase
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+_WS_DROP = "connection to remote host was lost"
+_WS_DROP_LIMIT = 10
 
 HEALTH_URL = "http://127.0.0.1:5000/health/status"
 PORTS = {"websocket proxy": 8765, "ZeroMQ bus": 5555}
@@ -219,15 +222,33 @@ def _overnight_errors(day: str) -> Check:
     if not records:
         return Check("errors since the last close", OK, "none")
     top = {}
+    benign = drops = 0
     for _when, name, message, symbol in records:
+        if logscan.BENIGN.search(f"{name}: {message}"):
+            benign += 1
+            if _WS_DROP in (message or "").lower():
+                drops += 1
+            continue
         sig = logs.signature(name, message, symbol)
         top[sig] = top.get(sig, 0) + 1
+    other = sum(top.values())
     worst = sorted(top.items(), key=lambda item: -item[1])[:3]
-    return Check(
-        "errors since the last close",
-        WARN,
-        f"{len(records)} records; top: " + "; ".join(f"x{n} {s[:70]}" for s, n in worst),
-    )
+    head = f"{benign} known-benign, {other} other"
+    # log/errors.jsonl holds ERROR+ records only, and the adapter's "Reconnected successfully"
+    # line is INFO, so a reconnect cannot be verified here. It is reported UNKNOWN, never
+    # assumed; a burst of drops (> _WS_DROP_LIMIT) is the only signal that raises a WARN.
+    note = f"{drops} websocket drops, reconnect: UNKNOWN (not in error log)" if drops else ""
+    if other:
+        text = f"{head}; top: " + "; ".join(f"x{n} {s[:70]}" for s, n in worst)
+        return Check("errors since the last close", WARN, f"{text}; {note}" if note else text)
+    if drops > _WS_DROP_LIMIT:
+        return Check(
+            "errors since the last close",
+            WARN,
+            f"{head}; {drops} websocket drops (more than {_WS_DROP_LIMIT}), "
+            "reconnect: UNKNOWN (not in error log)",
+        )
+    return Check("errors since the last close", OK, f"{head}; {note}" if note else head)
 
 
 def _morning_tasks(day: str) -> list[Check]:
