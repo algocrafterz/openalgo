@@ -267,7 +267,7 @@ def _totp_session_token(
     """
     logger = _log()
     existing_token, _ = get_existing_auth(username)
-    if existing_token and verify_broker_auth(existing_token):
+    if existing_token and verify_broker_auth(existing_token, fresh_login_follows=True):
         logger.info("Existing session valid — skipping TOTP for user: %s", username)
         return True, f"Session reused (no TOTP needed) for user: {username}", existing_token
 
@@ -642,7 +642,7 @@ def auto_login(
     return True, f"Auto-login successful for {username}", auth_token
 
 
-def verify_broker_auth(auth_token, _get_margin_data=None) -> dict | None:
+def verify_broker_auth(auth_token, _get_margin_data=None, fresh_login_follows: bool = False) -> dict | None:
     """Verify broker auth token is live by calling the funds API.
 
     Makes a lightweight API call to fetch account funds/margins.
@@ -651,6 +651,9 @@ def verify_broker_auth(auth_token, _get_margin_data=None) -> dict | None:
     Args:
         auth_token: The broker auth token to verify.
         _get_margin_data: Override for testing (DI).
+        fresh_login_follows: True when the caller will log in afresh if this check
+            fails (a stale stored token is the expected state after the scheduled
+            stop revoked it), so empty funds data is logged as WARNING, not ERROR.
 
     Returns:
         Fund data dict if token is valid, None otherwise.
@@ -678,7 +681,8 @@ def verify_broker_auth(auth_token, _get_margin_data=None) -> dict | None:
         margin_data = _get_margin_data(auth_token)
 
         if not margin_data:
-            logger.error("Auth verification failed: broker returned empty funds data")
+            log_empty = logger.warning if fresh_login_follows else logger.error
+            log_empty("Auth verification failed: broker returned empty funds data")
             return None
 
         available = margin_data.get("availablecash", "0")
@@ -752,7 +756,10 @@ def _verify_openalgo_api(max_attempts: int = 3, retry_delay: float = 5.0) -> tup
                 logger.info("OpenAlgo API smoke test passed: %s", detail)
             return True, detail
 
-        logger.error(
+        # A failure that will be retried is expected while a fresh start settles
+        # (master contract still loading); only the final attempt is an ERROR.
+        log_failure = logger.warning if attempt < max_attempts else logger.error
+        log_failure(
             "OpenAlgo API smoke test FAILED (attempt %s/%s): %s", attempt, max_attempts, detail
         )
         if attempt < max_attempts:
