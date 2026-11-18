@@ -11,7 +11,7 @@ Attribution of a fill, evaluated in this order (first match wins):
   1. live StrategyOrderTag for the order id, label in UI_ORDER_LABELS -> ui_manual
   2. live StrategyOrderTag for the order id                           -> strategy_tag
   3. order id in signal_engine trades.db (sentinel ids excluded)      -> strategy_engine
-  4. neither source knows it AND tag coverage includes the fill date  -> manual
+  4. neither source knows it AND the fill is covered (date or same-day) -> manual
   5. otherwise                                                        -> unresolved
 Coverage: a fill is covered only if its date >= coverage_anchor date + 1 day, where
 coverage_anchor = the EARLIEST of (a) MIN(created_at) of live StrategyOrderTag rows and
@@ -21,7 +21,21 @@ through OpenAlgo are tagged at placement, before their fills reach the broker Tr
 the ledger only sees fills from the day it began syncing, so the first successful sync date
 is a valid coverage start even when no strategy order was ever tagged (a purely manual
 trader). Runs with status no_auth / skipped_window / error never start coverage. The +1 day
-buffer stays: the first day is not trusted. The anchor is computed on the fly from
+buffer stays for whole days: a day's TradeBook can hold fills from before the ledger ran, so
+the anchor day is not trusted AS A DAY. Same-day coverage (an OR, per fill; see
+same_day_covered) also covers a fill on its own date when (a) an ok/partial run started that
+day FINISHED strictly before T = the effective session start of the fill's exchange that day
+(market_calendar_db.get_effective_session_window: holidays, weekends, special sessions)
+minus SESSION_LEAD_MIN (15) minutes, and the fill is at/after T; (b) counting from T, the
+start times of ok/partial runs started that day (any broker/account; the run in progress
+counts) up to the first one at/after the fill are never more than
+DISCRETIONARY_LEDGER_MAX_SYNC_GAP_MIN (default 30) minutes apart. Failed / skipped / no_auth
+runs are not heartbeats, and an empty sync cycle (no non-revoked auth row) records no run, so
+both are gaps: once a gap exceeds the limit, every later fill of that day stays unresolved
+(the safe outcome). A closed or unknown session (calendar error) -> not same-day covered.
+It is evaluated only for fills the date rule does not cover, i.e. in practice the anchor day.
+The grace period still applies, and a tag-source error still aborts the run before any
+attribution. The anchor is computed on the fly from
 ledger_sync_runs plus the tag table; the stored ledger_sync_runs.tag_min_created_at column
 keeps its meaning (MIN live tag created_at only, NULL when none), it is NOT the anchor. If
 signal_engine trades.db cannot be read
@@ -38,18 +52,37 @@ Coverage rule: implications (see docs/discretionary_attribution.md for the long 
   ``manual``: nothing can show that a strategy did not place it. Unresolved fills are listed
   and excluded from every P&L figure.
 * First enablement: the anchor is the first ok/partial sync (or the oldest live tag, if
-  earlier). Fills dated on or before that day stay unresolved; fills from the next day on can
-  be ``manual``. History from before the first sync is therefore never classed manual, and
+  earlier). Fills dated on or before that day stay unresolved unless same-day coverage holds
+  (a run finished before T and no heartbeat gap above the limit up to the fill); fills from
+  the next day on can be ``manual``. History from before the first sync is therefore never classed manual, and
   the broker TradeBook is a current-day book, so older fills usually are not in the ledger
   at all.
 * The anchor is derived on every sync from persisted rows (no code prunes ledger_sync_runs),
   so a restart does not move it, and it is shared by every broker and account. Later syncs
   never move it. The one way it moves LATER: the oldest live tag predates the first sync and
   is then pruned (StrategyOrderTag retention, default 30 days); the anchor falls back to the
-  first sync start. Coverage is a date threshold, not a continuity check: a day with no
-  successful sync is
-  still "covered", and the fills of that day are simply absent if they were never fetched
-  (the pnl service reports such weekdays as days_without_sync).
+  first sync start. The date rule is a threshold, not a continuity check: a day with no
+  successful sync is still "covered", and the fills of that day are simply absent if they
+  were never fetched (the pnl service reports such weekdays as days_without_sync). Same-day
+  coverage, in contrast, requires continuity.
+* Same-day coverage does not remove one residual risk: an order placed earlier that day
+  (after-market / AMO or pre-open) by a build or process WITHOUT tagging fills during the
+  covered session and is then classed manual. The ledger stores no order-entry time.
+* A failed tag write (database/strategy_book_db.py record_order_tag logs the exception and
+  returns False) leaves that order without a tag, so its fill is classed manual. Neither the
+  date rule nor the same-day rule protects against it, on covered days as on any other day.
+* Order ids the broker creates itself (GTT triggers, bracket / cover-order legs, broker-side
+  replacements) were never tagged by OpenAlgo and end up manual.
+* Coupling of the same-day rule to the scheduler: the ticker wakes every 60 s and a periodic
+  sync is due once DISCRETIONARY_LEDGER_INTERVAL_MIN (default 15) minutes have passed, so
+  periodic syncs start about every 15m20s (tick drift included; observed 15m20s to 15m24s).
+  With G = 30 one missed periodic sync makes a gap of about 30m40s > G, so G tolerates ZERO
+  missed syncs: after one miss every later fill of that day stays unresolved (fails safe).
+  An INTERVAL_MIN of G or more disables the same-day rule in practice (spacing is the
+  interval plus drift). The scheduler runs no sync before the session opens (periodic starts
+  at 09:15, the first heartbeat after T = 09:00): a run finished before T exists only after a
+  boot before T (boot catch-up; not inside the 05:00-06:00 skip window, which records
+  skipped_window, not a heartbeat). Do not relax G or the 15-minute lead to compensate.
 * Known ways an automated order is still counted as discretionary (documented, not fixed):
   broker auto square-off of an automated position (no OpenAlgo tag, no engine row ->
   manual); the UI "close all" on an automated position (label in UI_ORDER_LABELS ->
@@ -126,7 +159,7 @@ import re
 import sqlite3
 from collections import defaultdict
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from database import discretionary_ledger_db as ledger
@@ -173,6 +206,16 @@ class FillBatch(list):
 
 def manual_grace_minutes() -> int:
     return env_int("DISCRETIONARY_LEDGER_MANUAL_GRACE_MIN", 30, minimum=0)
+
+
+# Same-day coverage: fills can occur this long before the listed session start
+# (NSE/BSE pre-open 09:00-09:08, opening auctions).
+SESSION_LEAD_MIN = 15
+
+
+def max_sync_gap_minutes() -> int:
+    """Largest gap between successful sync starts allowed for same-day coverage."""
+    return env_int("DISCRETIONARY_LEDGER_MAX_SYNC_GAP_MIN", 30, minimum=1)
 
 
 def now_ist() -> datetime:
@@ -522,13 +565,105 @@ def is_covered(fill_time: datetime, tag_min: datetime | None) -> bool:
     return fill_time.date() >= (tag_min + timedelta(days=1)).date()
 
 
+def _session_start(day: date, exchange: str) -> datetime | None:
+    """Naive IST time from which fills of ``exchange`` can occur on ``day``.
+
+    The calendar's effective session start (holidays, special sessions) minus
+    SESSION_LEAD_MIN. None when the exchange is closed that day or the calendar fails.
+    """
+    try:
+        from database.market_calendar_db import get_effective_session_window
+
+        window = get_effective_session_window(day, exchange)
+    except Exception as e:
+        logger.warning("Session window unavailable for coverage: %s", type(e).__name__)
+        return None
+    if not window or window.get("start_ms") is None:
+        return None
+    start = datetime.fromtimestamp(window["start_ms"] / 1000, IST).replace(tzinfo=None)
+    return start - timedelta(minutes=SESSION_LEAD_MIN)
+
+
+def _load_ok_runs(days: set) -> dict:
+    """{date: [(started_at, finished_at)]} of ok/partial runs (any broker/account) per start day."""
+    from sqlalchemy import select
+
+    out: dict = defaultdict(list)
+    if not days:
+        return out
+    lo = datetime.combine(min(days), datetime.min.time())
+    hi = datetime.combine(max(days) + timedelta(days=1), datetime.min.time())
+    try:
+        rows = ledger.db_session.execute(
+            select(ledger.LedgerSyncRun.started_at, ledger.LedgerSyncRun.finished_at).where(
+                ledger.LedgerSyncRun.status.in_(("ok", "partial")),
+                ledger.LedgerSyncRun.started_at >= lo,
+                ledger.LedgerSyncRun.started_at < hi,
+            )
+        ).all()
+    finally:
+        ledger.db_session.remove()
+    for started, finished in rows:
+        if started.date() in days:
+            out[started.date()].append((started, finished))
+    return out
+
+
+def same_day_covered(
+    fill_time: datetime,
+    exchange: str,
+    runs,
+    current_start: datetime | None = None,
+    start_fn: Callable | None = None,
+) -> bool:
+    """True when the ledger demonstrably ran from before the session up to the fill.
+
+    ``runs``: (started_at, finished_at) of ok/partial runs started on the fill's date, any
+    broker/account. T = session start of the fill's exchange that day minus SESSION_LEAD_MIN
+    (``start_fn``, default _session_start; None -> not covered). Covered when fill_time >= T,
+    a run FINISHED strictly before T, and the run starts >= T (plus ``current_start``, the run
+    in progress) counted from T up to the first one at/after fill_time are never more than
+    max_sync_gap_minutes() apart. Failed/skipped runs are not passed in, so they are gaps.
+    """
+    if not runs:
+        return False
+    start = (start_fn or _session_start)(fill_time.date(), exchange)
+    if start is None or fill_time < start:
+        return False
+    if not any(fin is not None and fin < start for _s, fin in runs):
+        return False
+    points = {s for s, _f in runs if s >= start}
+    if (
+        current_start is not None
+        and current_start.date() == fill_time.date()
+        and current_start >= start
+    ):
+        points.add(current_start)
+    limit = timedelta(minutes=max_sync_gap_minutes())
+    prev = start
+    for p in sorted(points):
+        if p - prev > limit:
+            return False
+        if p >= fill_time:
+            return True
+        prev = p
+    return False
+
+
 def classify(
-    fill: dict, live_tags, unknown_mode, engine_ids, tag_min, now: datetime | None = None
+    fill: dict,
+    live_tags,
+    unknown_mode,
+    engine_ids,
+    tag_min,
+    now: datetime | None = None,
+    same_day: bool = False,
 ) -> tuple[str, str | None, str, str]:
     """Return (state, strategy, reason, source) for one fill row dict.
 
     ``now`` (IST) enables the manual grace period: a fill younger than
     DISCRETIONARY_LEDGER_MANUAL_GRACE_MIN stays unresolved so late tags can still arrive.
+    ``same_day`` (see same_day_covered) covers the fill even when the date rule does not.
     """
     oid = fill["order_id"]
     if not oid or oid in SENTINEL_ORDER_IDS:
@@ -550,17 +685,26 @@ def classify(
             "order in signal_engine trades",
             "signal_engine",
         )
-    if is_covered(fill["fill_time"], tag_min):
+    by_date = is_covered(fill["fill_time"], tag_min)
+    if by_date or same_day:
         if now is not None and now - fill["fill_time"] < timedelta(minutes=manual_grace_minutes()):
             return ledger.STATE_UNRESOLVED, None, "within manual grace period", "none"
-        return ledger.STATE_MANUAL, None, "absent from tags and engine; tag coverage ok", "none"
+        why = "tag coverage ok" if by_date else "same-day coverage ok"
+        return ledger.STATE_MANUAL, None, f"absent from tags and engine; {why}", "none"
     return ledger.STATE_UNRESOLVED, None, "fill date before tag coverage", "none"
 
 
 def attribute_unresolved(
-    broker: str | None, account: str | None, tag_min: datetime | None, now: datetime | None = None
+    broker: str | None,
+    account: str | None,
+    tag_min: datetime | None,
+    now: datetime | None = None,
+    current_start: datetime | None = None,
 ) -> int:
     """Re-evaluate every unresolved and manual row. Returns changes.
+
+    ``current_start``: start of the sync run in progress (it will end ok/partial); it counts
+    as a heartbeat for same-day coverage. None outside a sync.
 
     ``broker`` / ``account`` None (the sync default) re-evaluates all rows of every broker and
     account; a value restricts to it. Account isolation holds either way: order ids match
@@ -582,6 +726,7 @@ def attribute_unresolved(
                 ledger.LedgerFill.broker,
                 ledger.LedgerFill.fill_time,
                 ledger.LedgerFill.attribution_state,
+                ledger.LedgerFill.exchange,
             ).where(
                 ledger.LedgerFill.attribution_state.in_(
                     (ledger.STATE_UNRESOLVED, ledger.STATE_MANUAL)
@@ -595,15 +740,38 @@ def attribute_unresolved(
     if not rows:
         return 0
     fills = [
-        {"id": r[0], "order_id": r[1] or "", "broker": r[2], "fill_time": r[3], "state": r[4]}
+        {
+            "id": r[0],
+            "order_id": r[1] or "",
+            "broker": r[2],
+            "fill_time": r[3],
+            "state": r[4],
+            "exchange": r[5] or "",
+        }
         for r in rows
     ]
     order_ids = sorted({f["order_id"] for f in fills if f["order_id"]})
     live, unknown = _load_live_tags(order_ids)
     engine_ids = _engine_known_order_ids(order_ids)
+    # Same-day coverage only matters where the date rule does not already cover the fill.
+    pending = {f["fill_time"].date() for f in fills if not is_covered(f["fill_time"], tag_min)}
+    runs_by_day = _load_ok_runs(pending)
+    starts: dict = {}
+
+    def start_fn(day, exchange):
+        if (day, exchange) not in starts:
+            starts[(day, exchange)] = _session_start(day, exchange)
+        return starts[(day, exchange)]
+
     changed = 0
     for f in fills:
-        state, strategy, reason, source = classify(f, live, unknown, engine_ids, tag_min, now)
+        d = f["fill_time"].date()
+        same_day = d in pending and same_day_covered(
+            f["fill_time"], f["exchange"], runs_by_day.get(d, []), current_start, start_fn
+        )
+        state, strategy, reason, source = classify(
+            f, live, unknown, engine_ids, tag_min, now, same_day=same_day
+        )
         if state == f["state"] or state == ledger.STATE_UNRESOLVED:
             continue  # unchanged, or would be a downgrade
         if f["state"] == ledger.STATE_MANUAL:
@@ -704,7 +872,8 @@ def sync_once(user: str, now_fn: Callable[[], datetime] = now_ist) -> dict:
         inserted = ledger.insert_fills(fills)
         tag_min = get_tag_min_created_at()
         anchor = get_coverage_anchor(tag_min, started)
-        attribute_unresolved(None, None, anchor, started)  # all brokers and accounts
+        # all brokers and accounts; the run in progress counts as a same-day heartbeat
+        attribute_unresolved(None, None, anchor, started, current_start=started)
         status = "partial" if unmapped else "ok"
         _record(broker, account, started, status, len(fills), inserted, error=note, tag_min=tag_min)
         return {

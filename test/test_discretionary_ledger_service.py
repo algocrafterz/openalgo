@@ -12,7 +12,7 @@ import copy
 import pathlib
 import sqlite3
 from contextlib import ExitStack
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -1323,3 +1323,351 @@ def test_tag_of_another_broker_still_does_not_match_during_cross_sync(env):
     add_tag(env, "XB", "S9", broker="zerodha")
     sync([], broker="zerodha", user="bob")
     assert rows(env)[0]["attribution_state"] != "strategy_tag"
+
+
+# ------------------------------------------------------------------ same-day coverage
+
+D18 = datetime(2026, 11, 18)  # a Wednesday
+
+
+def t18(hh, mm=0, ss=0):
+    return datetime(2026, 11, 18, hh, mm, ss)
+
+
+REAL_SESSION_START = svc._session_start
+
+
+def fake_session_start(day, exchange):
+    """T = session start minus 15 min: NSE-like 09:00, MCX 08:45; weekend closed."""
+    if day.weekday() >= 5:
+        return None
+    if (exchange or "").upper() == "MCX":
+        return datetime(day.year, day.month, day.day, 8, 45)
+    return datetime(day.year, day.month, day.day, 9, 0)
+
+
+@pytest.fixture
+def sd(env, monkeypatch):
+    """Same-day tests: deterministic calendar, no live tags (date coverage starts 11-19)."""
+    monkeypatch.setattr(svc, "_session_start", fake_session_start)
+    return env
+
+
+def add_run(env, start, status="ok", finished=None, account="A1", broker="flattrade"):
+    ledger.record_sync_run(
+        broker=broker,
+        account=account,
+        started_at=start,
+        finished_at=finished or start + timedelta(seconds=2),
+        status=status,
+        fetched=0,
+        inserted=0,
+    )
+
+
+def states(env):
+    return {r["fill_id"]: r["attribution_state"] for r in rows(env)}
+
+
+def audits(env):
+    return rows(
+        env,
+        "SELECT a.reason, f.fill_id FROM ledger_attribution_audit a "
+        "JOIN ledger_fills f ON f.id = a.fill_ref ORDER BY a.id",
+    )
+
+
+def at(hh, mm=0, ss=0):
+    when = t18(hh, mm, ss)
+    return lambda: when
+
+
+def test_same_day_pre_session_sync_and_continuous_syncs_give_manual_after_grace(sd):
+    for start in (t18(8, 30), t18(9, 10), t18(9, 25), t18(9, 40), t18(9, 55)):
+        add_run(sd, start)
+    sync([mk(order_id="OM", fill_id="1", when=t18(9, 35))], now=at(10, 5))
+    assert states(sd) == {"1": "manual"}
+    assert audits(sd)[-1]["reason"] == "absent from tags and engine; same-day coverage ok"
+
+
+def test_same_day_fill_inside_grace_stays_unresolved(sd):
+    for start in (t18(8, 30), t18(9, 10), t18(9, 25), t18(9, 40), t18(9, 55)):
+        add_run(sd, start)
+    sync([mk(order_id="OM", fill_id="1", when=t18(9, 50))], now=at(10, 5))
+    assert states(sd) == {"1": "unresolved"}
+
+
+def test_same_day_first_sync_after_session_open_stays_unresolved(sd):
+    add_run(sd, t18(9, 20))
+    sync([mk(order_id="OM", fill_id="1", when=t18(9, 10))], now=at(9, 35))
+    sync([], now=at(10, 30))
+    assert states(sd) == {"1": "unresolved"}
+
+
+def test_same_day_gap_over_limit_keeps_later_fills_unresolved_and_earlier_manual(sd):
+    for start in (t18(8, 30), t18(9, 10), t18(9, 30), t18(10, 5), t18(10, 20), t18(10, 35)):
+        add_run(sd, start)  # 09:30 -> 10:05 is a 35 minute gap
+    fills = [
+        mk(order_id="OA", fill_id="early", when=t18(9, 20)),
+        mk(order_id="OB", fill_id="gap", when=t18(10, 1)),
+        mk(order_id="OC", fill_id="late", when=t18(10, 25)),
+    ]
+    sync(fills, now=at(11, 0))
+    assert states(sd) == {"early": "manual", "gap": "unresolved", "late": "unresolved"}
+
+
+@pytest.mark.parametrize("status", ["no_auth", "broker_error", "error", "skipped_window"])
+def test_same_day_failed_or_skipped_runs_are_not_heartbeats(sd, status):
+    add_run(sd, t18(8, 30))
+    add_run(sd, t18(9, 10))
+    add_run(sd, t18(9, 30), status=status)
+    sync([mk(order_id="OM", fill_id="1", when=t18(9, 20))], now=at(9, 55))  # 45 min after 09:10
+    sync([], now=at(10, 30))
+    assert states(sd) == {"1": "unresolved"}
+
+
+def test_same_day_ok_run_in_the_same_place_is_a_heartbeat(sd):
+    add_run(sd, t18(8, 30))
+    add_run(sd, t18(9, 10))
+    add_run(sd, t18(9, 30))
+    sync([mk(order_id="OM", fill_id="1", when=t18(9, 20))], now=at(9, 55))
+    assert states(sd) == {"1": "manual"}
+
+
+def test_same_day_partial_runs_are_heartbeats(sd):
+    add_run(sd, t18(8, 30), status="partial")  # a partial run is also the pre-session run
+    add_run(sd, t18(9, 10), status="partial")
+    add_run(sd, t18(9, 30), status="partial")
+    sync([mk(order_id="OM", fill_id="1", when=t18(9, 20))], now=at(9, 55))
+    assert states(sd) == {"1": "manual"}  # fails if "partial" is excluded from heartbeats
+
+
+def test_same_day_gap_exactly_at_limit_passes_and_finish_equal_to_start_fails():
+    start = lambda day, ex: t18(9, 0)  # noqa: E731
+    pre = (t18(8, 30), t18(8, 30, 2))
+    fill = t18(9, 20)
+    assert svc.same_day_covered(fill, "NSE", [pre, (t18(9, 30), None)], None, start)
+    assert not svc.same_day_covered(fill, "NSE", [pre, (t18(9, 30, 1), None)], None, start)
+    # a run finishing exactly at T does not qualify
+    assert not svc.same_day_covered(
+        fill, "NSE", [(t18(8, 59), t18(9, 0)), (t18(9, 25), None)], None, start
+    )
+    # the first point at/after the fill may be the fill time itself
+    assert svc.same_day_covered(t18(9, 25), "NSE", [pre, (t18(9, 25), None)], None, start)
+    # a fill before T is never same-day covered
+    assert not svc.same_day_covered(t18(8, 55), "NSE", [pre, (t18(9, 5), None)], None, start)
+    # the run in progress counts as a point
+    assert svc.same_day_covered(fill, "NSE", [pre], t18(9, 25), start)
+    assert not svc.same_day_covered(fill, "NSE", [pre], None, start)
+
+
+def test_same_day_unreadable_engine_db_stays_unresolved(sd, monkeypatch, tmp_path):
+    bad = tmp_path / "bad.db"
+    bad.write_bytes(b"not a sqlite file at all" * 100)
+    monkeypatch.setenv("SIGNAL_ENGINE_TRADES_DB", str(bad))
+    for start in (t18(8, 30), t18(9, 10), t18(9, 25)):
+        add_run(sd, start)
+    sync([mk(order_id="OM", fill_id="1", when=t18(9, 20))], now=at(10, 0))
+    assert states(sd) == {"1": "unresolved"}
+
+
+def test_same_day_tag_query_error_records_error_and_changes_nothing(sd, monkeypatch):
+    for start in (t18(8, 30), t18(9, 10), t18(9, 25)):
+        add_run(sd, start)
+
+    def boom(order_ids):
+        raise RuntimeError("tags down")
+
+    monkeypatch.setattr(svc, "_load_live_tags", boom)
+    out = sync([mk(order_id="OM", fill_id="1", when=t18(9, 20))], now=at(10, 0))
+    assert out == {"status": "error"}
+    assert states(sd) == {"1": "unresolved"} and audits(sd) == []
+    assert rows(sd, "SELECT status FROM ledger_sync_runs ORDER BY id")[-1]["status"] == "error"
+
+
+def test_same_day_live_tag_engine_and_ui_label_keep_their_states(sd):
+    for start in (t18(8, 30), t18(9, 10), t18(9, 25)):
+        add_run(sd, start)
+    add_tag(sd, "OTAG", "Alpha", created=t18(9, 15))
+    add_tag(sd, "OUI", "UI Exit Position", created=t18(9, 15))
+    add_engine_trade(sd, "OENG")
+    fills = [
+        mk(order_id="OTAG", fill_id="1", when=t18(9, 20)),
+        mk(order_id="OUI", fill_id="2", when=t18(9, 20)),
+        mk(order_id="OENG", fill_id="3", when=t18(9, 20)),
+        mk(order_id="OMAN", fill_id="4", when=t18(9, 20)),
+    ]
+    sync(fills, now=at(9, 55))
+    assert states(sd) == {
+        "1": "strategy_tag",
+        "2": "ui_manual",
+        "3": "strategy_engine",
+        "4": "manual",
+    }
+
+
+def test_previous_day_fill_without_pre_session_sync_stays_unresolved(sd):
+    for start in (t18(8, 30), t18(9, 10), t18(9, 25)):
+        add_run(sd, start)
+    sync([mk(order_id="OLD", fill_id="1", when=datetime(2026, 11, 17, 14, 0))], now=at(9, 40))
+    assert states(sd) == {"1": "unresolved"}
+
+
+def test_restart_mid_day_boot_sync_keeps_continuity(sd):
+    for start in (t18(8, 30), t18(9, 10), t18(9, 25), t18(9, 50)):  # 09:50 = boot catch-up
+        add_run(sd, start)
+    sync([mk(order_id="OM", fill_id="1", when=t18(9, 40))], now=at(10, 15))
+    assert states(sd) == {"1": "manual"}
+
+
+def test_restart_gap_over_limit_unresolved(sd):
+    for start in (t18(8, 30), t18(9, 10), t18(9, 25)):
+        add_run(sd, start)
+    add_run(sd, t18(10, 0))  # restart after 35 minutes without a run
+    sync([mk(order_id="OM", fill_id="1", when=t18(9, 40))], now=at(10, 15))
+    assert states(sd) == {"1": "unresolved"}
+
+
+def test_closed_session_day_is_not_same_day_covered(sd):
+    sat = datetime(2026, 11, 21)
+    for hh, mm in ((8, 30), (9, 10), (9, 25)):
+        add_run(sd, sat.replace(hour=hh, minute=mm))
+    sync(
+        [mk(order_id="OM", fill_id="1", when=sat.replace(hour=9, minute=20))],
+        now=lambda: sat.replace(hour=10, minute=0),
+    )
+    assert states(sd) == {"1": "unresolved"}
+
+
+def _calendar_module(monkeypatch, fn):
+    import sys
+    import types
+
+    mod = types.ModuleType("database.market_calendar_db")
+    mod.get_effective_session_window = fn
+    monkeypatch.setitem(sys.modules, "database.market_calendar_db", mod)
+
+
+def _window(hh, mm):
+    def fn(day, exchange):
+        start = datetime(day.year, day.month, day.day, hh, mm, tzinfo=svc.IST)
+        return {"start_ms": int(start.timestamp() * 1000), "end_ms": 0, "is_special": False}
+
+    return fn
+
+
+def test_session_window_lookup_error_fails_safe(monkeypatch):
+    def boom(day, exchange):
+        raise RuntimeError("calendar down")
+
+    _calendar_module(monkeypatch, boom)
+    assert REAL_SESSION_START(D18.date(), "NSE") is None
+    _calendar_module(monkeypatch, lambda day, exchange: None)  # holiday / weekend
+    assert REAL_SESSION_START(D18.date(), "NSE") is None
+    _calendar_module(monkeypatch, _window(9, 15))
+    assert REAL_SESSION_START(D18.date(), "NSE") == t18(9, 0)
+
+
+def test_mcx_session_start_differs_from_nse(sd):
+    runs_ = [(t18(8, 48), t18(8, 50)), (t18(9, 5), None)]
+    fill_nse = t18(9, 3)
+    assert svc.same_day_covered(fill_nse, "NSE", runs_, None, fake_session_start)
+    assert not svc.same_day_covered(fill_nse, "MCX", runs_, None, fake_session_start)
+
+
+def test_max_sync_gap_env_override(monkeypatch):
+    monkeypatch.delenv("DISCRETIONARY_LEDGER_MAX_SYNC_GAP_MIN", raising=False)
+    assert svc.max_sync_gap_minutes() == 30
+    monkeypatch.setenv("DISCRETIONARY_LEDGER_MAX_SYNC_GAP_MIN", "45")
+    assert svc.max_sync_gap_minutes() == 45
+    start = lambda day, ex: t18(9, 0)  # noqa: E731
+    runs_ = [(t18(8, 30), t18(8, 30, 2)), (t18(9, 40), None)]
+    assert svc.same_day_covered(t18(9, 20), "NSE", runs_, None, start)
+    monkeypatch.setenv("DISCRETIONARY_LEDGER_MAX_SYNC_GAP_MIN", "30")
+    assert not svc.same_day_covered(t18(9, 20), "NSE", runs_, None, start)
+
+
+def test_existing_unresolved_rows_upgrade_on_next_sync_with_audit_reason_same_day(sd, monkeypatch):
+    add_run(sd, t18(8, 30))
+    add_run(sd, t18(9, 10))
+    # an older build stored the fill unresolved (no same-day rule): simulate with a gap limit
+    # of 1 minute for the first sync
+    monkeypatch.setenv("DISCRETIONARY_LEDGER_MAX_SYNC_GAP_MIN", "1")
+    sync([mk(order_id="OM", fill_id="1", when=t18(9, 15))], now=at(9, 25))
+    monkeypatch.delenv("DISCRETIONARY_LEDGER_MAX_SYNC_GAP_MIN")
+    assert states(sd) == {"1": "unresolved"} and audits(sd) == []
+    sync([], now=at(9, 50))
+    assert states(sd) == {"1": "manual"}
+    assert [a["reason"] for a in audits(sd)] == [
+        "absent from tags and engine; same-day coverage ok"
+    ]
+
+
+# Today's real data, masked: 7 ok runs and 5 TCS fills of one account.
+REAL_RUNS = [
+    (t18(8, 30, 30), t18(8, 30, 32)),
+    (t18(9, 34, 38), None),
+    (t18(9, 41, 21), None),
+    (t18(9, 56, 38), None),
+    (t18(10, 11, 58), None),
+    (t18(10, 27, 22), None),
+    (t18(10, 42, 46), None),
+]
+REAL_FILLS = [
+    ("O1", "f1", "BUY", 4, 2392.6, t18(9, 46, 18)),
+    ("O2", "f2", "BUY", 21, 2392.0, t18(9, 46, 18)),
+    ("O3", "f3", "BUY", 20, 2401.8, t18(10, 7, 49)),
+    ("O4", "f4", "SELL", 30, 2395.2, t18(10, 16, 38)),
+    ("O5", "f5", "SELL", 15, 2395.2, t18(10, 16, 38)),
+]
+
+
+def _real_case(env, monkeypatch, gap, now, runs_=REAL_RUNS):
+    """Real NSE window 09:15 through the real _session_start (T_open 09:00)."""
+    monkeypatch.setattr(svc, "_session_start", REAL_SESSION_START)
+    _calendar_module(monkeypatch, _window(9, 15))
+    monkeypatch.setenv("DISCRETIONARY_LEDGER_MAX_SYNC_GAP_MIN", str(gap))
+    for start, fin in runs_:
+        add_run(env, start, finished=fin or start + timedelta(seconds=3), account="FZ0000")
+    fills = [
+        mk(order_id=o, fill_id=f, side=s, qty=q, price=p, when=w, symbol="TCS", account="FZ0000")
+        for o, f, s, q, p, w in REAL_FILLS
+    ]
+    sync(fills, now=lambda: now)
+    return states(env)
+
+
+def test_real_case_2026_11_18_g30_all_five_stay_unresolved(env, monkeypatch):
+    got = _real_case(env, monkeypatch, 30, t18(10, 58, 10))
+    assert got == dict.fromkeys(("f1", "f2", "f3", "f4", "f5"), "unresolved")
+
+
+def test_real_case_2026_11_18_g45_all_five_become_manual(env, monkeypatch):
+    got = _real_case(env, monkeypatch, 45, t18(10, 58, 10))
+    assert got == dict.fromkeys(("f1", "f2", "f3", "f4", "f5"), "manual")
+
+
+def test_real_case_2026_11_18_g45_sells_wait_for_grace(env, monkeypatch):
+    got = _real_case(env, monkeypatch, 45, t18(10, 42, 46), runs_=REAL_RUNS[:-1])
+    assert got == {
+        "f1": "manual",
+        "f2": "manual",
+        "f3": "manual",
+        "f4": "unresolved",  # 10:16:38 + 30 min grace = 10:46:38
+        "f5": "unresolved",
+    }
+
+
+def test_real_case_continuous_15_minute_syncs_give_manual_after_grace(env, monkeypatch):
+    runs_ = [(t18(8, 30, 30), t18(8, 30, 32))]
+    runs_ += [(t18(9, 0) + timedelta(minutes=15 * i), None) for i in range(1, 8)]  # 09:15..10:45
+    within = _real_case(env, monkeypatch, 30, t18(10, 46, 0), runs_=runs_)
+    assert within == {
+        "f1": "manual",
+        "f2": "manual",
+        "f3": "manual",
+        "f4": "unresolved",
+        "f5": "unresolved",
+    }
+    sync([], now=at(11, 0))
+    assert states(env) == dict.fromkeys(("f1", "f2", "f3", "f4", "f5"), "manual")
