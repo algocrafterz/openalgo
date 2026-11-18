@@ -12,6 +12,7 @@ Every call goes through one of two transports:
 """
 
 import asyncio
+import re
 from datetime import datetime
 
 import httpx
@@ -337,6 +338,44 @@ async def close_all_positions(strategy: str) -> bool:
 # Orders
 # ---------------------------------------------------------------------------
 
+_BODY_PRE_CAP = 20000
+_VALUE = r"(?:\"[^\"]*\"|'[^']*'|"
+_MASK_WHOLE = re.compile(
+    r"(?i)((?:authorization|set-cookie|cookie)[\"']?\s*[:=]\s*)"
+    + _VALUE + r"[^\r\n&}\"']*)"
+)
+_MASK_KEYED = re.compile(
+    r"(?i)(?<![A-Za-z0-9])([\w-]*(?:api[_-]?key|token|secret|passw(?:or)?d|session|totp)[\w-]*|sid)"
+    r"([\"']?\s*[:=]\s*)" + _VALUE + r"[^\s,&;}\"']+)"
+)
+# Prose form ("Invalid apikey AB12CD34", "bad token tkn_X"): keyword, space, then a value that
+# looks like a credential (>= 6 chars with a digit or one of _ . - ~ + / =), so plain words stay.
+_MASK_PROSE = re.compile(
+    r"(?i)\b((?:api[_-]?key|token|secret|passw(?:or)?d|session(?:[_-]?id)?|totp)\s+)"
+    r"(?=[A-Za-z0-9._~+/=-]{6,})([A-Za-z0-9]*[0-9_.~+/=-][A-Za-z0-9._~+/=-]*)"
+)
+_MASK_BEARER = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
+
+
+def _masked_body(response, limit: int = 300) -> str:
+    """Response body for a failure log line: key/token values masked, capped at `limit`."""
+    try:
+        text = str(response.text or "")[:_BODY_PRE_CAP]
+        key = getattr(settings, "openalgo_api_key", "") or ""
+        if key:
+            text = text.replace(key, "***")
+        # Whole-credential headers (scheme word + token, cookie lists): mask to the closing
+        # quote, or to end of line / & / } when unquoted.
+        text = _MASK_WHOLE.sub(r"\1***", text)
+        text = _MASK_KEYED.sub(r"\1\2***", text)
+        text = _MASK_BEARER.sub("Bearer ***", text)
+        text = _MASK_PROSE.sub(r"\1***", text)
+        text = " ".join(text.split())
+        return text[:limit] + ("..." if len(text) > limit else "")
+    except Exception:
+        return "<unreadable body>"
+
+
 async def cancel_order(order_id: str, strategy: str) -> bool:
     """Cancel a pending order by order ID.
 
@@ -347,6 +386,11 @@ async def cancel_order(order_id: str, strategy: str) -> bool:
         response = await _post_tolerant("cancelorder", payload)
         if response.status_code >= 400:
             logger.warning(f"Cancel order {order_id} returned HTTP {response.status_code}")
+            # Body on its own INFO line: signature() keys on the WARNING's first line, and a
+            # varying body there would split one error kind into many signatures.
+            logger.info(
+                f"Cancel order {order_id} HTTP {response.status_code} body: {_masked_body(response)}"
+            )
             return False
         data = _json_or_empty(response)
         if data.get("status") != "success":
@@ -436,6 +480,11 @@ async def fetch_order_fill_price(order_id: str, strategy: str, max_attempts: int
     # falls back to the SIGNAL's entry price, which silently disables
     # no_progress.use_fill_price_for_progress and makes every R-multiple and day-summary
     # entry a quote rather than a fill - the fetch_bars UTC failure mode, again.
+    if max_attempts == 1 and last_error is None:
+        # A single-attempt poll of a resting stop that has not triggered yet is the normal
+        # case (tracker polls every ~20 s), not a failure: keep it out of the WARNING stream.
+        logger.debug(f"Order {order_id} not complete yet (single-attempt poll); no fill price")
+        return None
     detail = f": {last_error}" if last_error else " (order never reported complete)"
     logger.warning(
         f"Could not read the fill price for order {order_id} after {max_attempts} attempts"
