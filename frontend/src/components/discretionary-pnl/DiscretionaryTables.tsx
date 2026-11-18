@@ -183,7 +183,10 @@ function DirectionBadge({ direction }: { direction: 'LONG' | 'SHORT' }) {
   )
 }
 
-/** Closed trades, newest first. A row opens the fills it was built from. */
+/**
+ * Completed trades (a position from flat to flat), newest first. A row opens the fills of all
+ * its legs; a trade closed in parts shows a legs badge.
+ */
 export function ClosedTradesTable({
   trades,
   formatCurrency,
@@ -250,7 +253,18 @@ export function ClosedTradesTable({
               <TableCell>{t.product}</TableCell>
               <TableCell className="text-right font-mono">{fmtPrice(t.entry_price)}</TableCell>
               <TableCell className="text-right font-mono">{fmtPrice(t.exit_price)}</TableCell>
-              <TableCell className="text-right font-mono">{fmtQty(t.closed_quantity)}</TableCell>
+              <TableCell className="text-right font-mono">
+                {fmtQty(t.closed_quantity)}
+                {t.legs > 1 && (
+                  <Badge
+                    variant="outline"
+                    className="ml-1 text-[10px] text-muted-foreground"
+                    title={`Closed in ${t.legs} parts (partial exits)`}
+                  >
+                    {t.legs} legs
+                  </Badge>
+                )}
+              </TableCell>
               <TableCell className={cn('text-right font-mono', pnlClass(t.realized_pnl))}>
                 {formatCurrency(t.realized_pnl)}
               </TableCell>
@@ -311,6 +325,7 @@ export function OpenPositionsTable({
           <TableHead className="text-right">Avg entry</TableHead>
           <TableHead className="text-right">LTP</TableHead>
           <TableHead>Price</TableHead>
+          <TableHead className="text-right">Realized so far</TableHead>
           <TableHead className="text-right">Unrealized</TableHead>
           <TableHead>Status</TableHead>
         </TableRow>
@@ -333,6 +348,12 @@ export function OpenPositionsTable({
             <TableCell className="text-right font-mono">{fmtPrice(p.ltp)}</TableCell>
             <TableCell>
               <PriceStatusBadge status={p.price_status} ageSeconds={p.age_s} />
+            </TableCell>
+            <TableCell
+              className={cn('text-right font-mono', pnlClass(p.realized_so_far ?? 0))}
+              title="Gross P&L of the partial exits of this position, already in realized"
+            >
+              {p.realized_so_far ? formatCurrency(p.realized_so_far) : '—'}
             </TableCell>
             <TableCell className={cn('text-right font-mono', pnlClass(p.unrealized ?? 0))}>
               {p.unrealized == null ? '—' : formatCurrency(p.unrealized)}

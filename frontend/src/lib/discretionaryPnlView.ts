@@ -381,12 +381,23 @@ export function syncSummary(health: SyncHealth | undefined): { text: string; pro
   return { text: `${base}; no sync on ${shown}${more}`, problem: true }
 }
 
-/** True when there is nothing to show at all: no closed trades and no open positions. */
+/**
+ * True when there is nothing to show at all: no completed trades, no open positions and no
+ * closing leg in the period (a partial exit of a position completed after the period still
+ * has realized money to show).
+ */
 export function isEmptyBook(
-  summary: Pick<DiscretionarySummary, 'trades_total' | 'positions_total'> | undefined
+  summary:
+    | (Pick<DiscretionarySummary, 'trades_total' | 'positions_total'> &
+        Partial<Pick<DiscretionarySummary, 'by_period'>>)
+    | undefined
 ): boolean {
   if (!summary) return true
-  return (summary.trades_total ?? 0) === 0 && (summary.positions_total ?? 0) === 0
+  return (
+    (summary.trades_total ?? 0) === 0 &&
+    (summary.positions_total ?? 0) === 0 &&
+    (summary.by_period?.daily?.length ?? 0) === 0
+  )
 }
 
 /** Sorted distinct non-empty values, for a filter's choices. */

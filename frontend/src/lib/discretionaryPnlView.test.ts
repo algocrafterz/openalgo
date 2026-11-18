@@ -193,6 +193,12 @@ describe('book helpers', () => {
     expect(isEmptyBook(emptySummary())).toBe(true)
     expect(isEmptyBook(summary())).toBe(false)
     expect(isEmptyBook(undefined)).toBe(true)
+    // a partial exit of a position completed after the period: money, no trade, no position
+    const legOnly = {
+      ...emptySummary(),
+      by_period: { ...emptySummary().by_period, daily: summary().by_period.daily },
+    }
+    expect(isEmptyBook(legOnly)).toBe(false)
   })
 
   it('builds filter choices from the data, sorted and distinct', () => {

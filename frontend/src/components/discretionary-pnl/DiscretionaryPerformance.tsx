@@ -180,6 +180,8 @@ export function DiscretionaryPerformance({
   const sync = syncSummary(summary?.sync_health)
   const withheld = summary?.withheld ?? {}
   const metrics = summary?.metrics
+  // No completed trade (e.g. only a partial exit): the ratios have nothing to rate.
+  const noTrades = (metrics?.trades_count ?? 0) === 0
   const sharpe = ratioCell('sharpe_ratio', metrics?.sharpe_ratio, withheld)
   const sortino = ratioCell('sortino_ratio', metrics?.sortino_ratio, withheld)
   const returnPct = ratioCell(
@@ -361,25 +363,35 @@ export function DiscretionaryPerformance({
           />
           <MetricCard label="Gross profit" value={formatCurrency(metrics.gross_profit)} />
           <MetricCard label="Gross loss" value={formatCurrency(metrics.gross_loss)} />
-          <MetricCard label="Win rate" value={fmtWinRate(metrics.win_rate)} />
+          <MetricCard label="Win rate" value={noTrades ? '—' : fmtWinRate(metrics.win_rate)} />
           <MetricCard
             label="Profit factor"
-            value={fmtProfitFactor(
-              metrics.profit_factor,
-              metrics.winning_trades,
-              metrics.losing_trades
-            )}
+            value={
+              noTrades
+                ? '—'
+                : fmtProfitFactor(
+                    metrics.profit_factor,
+                    metrics.winning_trades,
+                    metrics.losing_trades
+                  )
+            }
           />
           <MetricCard
             label="Completed trades"
             value={String(metrics.trades_count)}
             hint={`${metrics.winning_trades} wins / ${metrics.losing_trades} losses`}
           />
-          <MetricCard label="Avg win (gross)" value={formatCurrency(metrics.avg_win)} />
-          <MetricCard label="Avg loss (gross)" value={formatCurrency(metrics.avg_loss)} />
+          <MetricCard
+            label="Avg win (gross)"
+            value={noTrades ? '—' : formatCurrency(metrics.avg_win)}
+          />
+          <MetricCard
+            label="Avg loss (gross)"
+            value={noTrades ? '—' : formatCurrency(metrics.avg_loss)}
+          />
           <MetricCard
             label="Expectancy"
-            value={formatCurrency(metrics.expectancy)}
+            value={noTrades ? '—' : formatCurrency(metrics.expectancy)}
             hint="gross, per trade"
           />
           <MetricCard

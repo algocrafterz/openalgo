@@ -23,10 +23,16 @@ export type PriceStatus =
 
 export type ChargesStatus = 'ok' | 'unavailable'
 
-/** compute_metrics output for the closed trades; capital-derived ratios are null (see `withheld`). */
+/**
+ * compute_metrics output; capital-derived ratios are null (see `withheld`). Money (net_profit,
+ * equity_curve, daily_pnl, drawdown) sums every closing leg on its own date, so a partial exit
+ * counts on its day; trades_count, wins / losses and every ratio are completed trades (a
+ * position from flat to flat). With no completed trade the ratios are 0: show a dash.
+ */
 export interface DiscretionaryMetrics {
   start_date?: string
   end_date?: string
+  /** Completed trades (a position from flat to flat), not closing legs. */
   trades_count: number
   winning_trades: number
   losing_trades: number
@@ -57,6 +63,8 @@ export interface SyncHealth {
   days_without_sync: string[]
 }
 
+/** Money of the legs closed in the period; trades / wins / losses of the completed trades whose
+ * final close is in it (a day with only a partial exit has money and 0 trades). */
 export interface PeriodRow {
   period: string
   label: string
@@ -107,6 +115,12 @@ export interface HoldSummary {
   losers: HoldStat
 }
 
+/**
+ * A COMPLETED trade: one position from flat to flat (a reversal ends it); partial exits are its
+ * legs. `id` is the position id within the build; quantity is the total closed, entry / exit the
+ * quantity-weighted averages, P&L and charges the sums of the legs, hold from the opening to the
+ * final close, and trade_date the session date of the final close.
+ */
 export interface DiscretionaryTrade {
   id: number
   broker: string
@@ -127,6 +141,9 @@ export interface DiscretionaryTrade {
   charges: number | null
   charges_status: ChargesStatus
   net_pnl: number | null
+  /** Number of closing legs (partial exits) in this trade. */
+  legs: number
+  position_seq?: number
 }
 
 export interface DiscretionaryPosition {
@@ -144,6 +161,8 @@ export interface DiscretionaryPosition {
   age_s: number | null
   price_status: PriceStatus
   unrealized: number | null
+  /** Gross P&L of this position's partial exits so far (already in realized). */
+  realized_so_far?: number | null
   opening_unknown?: boolean
 }
 
@@ -153,6 +172,7 @@ export interface PerIdentityRow {
   exchange: string
   symbol: string
   product: string
+  /** Completed trades; the money is every leg of the identity in the period. */
   trades: number
   realized_gross: number
   charges: number
@@ -216,8 +236,9 @@ export interface TradeFill {
 export interface TradeFills {
   build_id: string | null
   trade: DiscretionaryTrade
+  /** The fills of EVERY leg, one row per (fill, role): entry fills first, then exits. */
   fills: TradeFill[]
-  /** Number of fill-to-trade links in the build. */
+  /** Number of fill-to-leg links in the build, before merging per fill. */
   linked_fills: number
 }
 

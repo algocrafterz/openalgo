@@ -648,3 +648,96 @@ describe('labels and layout', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })
 })
+
+describe('completed trades (a position from flat to flat)', () => {
+  it('shows a legs badge on a trade closed in parts', async () => {
+    summaryFn.mockResolvedValue(
+      summary({
+        trades: [trade({ legs: 2, closed_quantity: 45 }), trade({ id: 12, symbol: 'INFY' })],
+      })
+    )
+    renderIt()
+    const row = await screen.findByRole('button', { name: /Show fills of RELIANCE/ })
+    expect(within(row).getByText('2 legs')).toBeInTheDocument()
+    expect(screen.getAllByText(/legs$/)).toHaveLength(1) // a one-leg trade has no badge
+  })
+
+  it('shows the realized-so-far of an open position partly closed', async () => {
+    summaryFn.mockResolvedValue(summary({ positions: [position({ realized_so_far: 200 })] }))
+    renderIt()
+    const open = (await screen.findByText('Open positions')).closest(
+      '[data-slot="card"]'
+    ) as HTMLElement
+    expect(within(open).getByRole('columnheader', { name: 'Realized so far' })).toBeInTheDocument()
+    expect(within(open).getByText('Rs 200.00')).toBeInTheDocument()
+  })
+
+  it('shows a dash for the ratios when a partial exit made money but no trade completed', async () => {
+    const base = summary()
+    summaryFn.mockResolvedValue(
+      summary({
+        trades: [],
+        trades_total: 0,
+        realized_gross: 200,
+        metrics: {
+          ...base.metrics,
+          trades_count: 0,
+          winning_trades: 0,
+          losing_trades: 0,
+          win_rate: 0,
+          profit_factor: 0,
+          avg_win: 0,
+          avg_loss: 0,
+          expectancy: 0,
+          net_profit: 200,
+        },
+        positions: [position({ realized_so_far: 200 })],
+      })
+    )
+    renderIt()
+    await screen.findByText('Open positions')
+    expect(cardValue('Completed trades')).toBe('0')
+    for (const label of [
+      'Win rate',
+      'Profit factor',
+      'Avg win (gross)',
+      'Avg loss (gross)',
+      'Expectancy',
+    ]) {
+      expect(cardValue(label)).toBe('—')
+    }
+  })
+
+  it('lists the fills of every leg in the fills dialog', async () => {
+    const fill = (fill_ref: number, role: 'ENTRY' | 'EXIT', qty: number, price: number) => ({
+      fill_ref,
+      role,
+      qty_used: qty,
+      charge_allocated: 0.5,
+      price,
+      fill_time: '2026-11-16 09:20:00',
+      order_id: `ORD-${fill_ref}`,
+      fill_id: `f${fill_ref}`,
+      broker: 'flattrade',
+      account: 'FT1',
+      symbol: 'RELIANCE',
+      exchange: 'NSE',
+      product: 'MIS',
+      side: role === 'ENTRY' ? 'BUY' : 'SELL',
+      attribution_state: 'manual',
+    })
+    fillsFn.mockResolvedValue({
+      build_id: 'b1',
+      trade: trade({ legs: 2, closed_quantity: 45 }),
+      linked_fills: 4,
+      fills: [fill(1, 'ENTRY', 45, 100), fill(2, 'EXIT', 20, 110), fill(3, 'EXIT', 25, 108)],
+    })
+    renderIt()
+    await userEvent.click(await screen.findByRole('button', { name: /Show fills of RELIANCE/ }))
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByText('ORD-1')).toBeInTheDocument()
+    expect(within(dialog).getByText('ORD-2')).toBeInTheDocument()
+    expect(within(dialog).getByText('ORD-3')).toBeInTheDocument()
+    expect(within(dialog).getAllByText('Exit')).toHaveLength(2)
+  })
+})

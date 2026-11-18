@@ -47,6 +47,7 @@ export function trade(extra: Partial<DiscretionaryTrade> = {}): DiscretionaryTra
     charges: 12.5,
     charges_status: 'ok',
     net_pnl: 87.5,
+    legs: 1,
     ...extra,
   }
 }
@@ -67,6 +68,7 @@ export function position(extra: Partial<DiscretionaryPosition> = {}): Discretion
     age_s: null,
     price_status: 'not_requested',
     unrealized: null,
+    realized_so_far: 0,
     opening_unknown: false,
     ...extra,
   }
@@ -231,5 +233,7 @@ export function emptySummary(): DiscretionarySummary {
     realized_net_of_charges: 0,
     charges_unavailable_trades: 0,
     warnings: [],
+    // nothing closed: no period rows either (the backend sends none without a closing leg)
+    by_period: { daily: [], weekly: [], monthly: [] },
   })
 }

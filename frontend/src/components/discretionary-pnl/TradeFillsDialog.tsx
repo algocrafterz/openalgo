@@ -30,7 +30,8 @@ export interface SelectedTrade {
 }
 
 /**
- * The ledger fills behind one closed trade: entries and exits, with the charge each carried.
+ * The ledger fills behind one completed trade (every leg): entries and exits, with the charge
+ * each carried.
  * Trade ids are reassigned by a rebuild, so the request carries the build_id of the summary the
  * row came from and the cache key includes it: a changed build is reported, never reused.
  */
@@ -65,8 +66,8 @@ export function TradeFillsDialog({
             fills
           </DialogTitle>
           <DialogDescription>
-            The broker executions this trade was built from. Charges are estimates split across the
-            fills.
+            The broker executions this trade was built from, across all its legs (partial exits).
+            Charges are estimates split across the fills.
           </DialogDescription>
         </DialogHeader>
         {query.isLoading ? (
