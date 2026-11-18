@@ -565,3 +565,168 @@ def transform_holdings_data(holdings_data):
                 }
                 transformed_data.append(transformed_position)
     return transformed_data
+
+
+# ===== BEGIN OpenAlgo fork addition: per-fill reader for the discretionary ledger =====
+# Additive and self-contained: nothing above this line is used or changed by it, so an
+# upstream merge of this file stays small. The generic ledger service discovers these two
+# names with getattr() (see services/discretionary_ledger_service.py for the contract).
+#
+# Why not map_trade_data/transform_tradebook_data: they keep one row per TradeBook row but
+# fill the quantity from the ORDER ("qty") and the price from the order average ("avgprc"),
+# so a 23+2 partial fill of a 25 order appears as two rows of 25. The per-fill fields
+# flid / flqty / flprc / fltm are only read here. Order-level qty / avgprc / prc / norentm
+# are never substituted for a missing per-fill field: such a row is unverifiable and skipped.
+#
+# FIELD NAMES (Flattrade TradeBook): flid, fltm (dd-mm-YYYY hh:mm:ss; a 1980 date is the
+# "missing" placeholder), flqty, flprc, norenordno, uid, actid, exch, tsym, prd, trantype.
+# The raw broker product code (I / C / M) is not stored: the ledger keeps the OpenAlgo
+# product name (MIS / CNC / NRML), which needs no schema change.
+
+# Flattrade clears tokens around this window (IST, (hour, minute) start inclusive, end
+# exclusive); the ledger does not sync inside it. Optional attribute: other brokers omit it.
+SYNC_SKIP_WINDOW = ((5, 0), (6, 0))
+
+_FILL_PRODUCTS = (
+    # (exchanges or None for any, raw product code, OpenAlgo product) - as in map_trade_data
+    (("NSE", "BSE"), "C", "CNC"),
+    (None, "I", "MIS"),
+    (("NFO", "MCX", "BFO", "CDS"), "M", "NRML"),
+)
+
+
+class FillSkipCount(int):
+    """Skipped-row count that is an int (total) and also says why rows were skipped.
+
+    Equal to the total, so callers that only want a number keep working. Attributes:
+    missing_fields (broker data missing or unusable), symbol_unmapped (no OpenAlgo symbol,
+    e.g. master contract missing or stale), product_unmapped (no OpenAlgo product name).
+    ``unmapped`` = symbol_unmapped + product_unmapped (rows the mapping layer lost).
+    """
+
+    def __new__(cls, missing_fields=0, symbol_unmapped=0, product_unmapped=0):
+        obj = super().__new__(cls, missing_fields + symbol_unmapped + product_unmapped)
+        obj.missing_fields = missing_fields
+        obj.symbol_unmapped = symbol_unmapped
+        obj.product_unmapped = product_unmapped
+        obj.unmapped = symbol_unmapped + product_unmapped
+        return obj
+
+
+class FlattradeTradeBookError(Exception):
+    """The TradeBook response was an error. ``is_auth_error`` marks a rejected session."""
+
+    def __init__(self, message, is_auth_error=False):
+        super().__init__(message)
+        self.is_auth_error = is_auth_error
+
+
+def _fill_rows(raw_response):
+    """Rows of a raw TradeBook response. An empty book is {"stat": "Not_Ok", "emsg": "no data"}."""
+    if isinstance(raw_response, list):
+        return [r for r in raw_response if isinstance(r, dict)]
+    if isinstance(raw_response, dict):
+        emsg = str(raw_response.get("emsg", "") or "")
+        low = emsg.lower()
+        if raw_response.get("stat") == "Not_Ok" and "no data" in low:
+            return []
+        if "session" in low or ("invalid" in low and "jkey" in low) or "not logged" in low:
+            raise FlattradeTradeBookError("Flattrade session rejected", is_auth_error=True)
+        raise FlattradeTradeBookError(f"Flattrade TradeBook error: {emsg[:120]}")
+    raise FlattradeTradeBookError("Flattrade TradeBook: unexpected response type")
+
+
+def _fill_time(value):
+    """Parse fltm; None when missing or the 1980 placeholder."""
+    from datetime import datetime
+
+    try:
+        dt = datetime.strptime(str(value or "").strip(), "%d-%m-%Y %H:%M:%S")
+    except ValueError:
+        return None
+    return None if dt.year <= 1980 else dt
+
+
+def _fill_number(value):
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _fill_product(exchange, code):
+    for exchanges, raw_code, openalgo_product in _FILL_PRODUCTS:
+        if code == raw_code and (exchanges is None or exchange in exchanges):
+            return openalgo_product
+    return None
+
+
+def map_trade_fills(raw_response, default_account=""):
+    """Map a raw TradeBook response to per-fill dicts. Returns (fills, skipped).
+
+    ``skipped`` is a FillSkipCount: an int (total skipped rows) with per-reason attributes
+    (missing_fields / symbol_unmapped / product_unmapped / unmapped). Pure: the input rows are not modified and nothing is fetched. Raises
+    FlattradeTradeBookError for an error response (``is_auth_error`` for a dead session).
+    A row is skipped and counted when flid, flqty (>0), flprc (>0) or a valid fltm is missing,
+    when the side, exchange or symbol is unusable, when the symbol has no OpenAlgo mapping
+    (never stored under the raw broker symbol) or the product code has no OpenAlgo name.
+    ``account`` is actid, else uid, else ``default_account``. Prices stay unrounded floats.
+    """
+    import hashlib
+
+    fills = []
+    missing_fields = 0
+    symbol_unmapped = 0
+    product_unmapped = 0
+    for row in _fill_rows(raw_response):
+        side = {"B": "BUY", "S": "SELL"}.get(str(row.get("trantype", "")).strip().upper())
+        fill_id = str(row.get("flid", "") or "").strip()
+        fill_time = _fill_time(row.get("fltm"))
+        qty = _fill_number(row.get("flqty"))
+        price = _fill_number(row.get("flprc"))
+        exchange = str(row.get("exch", "") or "").strip()
+        broker_symbol = str(row.get("tsym", "") or "").strip()
+        if (
+            side is None
+            or not fill_id
+            or fill_time is None
+            or qty is None
+            or qty <= 0
+            or price is None
+            or price <= 0
+            or not exchange
+            or not broker_symbol
+        ):
+            missing_fields += 1
+            continue
+        symbol = get_oa_symbol(broker_symbol, exchange)
+        if not symbol:
+            symbol_unmapped += 1
+            continue
+        product = _fill_product(exchange, str(row.get("prd", "") or "").strip())
+        if product is None:
+            product_unmapped += 1
+            continue
+        raw_hash = hashlib.sha256(
+            json.dumps(row, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        fills.append(
+            {
+                "account": str(row.get("actid") or row.get("uid") or default_account or "").strip(),
+                "order_id": str(row.get("norenordno", "") or "").strip(),
+                "fill_id": fill_id,
+                "symbol": symbol,
+                "exchange": exchange,
+                "product": product,
+                "side": side,
+                "qty": qty,
+                "price": price,
+                "fill_time": fill_time,
+                "raw_hash": raw_hash,
+            }
+        )
+    # No log line here: the ledger service logs one warning per sync with these counts.
+    return fills, FillSkipCount(missing_fields, symbol_unmapped, product_unmapped)
+
+
+# ===== END OpenAlgo fork addition =====
