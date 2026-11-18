@@ -96,6 +96,8 @@ MIGRATIONS = [
     ("migrate_strategy_book_mode.py", "Strategy Book Live/Paper Mode Separation"),
     ("migrate_strategy_book_broker.py", "Strategy Book Per-Broker Trade Attribution"),
     ("migrate_strategy_opened_at.py", "Strategy Book Entry Time (opened_at)"),
+    ("migrate_discretionary_ledger.py", "Discretionary Ledger Tables (read-only fills ledger)"),
+    ("migrate_discretionary_book.py", "Discretionary Book Tables (derived P&L)"),
 ]
 
 # Legacy migrations historically used non-zero exits for best-effort warnings,

@@ -101,18 +101,23 @@ def _finite(value: float) -> float | None:
     return round(value, 2)
 
 
-def last_session_date(closed_trades: list[dict], today: date) -> date | None:
+def last_session_date(
+    closed_trades: list[dict], today: date, floor: date | None = None
+) -> date | None:
     """Most recent trade_date with a closed trade, on or before today and inside
-    the reliable ledger window; None when there is none."""
-    floor, ceiling = LEDGER_RELIABLE_SINCE.isoformat(), today.isoformat()
+    the reliable ledger window; None when there is none.
+
+    `floor` replaces LEDGER_RELIABLE_SINCE for a caller with its own start date
+    (Discretionary); callers that omit it behave exactly as before."""
+    floor, ceiling = (floor or LEDGER_RELIABLE_SINCE).isoformat(), today.isoformat()
     dates = [t["trade_date"] for t in closed_trades if floor <= t["trade_date"] <= ceiling]
     return date.fromisoformat(max(dates)) if dates else None
 
 
-def _last_session(closed_trades: list[dict], today: date) -> date:
+def _last_session(closed_trades: list[dict], today: date, floor: date | None = None) -> date:
     """Most recent trade_date with a closed trade, on or before today and
     inside the reliable ledger window; today when there is none."""
-    floor, ceiling = LEDGER_RELIABLE_SINCE.isoformat(), today.isoformat()
+    floor, ceiling = (floor or LEDGER_RELIABLE_SINCE).isoformat(), today.isoformat()
     dates = [t["trade_date"] for t in closed_trades if floor <= t["trade_date"] <= ceiling]
     return date.fromisoformat(max(dates)) if dates else today
 
@@ -142,6 +147,7 @@ def resolve_period(
     today: date | None = None,
     start: str | None = None,
     end: str | None = None,
+    floor: date | None = None,
 ) -> tuple[str, str]:
     """Maps a period keyword ("1d"/"7d"/"15d"/"30d"/"90d"/"ytd"/"all"/"custom")
     to an ISO [start_date, end_date] range.
@@ -155,11 +161,15 @@ def resolve_period(
 
     "custom" takes `start`/`end` (YYYY-MM-DD) and raises ValueError when they
     are missing, malformed, reversed or wholly in the future.
+
+    `floor` is an optional per-caller start date used instead of LEDGER_RELIABLE_SINCE
+    (the Discretionary module has its own); when omitted nothing changes.
     """
     today = today or datetime.now().date()
+    floor = floor or LEDGER_RELIABLE_SINCE
     end_d = today
     if period == "1d":
-        start_d = end_d = _last_session(closed_trades, today)
+        start_d = end_d = _last_session(closed_trades, today, floor)
     elif period == "custom":
         start_d, end_d = _custom_range(start, end, today)
     elif period == "ytd":
@@ -172,7 +182,7 @@ def resolve_period(
     else:
         days = FIXED_WINDOW_DAYS.get(period, FIXED_WINDOW_DAYS["30d"])
         start_d = today - timedelta(days=days - 1)
-    start_d = max(start_d, LEDGER_RELIABLE_SINCE)
+    start_d = max(start_d, floor)
     # A custom range wholly before the reliable ledger collapses to its floor.
     end_d = max(end_d, start_d)
     return start_d.isoformat(), end_d.isoformat()

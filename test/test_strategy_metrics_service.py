@@ -496,3 +496,39 @@ def test_capital_view_treats_zero_strategies_as_one():
     from services.strategy_metrics_service import compute_capital_view
 
     assert compute_capital_view(_METRICS, 1000.0, 0)["strategies"] == 1
+
+
+def test_resolve_period_floor_kwarg_is_opt_in_and_default_is_unchanged():
+    """Only a caller that passes `floor` (Discretionary) gets a different start date."""
+    from datetime import date
+
+    from services import strategy_metrics_service as sms
+
+    today = date(2026, 11, 17)
+    trades = [{"trade_date": "2026-08-01"}, {"trade_date": "2026-11-10"}]
+    default = resolve_period("all", trades, today=today)
+    assert default == ("2026-09-25", "2026-11-17")  # LEDGER_RELIABLE_SINCE, exactly as before
+    assert resolve_period("all", trades, today=today, floor=None) == default
+    assert resolve_period("all", trades, today=today, floor=sms.LEDGER_RELIABLE_SINCE) == default
+    assert resolve_period("all", trades, today=today, floor=date(2026, 8, 1)) == (
+        "2026-08-01",
+        "2026-11-17",
+    )
+    assert resolve_period("7d", [], today=today, floor=date(2026, 11, 15)) == (
+        "2026-11-15",
+        "2026-11-17",
+    )
+    # the last-session helpers take the same opt-in floor
+    assert sms.last_session_date(trades, today) == date(2026, 11, 10)
+    assert sms.last_session_date(trades, today, floor=date(2026, 11, 11)) is None
+    assert sms._last_session(trades, today, date(2026, 8, 1)) == date(2026, 11, 10)
+    assert resolve_period("1d", [{"trade_date": "2026-08-05"}], today=today) == (
+        "2026-11-17",
+        "2026-11-17",
+    )
+    assert resolve_period(
+        "1d", [{"trade_date": "2026-08-05"}], today=today, floor=date(2026, 8, 1)
+    ) == (
+        "2026-08-05",
+        "2026-08-05",
+    )
