@@ -357,6 +357,14 @@ def create_app():
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
     app.register_blueprint(strategy_portfolio_bp)  # Register Strategy Portfolio blueprint
     app.register_blueprint(strategy_pnl_bp)  # Register Strategy P&L blueprint
+    # Discretionary performance API (Stage 3a). Every route is feature-gated; a failure to
+    # import or register it only logs and never stops startup.
+    try:
+        from blueprints.discretionary_pnl import discretionary_pnl_bp
+
+        app.register_blueprint(discretionary_pnl_bp)
+    except Exception:
+        logger.exception("Failed to register discretionary performance blueprint (ignored)")
     app.register_blueprint(bug_tracker_bp)  # Register Bug Tracker blueprint
     app.register_blueprint(ops_workflow_bp)  # Register Daily Workflow blueprint
     app.register_blueprint(ops_findings_bp)  # Register workflow finding-to-bug blueprint
