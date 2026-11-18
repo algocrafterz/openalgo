@@ -848,6 +848,23 @@ def setup_environment(app):
                     "rather than a misleading zero."
                 )
 
+            # Discretionary ledger (Stage 1, read-only fills ledger). Opt-in: off unless
+            # DISCRETIONARY_LEDGER_ENABLED=true. A failure here only logs.
+            try:
+                if os.getenv("DISCRETIONARY_LEDGER_ENABLED", "false").strip().lower() in (
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                ):
+                    from database.discretionary_ledger_db import init_discretionary_ledger_db
+                    from services.discretionary_ledger_scheduler import start_scheduler
+
+                    init_discretionary_ledger_db()
+                    start_scheduler()
+            except Exception:
+                logger.exception("Failed to start discretionary ledger (ignored)")
+
             # Signal that DB tables are ready (unblocks cache restoration)
             app.db_ready.set()
 
