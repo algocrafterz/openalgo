@@ -334,3 +334,99 @@ def test_inputs_are_not_mutated():
     an.holding_breakdown(trades)
     an.hold_summary(trades)
     assert trades == before
+
+
+# ---------------------------------------------------------------- completed trades vs legs
+
+
+def _leg(i, seq, qty, entry, exit_, pnl, day, hh, *, symbol="SBIN", charges=1.0, overnight=False):
+    return {
+        "id": i,
+        "broker": "flattrade",
+        "account": "A",
+        "exchange": "NSE",
+        "symbol": symbol,
+        "product": "MIS",
+        "position_seq": seq,
+        "direction": "LONG",
+        "closed_quantity": qty,
+        "entry_price": entry,
+        "exit_price": exit_,
+        "opened_at": "2026-11-16 09:00:00",
+        "closed_at": f"2026-11-{day:02d} {hh:02d}:00:00",
+        "trade_date": f"2026-11-{day:02d}",
+        "overnight": overnight,
+        "hold_minutes": 60.0 * hh,
+        "realized_pnl": pnl,
+        "charges": charges,
+        "charges_status": "ok" if charges is not None else "unavailable",
+        "charges_breakdown": {"brokerage": charges} if charges is not None else {},
+    }
+
+
+def _pos(pid, seq, status="FLAT", symbol="SBIN"):
+    return {
+        "id": pid,
+        "build_id": "b1",
+        "broker": "flattrade",
+        "account": "A",
+        "exchange": "NSE",
+        "symbol": symbol,
+        "product": "MIS",
+        "position_seq": seq,
+        "direction": "LONG",
+        "opened_at": "2026-11-16 09:00:00",
+        "status": status,
+    }
+
+
+def test_group_completed_sums_legs_and_weights_prices():
+    legs = [
+        _leg(1, 1, 20, 100, 110, 200.0, 16, 10),
+        _leg(2, 1, 25, 100, 90, -250.0, 17, 11, overnight=True),
+        _leg(3, 2, 5, 50, 55, 25.0, 17, 12, charges=None),  # position 2 still open
+    ]
+    out = an.group_completed(legs, [_pos(9, 1), _pos(10, 2, status="OPEN")])
+    (t,) = out  # an OPEN position is never a completed trade
+    assert (t["id"], t["legs"], t["closed_quantity"]) == (9, 2, 45)
+    assert t["entry_price"] == pytest.approx(100.0)
+    assert t["exit_price"] == pytest.approx((20 * 110 + 25 * 90) / 45)
+    assert t["realized_pnl"] == pytest.approx(-50.0)
+    assert (t["charges"], t["charges_status"], t["net_pnl"]) == (2.0, "ok", -52.0)
+    assert t["charges_breakdown"] == {"brokerage": 2.0}
+    # date, close, hold and overnight of the FINAL leg; opening of the position
+    assert (t["trade_date"], t["closed_at"]) == ("2026-11-17", "2026-11-17 11:00:00")
+    assert (t["hold_minutes"], t["overnight"], t["opened_at"]) == (
+        660.0,
+        True,
+        "2026-11-16 09:00:00",
+    )
+
+
+def test_group_completed_charges_unavailable_when_any_leg_is():
+    legs = [_leg(1, 1, 1, 10, 11, 1.0, 17, 9), _leg(2, 1, 1, 10, 12, 2.0, 17, 10, charges=None)]
+    (t,) = an.group_completed(legs, [_pos(1, 1)])
+    assert (t["charges"], t["charges_status"], t["net_pnl"]) == (None, "unavailable", None)
+
+
+def test_money_follows_legs_and_counts_follow_completed_trades():
+    legs = [
+        _leg(1, 1, 20, 100, 110, 200.0, 16, 10),  # partial exit, day 16
+        _leg(2, 1, 25, 100, 90, -250.0, 17, 11, overnight=True),  # final close, day 17
+        _leg(3, 1, 5, 50, 55, 25.0, 17, 12, symbol="ITC"),  # ITC still open: a leg only
+    ]
+    done = an.group_completed(legs, [_pos(9, 1), _pos(10, 1, status="OPEN", symbol="ITC")])
+    daily = an.period_breakdown(done, "daily", legs)
+    assert [(r["period"], r["trades"], r["losses"], r["realized_gross"]) for r in daily] == [
+        ("2026-11-16", 0, 0, 200.0),
+        ("2026-11-17", 1, 1, -225.0),
+    ]
+    sym = {r["key"]: r for r in an.group_breakdown(done, "symbol", legs)}
+    assert (sym["SBIN"]["trades"], sym["SBIN"]["realized_gross"]) == (1, -50.0)
+    assert (sym["ITC"]["trades"], sym["ITC"]["realized_gross"]) == (0, 25.0)
+    assert sym["SBIN"]["win_rate"] == 0.0 and sym["SBIN"]["avg_loss"] == 50.0
+    hold = an.holding_breakdown(done, legs)
+    # money by each leg's own flag; the completed trade is overnight (its final close)
+    assert (hold["overnight"]["trades"], hold["overnight"]["realized_gross"]) == (1, -250.0)
+    assert (hold["intraday"]["trades"], hold["intraday"]["realized_gross"]) == (0, 225.0)
+    assert an.hold_summary(done)["overall"]["count"] == 1

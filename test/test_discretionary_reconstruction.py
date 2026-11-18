@@ -97,7 +97,14 @@ def test_g1_two_buys_one_sell():
     assert ref == pytest.approx(300.0) and ref_trades == [300.0]
 
 
-def test_g2_partial_exits_each_make_a_trade():
+def test_g2_partial_exits_are_legs_of_one_completed_trade():
+    """Was ``test_g2_partial_exits_each_make_a_trade``. The engine still emits one closing LEG
+    per partial exit (the rupee accounting, fill links and charges depend on them), but the
+    legs share the position's ``position_seq`` and the position goes FLAT once: ONE completed
+    trade of 30 @ 200 -> (10 * 210 + 20 * 190) / 30 = 196.6667, pnl -100 (a loss, although
+    its first leg won)."""
+    from services import discretionary_analytics as an
+
     fills = [
         mk(1, "BUY", 30, 200, at(0)),
         mk(2, "SELL", 10, 210, at(1)),
@@ -105,7 +112,17 @@ def test_g2_partial_exits_each_make_a_trade():
     ]
     out = rec.reconstruct(fills)
     pnls = [t["realized_pnl"] for t in out["trades"]]
-    assert pnls == pytest.approx([100.0, -200.0])
+    assert pnls == pytest.approx([100.0, -200.0])  # two legs
+    assert {t["position_seq"] for t in out["trades"]} == {1}
+    legs = [
+        dict(t, id=i + 1, charges=0.0, closed_at=t["closed_at"].isoformat())
+        for i, t in enumerate(out["trades"])
+    ]
+    (done,) = an.group_completed(legs, [dict(out["positions"][0], id=7)])
+    assert (done["id"], done["legs"], done["closed_quantity"]) == (7, 2, 30.0)
+    assert done["exit_price"] == pytest.approx(5900.0 / 30)
+    assert done["realized_pnl"] == pytest.approx(-100.0)
+    assert done["hold_minutes"] == out["trades"][-1]["hold_minutes"]
     assert sum(pnls) == pytest.approx(-100.0)
     assert out["positions"][0]["status"] == "FLAT"
     assert out["positions"][0]["open_qty"] == 0

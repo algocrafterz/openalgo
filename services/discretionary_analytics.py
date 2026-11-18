@@ -2,14 +2,32 @@
 """
 Pure aggregation helpers for the Discretionary Performance page (Stage 3a). No I/O.
 
-Input is a list of closed-trade dicts as ``database/discretionary_book_db.load_trades``
-returns them. Every figure is GROSS realized P&L (``realized_pnl``) unless the name says
-otherwise; ``charges`` are ESTIMATED and may be missing per trade (``charges is None``,
-``charges_status == "unavailable"``).
+Two inputs
+----------
+* ``trades``: COMPLETED trades, one per position from flat to flat (``group_completed``
+  builds them from the closing legs and the FLAT positions of one build). Trade counts,
+  wins / losses, every ratio and every hold-time figure come from these only.
+* ``legs``: the closing legs as ``database/discretionary_book_db.load_trades`` returns them
+  (one row per closing fill, partial exits included). Money (``realized_gross``,
+  ``charges``, ``net_of_charges``, ``charges_unavailable_trades``) comes from these, so a
+  partial exit counts on its own day even while the position is still open. When ``legs``
+  is omitted the money comes from ``trades`` themselves (a completed trade carries the sum
+  of its legs).
+
+Every figure is GROSS realized P&L (``realized_pnl``) unless the name says otherwise;
+``charges`` are ESTIMATED and may be missing (``charges is None``,
+``charges_status == "unavailable"``); ``charges_unavailable_trades`` counts the closing
+LEGS without an estimate (it qualifies a money figure, so it follows the money rows).
 
 Buckets are by ``trade_date``, the SESSION date of the close (not the calendar date of
-``closed_at``), the same date ``compute_metrics`` uses, so daily buckets reconcile exactly
-with ``metrics.daily_pnl`` and every set of buckets sums to ``realized_gross``.
+``closed_at``), the same date ``compute_metrics`` uses. A leg's money goes to its own
+close date; a completed trade is counted on the date of its FINAL close. Daily buckets
+therefore reconcile with ``metrics.daily_pnl`` and every set of buckets sums to
+``realized_gross``; the bucket trade counts sum to ``metrics.trades_count``. A bucket exists
+when it has a leg or a completed trade, so a day with only a partial exit shows its money
+and 0 trades. Group rows (symbol / side / product / holding) are split the same way; the
+holding bucket of a leg's money is the leg's own overnight flag, the holding bucket of a
+completed trade is the flag of its final close (opened in an earlier session than it closed).
 
 Net of charges
 --------------
@@ -77,8 +95,9 @@ def _money(trades: list[dict]) -> dict:
     }
 
 
-def _stats(trades: list[dict]) -> dict:
-    """Counts, money and the compute_metrics-style ratios of one set of trades."""
+def _stats(trades: list[dict], legs: list[dict] | None = None) -> dict:
+    """Counts, ratios and hold times of the completed ``trades``; money of ``legs`` (the
+    same trades when omitted)."""
     pnls = [float(t["realized_pnl"]) for t in trades]
     wins = [p for p in pnls if p > 0]
     losses = [p for p in pnls if p < 0]
@@ -102,7 +121,7 @@ def _stats(trades: list[dict]) -> dict:
         "expectancy": round(win_rate * avg_win - (1 - win_rate) * avg_loss, 2),
         "avg_win": round(avg_win, 2),
         "avg_loss": round(avg_loss, 2),
-        **_money(trades),
+        **_money(trades if legs is None else legs),
         "avg_hold_minutes": hold["mean_minutes"],
         "median_hold_minutes": hold["median_minutes"],
     }
@@ -131,36 +150,42 @@ def _bucket(trade_date: str, granularity: str) -> tuple[str, str, str, str]:
     raise ValueError(f"granularity must be one of {', '.join(GRANULARITIES)}")
 
 
-def period_breakdown(trades: list[dict], granularity: str) -> list[dict]:
-    """One row per period with at least one trade, oldest first.
+def period_breakdown(
+    trades: list[dict], granularity: str, legs: list[dict] | None = None
+) -> list[dict]:
+    """One row per period with at least one completed trade or closing leg, oldest first.
 
     Fields: ``period`` (daily: the date; weekly: the Monday date; monthly: ``YYYY-MM``),
     ``label`` (weekly: ISO ``YYYY-Www``), ``start``, ``end`` (inclusive calendar bounds),
-    ``trades``, ``wins``, ``losses``, ``realized_gross``, ``charges``,
-    ``charges_unavailable_trades``, ``net_of_charges``, ``net_charges_complete``.
+    ``trades``, ``wins``, ``losses`` (completed trades whose FINAL close is in the period),
+    ``realized_gross``, ``charges``, ``charges_unavailable_trades``, ``net_of_charges``,
+    ``net_charges_complete`` (the legs closed in the period; ``trades`` when ``legs`` is None).
     """
     if granularity not in GRANULARITIES:
         raise ValueError(f"granularity must be one of {', '.join(GRANULARITIES)}")
+    money_rows = trades if legs is None else legs
     buckets: dict[str, dict] = {}
-    for t in trades:
-        key, label, start, end = _bucket(t["trade_date"], granularity)
-        row = buckets.setdefault(key, {"label": label, "start": start, "end": end, "_t": []})
-        row["_t"].append(t)
+    for kind, items in (("_t", trades), ("_m", money_rows)):
+        for t in items:
+            key, label, start, end = _bucket(t["trade_date"], granularity)
+            row = buckets.setdefault(
+                key, {"label": label, "start": start, "end": end, "_t": [], "_m": []}
+            )
+            row[kind].append(t)
     out = []
     for key in sorted(buckets):
         row = buckets[key]
-        items = row["_t"]
-        pnls = [float(t["realized_pnl"]) for t in items]
+        pnls = [float(t["realized_pnl"]) for t in row["_t"]]
         out.append(
             {
                 "period": key,
                 "label": row["label"],
                 "start": row["start"],
                 "end": row["end"],
-                "trades": len(items),
+                "trades": len(pnls),
                 "wins": sum(1 for p in pnls if p > 0),
                 "losses": sum(1 for p in pnls if p < 0),
-                **_money(items),
+                **_money(row["_m"]),
             }
         )
     return out
@@ -169,35 +194,54 @@ def period_breakdown(trades: list[dict], granularity: str) -> list[dict]:
 # ---------------------------------------------------------------- groups
 
 
-def group_breakdown(trades: list[dict], key: str) -> list[dict]:
+def _split(rows: list[dict], name_of) -> dict[str, list[dict]]:
+    groups: dict[str, list[dict]] = {}
+    for t in rows:
+        groups.setdefault(name_of(t), []).append(t)
+    return groups
+
+
+def group_breakdown(trades: list[dict], key: str, legs: list[dict] | None = None) -> list[dict]:
     """Per-group stats for ``key`` in symbol / direction / product, best realized_gross first
     (ties by group name). Each row: ``key`` (the group value) plus trades, wins, losses,
-    win_rate, profit_factor, expectancy, avg_win, avg_loss, realized_gross, charges,
-    charges_unavailable_trades, net_of_charges, net_charges_complete, avg_hold_minutes,
-    median_hold_minutes."""
+    win_rate, profit_factor, expectancy, avg_win, avg_loss, avg_hold_minutes,
+    median_hold_minutes (completed ``trades``) and realized_gross, charges,
+    charges_unavailable_trades, net_of_charges, net_charges_complete (``legs``; the trades
+    when None). A group with legs but no completed trade has trades 0."""
     if key not in GROUP_KEYS:
         raise ValueError(f"key must be one of {', '.join(GROUP_KEYS)}")
-    groups: dict[str, list[dict]] = {}
-    for t in trades:
-        groups.setdefault(str(t.get(key) or ""), []).append(t)
-    rows = [{"key": name, **_stats(items)} for name, items in groups.items()]
+
+    def name_of(t):
+        return str(t.get(key) or "")
+
+    done = _split(trades, name_of)
+    money = done if legs is None else _split(legs, name_of)
+    rows = [
+        {"key": name, **_stats(done.get(name, []), money.get(name, []))}
+        for name in set(done) | set(money)
+    ]
     rows.sort(key=lambda r: (-r["realized_gross"], r["key"]))
     return rows
 
 
-def holding_breakdown(trades: list[dict]) -> dict:
-    """{"intraday": stats, "overnight": stats}; both keys always present. A trade is overnight
-    when its ``overnight`` flag is true (opened in an earlier session than it closed)."""
-    parts = {name: [] for name in HOLDINGS}
-    for t in trades:
-        parts["overnight" if t.get("overnight") else "intraday"].append(t)
-    return {name: _stats(items) for name, items in parts.items()}
+def holding_breakdown(trades: list[dict], legs: list[dict] | None = None) -> dict:
+    """{"intraday": stats, "overnight": stats}; both keys always present. A row is overnight
+    when its ``overnight`` flag is true (opened in an earlier session than it closed): for a
+    completed trade the flag of its final close, for a leg (money) the leg's own flag."""
+
+    def name_of(t):
+        return "overnight" if t.get("overnight") else "intraday"
+
+    done = _split(trades, name_of)
+    money = done if legs is None else _split(legs, name_of)
+    return {name: _stats(done.get(name, []), money.get(name, [])) for name in HOLDINGS}
 
 
 def hold_summary(trades: list[dict]) -> dict:
-    """Hold time in minutes: {"overall", "winners", "losers"}, each {count, mean_minutes,
-    median_minutes}. Trades without a hold time are skipped (count says how many were used);
-    winners are pnl > 0, losers pnl < 0, break-even only counts in overall."""
+    """Hold time in minutes of the COMPLETED trades: {"overall", "winners", "losers"}, each
+    {count, mean_minutes, median_minutes}. Trades without a hold time are skipped (count says
+    how many were used); winners are pnl > 0, losers pnl < 0, break-even only counts in
+    overall."""
     winners = [t for t in trades if float(t["realized_pnl"]) > 0]
     losers = [t for t in trades if float(t["realized_pnl"]) < 0]
     return {
@@ -205,3 +249,88 @@ def hold_summary(trades: list[dict]) -> dict:
         "winners": _hold_stats(_hold_values(winners)),
         "losers": _hold_stats(_hold_values(losers)),
     }
+
+
+# ---------------------------------------------------------------- completed trades
+
+
+def _leg_key(row: dict) -> tuple:
+    return (
+        row["broker"],
+        row["account"],
+        row["exchange"],
+        row["symbol"],
+        row["product"],
+        int(row["position_seq"]),
+    )
+
+
+def group_completed(legs: list[dict], flat_positions: list[dict]) -> list[dict]:
+    """One completed trade per FLAT position (flat to flat; a reversal ends it), built at read
+    time from the closing ``legs`` sharing its identity and ``position_seq`` (one build).
+
+    ``id`` is the position row id (stable within the build). ``closed_quantity`` is the total
+    closed, ``entry_price`` / ``exit_price`` the quantity-weighted averages of the legs,
+    ``realized_pnl`` / ``charges`` the sums (``charges`` None and ``charges_status``
+    "unavailable" when any leg has no estimate; ``net_pnl`` None then), ``opened_at`` the
+    position's opening, and ``closed_at``, ``trade_date``, ``hold_minutes`` and
+    ``overnight`` those of the FINAL leg (every leg is measured from the position's
+    ``opened_at``). ``legs`` is the leg count. Ordered by (closed_at, id).
+    """
+    by_key: dict[tuple, list[dict]] = {}
+    for leg in legs:
+        by_key.setdefault(_leg_key(leg), []).append(leg)
+    out = []
+    for pos in flat_positions:
+        if pos.get("status") != "FLAT":
+            continue
+        items = sorted(by_key.get(_leg_key(pos), []), key=lambda t: (t["closed_at"], t["id"]))
+        if not items:
+            continue
+        qty = sum(float(t["closed_quantity"]) for t in items)
+        pnl = sum(float(t["realized_pnl"]) for t in items)
+        unavailable = any(t.get("charges") is None for t in items)
+        charges = None if unavailable else sum(float(t["charges"]) for t in items)
+        breakdown: dict = {}
+        if not unavailable:
+            for t in items:
+                for name, value in (t.get("charges_breakdown") or {}).items():
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        breakdown[name] = breakdown.get(name, 0.0) + float(value)
+        last = items[-1]
+        out.append(
+            {
+                "id": pos["id"],
+                "build_id": pos.get("build_id"),
+                "broker": pos["broker"],
+                "account": pos["account"],
+                "exchange": pos["exchange"],
+                "symbol": pos["symbol"],
+                "product": pos["product"],
+                "position_seq": int(pos["position_seq"]),
+                "direction": pos["direction"],
+                "closed_quantity": qty,
+                "entry_price": sum(
+                    float(t["closed_quantity"]) * float(t["entry_price"]) for t in items
+                )
+                / qty,
+                "exit_price": sum(
+                    float(t["closed_quantity"]) * float(t["exit_price"]) for t in items
+                )
+                / qty,
+                "opened_at": pos["opened_at"],
+                "closed_at": last["closed_at"],
+                "trade_date": last["trade_date"],
+                "overnight": bool(last["overnight"]),
+                "hold_minutes": last["hold_minutes"],
+                "realized_pnl": pnl,
+                "charges": charges,
+                "charges_status": "unavailable" if unavailable else "ok",
+                "net_pnl": None if charges is None else pnl - charges,
+                "charges_breakdown": breakdown,
+                "legs": len(items),
+                "leg_ids": [t["id"] for t in items],
+            }
+        )
+    out.sort(key=lambda t: (t["closed_at"], t["id"]))
+    return out

@@ -403,6 +403,19 @@ def load_trade(trade_id: int, build_id: str | None = None) -> dict | None:
         db_session.remove()
 
 
+def load_position(position_id: int, build_id: str) -> dict | None:
+    """One position row (dict) by id in ONE build; None when absent. A FLAT position is a
+    completed trade (its id is the completed trade's id)."""
+    try:
+        stmt = select(DiscPosition).where(
+            DiscPosition.id == position_id, DiscPosition.build_id == build_id
+        )
+        row = db_session.execute(stmt).scalars().first()
+        return None if row is None else _as_dict(row)
+    finally:
+        db_session.remove()
+
+
 def load_trade_fills(trade_id: int, build_id: str) -> list[dict]:
     """The link rows (ENTRY / EXIT, qty_used, charge_allocated, fill_ref) of ONE trade in ONE
     build, oldest link first. Scoped by both, so a link of a replaced build is never returned."""

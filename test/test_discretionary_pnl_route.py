@@ -318,19 +318,30 @@ def test_enabled_summary_has_the_documented_shape(client, env, monkeypatch):
     assert set(body["hold"]) == {"overall", "winners", "losers"}
     assert body["withheld"]["sharpe_ratio"] == "no capital basis"
     assert "metrics.net_profit" in body["labels"]["realized_gross"]
-    # SBIN +100, SBIN -40 and -30, TCS +500, INFY +100, CRUDE +100
-    assert body["metrics"]["trades_count"] == 6
+    # Completed trades (a position flat to flat): SBIN +100, SBIN -70 (ONE position closed by
+    # two partial exits of -40 and -30: two legs, one trade), TCS +500, INFY +100, CRUDE +100.
+    # The old expectation 6 counted each closing leg as a trade.
+    assert body["metrics"]["trades_count"] == 5
     assert body["realized_gross"] == pytest.approx(730.0)
     assert body["metrics"]["net_profit"] == pytest.approx(730.0)  # gross, despite its name
     assert body["realized_net_of_charges"] == pytest.approx(
         body["realized_gross"] - body["charges"]
     )
     assert body["charges_unavailable_trades"] == 1  # MCX
-    assert body["trades_total"] == 6 and body["trades_truncated"] == 0
+    assert body["trades_total"] == 5 and body["trades_truncated"] == 0
     assert body["positions_total"] == 1 and body["positions"][0]["symbol"] == "ITC"
     assert body["build_id"]
     trade = body["trades"][0]
-    for key in ("id", "trade_date", "symbol", "direction", "realized_pnl", "charges", "overnight"):
+    for key in (
+        "id",
+        "trade_date",
+        "symbol",
+        "direction",
+        "realized_pnl",
+        "charges",
+        "overnight",
+        "legs",
+    ):
         assert key in trade
     closed = [t["closed_at"] for t in body["trades"]]
     assert closed == sorted(closed, reverse=True)  # newest first
@@ -361,7 +372,10 @@ def test_breakdowns_reconcile_with_the_headline(client, env, monkeypatch):
     assert {r["key"] for r in body["by_side"]} == {"LONG", "SHORT"}
     assert body["by_holding"]["overnight"]["trades"] == 1
     assert body["by_holding"]["overnight"]["realized_gross"] == pytest.approx(500.0)
-    assert body["by_holding"]["intraday"]["trades"] == 5
+    # 4 intraday completed trades: SBIN +100, SBIN -70 (2 legs, 1 trade), INFY, CRUDE (was 5
+    # when each SBIN partial exit counted as a trade)
+    assert body["by_holding"]["intraday"]["trades"] == 4
+    assert body["by_holding"]["intraday"]["realized_gross"] == pytest.approx(230.0)
     assert body["by_period"]["weekly"][0]["period"] == "2026-11-09"
     assert body["by_period"]["monthly"][0]["period"] == "2026-11"
 
@@ -380,8 +394,11 @@ def test_trade_and_position_tables_are_limited_with_a_truncated_count(client, en
     monkeypatch.setattr(pnl, "TABLE_LIMIT", 3)
     seed(env)
     body = summary(client)
-    assert len(body["trades"]) == 3 and body["trades_total"] == 6 and body["trades_truncated"] == 3
-    assert body["metrics"]["trades_count"] == 6  # the limit never changes a number
+    # 5 completed trades (the two SBIN partial exits are one trade; was 6 legs -> 6 / 3)
+    assert len(body["trades"]) == 3 and body["trades_total"] == 5 and body["trades_truncated"] == 2
+    assert body["metrics"]["trades_count"] == 5  # the limit never changes a number
+    assert body["realized_gross"] == pytest.approx(730.0)  # totals computed before the cut
+    assert sum(r["trades"] for r in body["by_period"]["daily"]) == 5
 
 
 # ---------------------------------------------------------------- filters
@@ -419,9 +436,13 @@ def test_pooled_ratios_are_computed_on_the_filtered_set(client, env, monkeypatch
     enable(monkeypatch)
     seed(env)
     body = summary(client, symbol="SBIN")
-    # SBIN: +100, -40, -30 -> 1 win of 3 trades, PF = 100 / 70
-    assert body["metrics"]["win_rate"] == pytest.approx(33.33)
+    # SBIN completed trades: +100 and -70 (the -40 and -30 partial exits close ONE position)
+    # -> 1 win of 2 trades = 50 %, PF = 100 / 70 = 1.43. The old 33.33 % counted the two
+    # legs as two losing trades; the profit factor is unchanged (same gross profit / loss).
+    assert body["metrics"]["trades_count"] == 2
+    assert body["metrics"]["win_rate"] == pytest.approx(50.0)
     assert body["metrics"]["profit_factor"] == pytest.approx(1.43)
+    assert body["metrics"]["avg_loss"] == pytest.approx(70.0)
     (row,) = body["by_symbol"]
     assert row["win_rate"] == body["metrics"]["win_rate"]
     assert row["profit_factor"] == body["metrics"]["profit_factor"]
@@ -520,36 +541,56 @@ def test_fills_drill_down_returns_exactly_the_linked_fills(client, env, monkeypa
     seed(env)
     body = summary(client, symbol="SBIN")
     by_pnl = {t["realized_pnl"]: t for t in body["trades"]}
-    assert set(by_pnl) == {100.0, -40.0, -30.0}
+    # completed trades: the -40 and -30 partial exits are legs of ONE -70 trade (was three
+    # rows +100 / -40 / -30, one per closing leg)
+    assert set(by_pnl) == {100.0, -70.0}
+    multi = by_pnl[-70.0]
+    assert multi["legs"] == 2 and multi["closed_quantity"] == 10.0
+    assert multi["exit_price"] == pytest.approx((4 * 90 + 6 * 95) / 10)  # 93.0
     bid = body["build_id"]
-    r = get(client, f"/api/discretionary-pnl/trades/{by_pnl[-40.0]['id']}/fills", build_id=bid)
+    r = get(client, f"/api/discretionary-pnl/trades/{multi['id']}/fills", build_id=bid)
     assert r.status_code == 200
     out = r.get_json()
     assert out["status"] == "success" and out["build_id"] == body["build_id"]
-    assert out["trade"]["id"] == by_pnl[-40.0]["id"]
-    assert [f["role"] for f in out["fills"]] == ["ENTRY", "EXIT"]
-    entry, exit_ = out["fills"]
-    assert (entry["qty_used"], entry["price"], entry["side"]) == (4.0, 100.0, "BUY")
-    assert (exit_["qty_used"], exit_["price"], exit_["side"]) == (4.0, 90.0, "SELL")
+    assert out["trade"]["id"] == multi["id"] and out["trade"]["legs"] == 2
+    # ALL legs' fills: the one entry fill (consumed 4 + 6 by the two legs, merged) and both exits
+    assert [f["role"] for f in out["fills"]] == ["ENTRY", "EXIT", "EXIT"]
+    entry, exit1, exit2 = out["fills"]
+    assert (entry["qty_used"], entry["price"], entry["side"]) == (10.0, 100.0, "BUY")
+    assert (exit1["qty_used"], exit1["price"], exit1["side"]) == (4.0, 90.0, "SELL")
+    assert (exit2["qty_used"], exit2["price"], exit2["side"]) == (6.0, 95.0, "SELL")
+    assert exit1["fill_ref"] != exit2["fill_ref"]
     for f in out["fills"]:
         for key in ("fill_time", "order_id", "fill_id", "broker", "account", "fill_ref"):
             assert f[key] not in (None, "")
         assert not any("token" in k or k == "raw_hash" for k in f)
-    # the same entry fill backs the other partial exit
-    other = get(
-        client, f"/api/discretionary-pnl/trades/{by_pnl[-30.0]['id']}/fills", build_id=bid
-    ).get_json()
-    assert other["fills"][0]["fill_ref"] == entry["fill_ref"]
-    assert other["fills"][0]["qty_used"] == 6.0
-    assert other["fills"][1]["price"] == 95.0
-    assert exit_["fill_ref"] != other["fills"][1]["fill_ref"]
-    # exactly the stored link rows
+    # exactly the stored link rows of both legs (2 entry parts + 2 exits) before the merge
     with env.eng.connect() as c:
         n = c.execute(
-            text("SELECT COUNT(*) FROM disc_trade_fills WHERE trade_id = :t"),
-            {"t": by_pnl[-40.0]["id"]},
+            text(
+                "SELECT COUNT(*) FROM disc_trade_fills f JOIN disc_trades t ON t.id = f.trade_id "
+                "WHERE t.symbol = 'SBIN' AND t.position_seq = :seq"
+            ),
+            {"seq": multi["position_seq"]},
         ).scalar()
-    assert n == len(out["fills"])
+    assert n == out["linked_fills"] == 4
+    # a single-leg trade returns its entry and its exit
+    one = get(
+        client, f"/api/discretionary-pnl/trades/{by_pnl[100.0]['id']}/fills", build_id=bid
+    ).get_json()
+    assert [f["role"] for f in one["fills"]] == ["ENTRY", "EXIT"]
+
+
+def test_fills_drill_down_of_an_open_position_is_404(client, env, monkeypatch):
+    """An open position is not a completed trade: its position id answers 404."""
+    enable(monkeypatch)
+    seed(env)
+    body = summary(client, symbol="ITC")
+    assert body["trades"] == [] and body["positions_total"] == 1
+    with env.eng.connect() as c:
+        pid = c.execute(text("SELECT id FROM disc_positions WHERE symbol = 'ITC'")).scalar()
+    r = get(client, f"/api/discretionary-pnl/trades/{pid}/fills", build_id=body["build_id"])
+    assert r.status_code == 404 and r.get_json()["code"] == "trade_not_found"
 
 
 def test_fills_drill_down_unknown_trade_is_404(client, env, monkeypatch):

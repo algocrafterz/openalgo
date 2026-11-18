@@ -1459,3 +1459,288 @@ def test_account_less_failure_after_an_account_run_warns_once_at_broker_level(en
     _run(env, "no_auth", d(17, 11, 0), account="")
     bad = _latest_warnings(pnl.get_summary(with_quotes=False))
     assert len(bad) == 1 and "(no account known) ended no_auth" in bad[0]
+
+
+# ---------------------------------------------------------------- completed trades
+# A completed trade is one position from flat to flat (a reversal ends it). Money (realized,
+# charges, equity, daily P&L, period rows) follows the closing legs; counts and ratios follow
+# completed trades. Every expected number below is computed by hand in the comment.
+
+
+def _perf(env, ltp=105.0, symbol="SBIN", **kw):
+    env.quotes[(symbol, "NSE")] = ltp
+    return pnl.get_performance(period="all", with_quotes=True, **kw)
+
+
+def _counts(perf):
+    """Every trade count of the performance payload except the headline."""
+    rows = [
+        *perf["by_period"]["daily"],
+        *perf["by_period"]["weekly"],
+        *perf["by_period"]["monthly"],
+        *perf["by_symbol"],
+        *perf["by_side"],
+        *perf["by_product"],
+        *perf["by_holding"].values(),
+        *perf["per_identity"],
+    ]
+    return [r["trades"] for r in rows]
+
+
+def _assert_money_reconciles(perf):
+    m = perf["metrics"]
+    gross = perf["realized_gross"]
+    for g in ("daily", "weekly", "monthly"):
+        rows = perf["by_period"][g]
+        assert sum(r["realized_gross"] for r in rows) == pytest.approx(gross, abs=1e-3)
+        assert sum(r["charges"] for r in rows) == pytest.approx(perf["charges"], abs=1e-3)
+        assert sum(r["trades"] for r in rows) == m["trades_count"]
+    assert sum(r["realized_gross"] for r in perf["per_identity"]) == pytest.approx(gross, abs=1e-3)
+    assert sum(r["trades"] for r in perf["per_identity"]) == m["trades_count"]
+    for name in ("by_symbol", "by_side", "by_product"):
+        assert sum(r["trades"] for r in perf[name]) == m["trades_count"]
+        assert sum(r["realized_gross"] for r in perf[name]) == pytest.approx(gross, abs=1e-3)
+    holding = perf["by_holding"].values()
+    assert sum(r["trades"] for r in holding) == m["trades_count"]
+    assert sum(r["realized_gross"] for r in holding) == pytest.approx(gross, abs=1e-3)
+    last = m["equity_curve"][-1]["value"] if m["equity_curve"] else 0.0
+    assert last == pytest.approx(round(gross, 2)) and m["net_profit"] == pytest.approx(gross)
+    assert perf["trades_total"] == m["trades_count"]
+
+
+def _scenario_a(env):
+    env.fill("BUY", 45, 100, d(17, 9, 20))
+    env.fill("SELL", 20, 110, d(17, 9, 50))
+
+
+def test_scenario_a_partial_exit_is_realized_but_not_a_trade(env):
+    _scenario_a(env)
+    perf = _perf(env)
+    # realized 20 * (110 - 100) = 200 on the day of the partial exit; unrealized
+    # 25 * (105 - 100) = 125 on the open 25 @ 100
+    assert perf["realized_gross"] == pytest.approx(200.0)
+    assert perf["unrealized_total"] == pytest.approx(125.0)
+    (pos,) = perf["positions"]
+    assert (pos["direction"], pos["open_qty"], pos["avg_entry"]) == ("LONG", 25.0, 100.0)
+    assert pos["realized_so_far"] == pytest.approx(200.0)
+    m = perf["metrics"]
+    assert m["trades_count"] == 0 and m["winning_trades"] == 0 and m["losing_trades"] == 0
+    # no completed trade: nothing to rate (compute_metrics answers 0; the UI shows a dash)
+    assert (m["win_rate"], m["profit_factor"], m["avg_win"], m["expectancy"]) == (0, 0, 0, 0)
+    assert perf["trades"] == [] and perf["trades_total"] == 0
+    assert set(_counts(perf)) == {0}
+    assert perf["hold"]["overall"]["count"] == 0
+    assert m["daily_pnl"][-1] == {"date": "2026-11-17", "pnl": 200.0}
+    (day,) = perf["by_period"]["daily"]
+    assert (day["trades"], day["realized_gross"]) == (0, 200.0)
+    _assert_money_reconciles(perf)
+
+
+def test_scenario_b_full_exit_makes_one_trade_of_all_legs(env):
+    _scenario_a(env)
+    env.fill("SELL", 25, 108, d(17, 10, 20))
+    perf = _perf(env)
+    # 200 + 25 * (108 - 100) = 400; average exit (20 * 110 + 25 * 108) / 45 = 108.8889
+    assert perf["realized_gross"] == pytest.approx(400.0)
+    assert perf["positions"] == [] and perf["unrealized_total"] == 0.0
+    (t,) = perf["trades"]
+    assert t["closed_quantity"] == 45.0 and t["legs"] == 2
+    assert t["entry_price"] == pytest.approx(100.0)
+    assert t["exit_price"] == pytest.approx(4900.0 / 45)
+    assert t["realized_pnl"] == pytest.approx(400.0)
+    assert t["hold_minutes"] == 60.0  # 09:20 first entry to 10:20 last exit
+    assert t["opened_at"] == "2026-11-17 09:20:00" and t["closed_at"] == "2026-11-17 10:20:00"
+    assert t["net_pnl"] == pytest.approx(400.0 - t["charges"])
+    assert t["charges"] == pytest.approx(perf["charges"], abs=1e-4)  # one trade: all charges
+    m = perf["metrics"]
+    assert (m["trades_count"], m["win_rate"], m["profit_factor"]) == (1, 100.0, None)
+    assert (m["avg_win"], m["expectancy"]) == (400.0, 400.0)
+    assert perf["hold"]["overall"]["mean_minutes"] == 60.0
+    _assert_money_reconciles(perf)
+
+
+def test_scenario_c_a_winning_leg_inside_a_losing_trade_is_a_loss(env):
+    _scenario_a(env)
+    env.fill("SELL", 25, 90, d(17, 10, 20))
+    perf = _perf(env)
+    # 200 + 25 * (90 - 100) = -50: one losing trade (the +200 leg is not a win)
+    assert perf["realized_gross"] == pytest.approx(-50.0)
+    m = perf["metrics"]
+    assert (m["trades_count"], m["winning_trades"], m["losing_trades"]) == (1, 0, 1)
+    assert (m["win_rate"], m["profit_factor"]) == (0.0, 0.0)
+    assert (m["avg_loss"], m["expectancy"]) == (50.0, -50.0)
+    (row,) = perf["by_symbol"]
+    assert (row["wins"], row["losses"], row["win_rate"]) == (0, 1, 0.0)
+    _assert_money_reconciles(perf)
+
+
+def test_scenario_d1_adding_after_a_partial_exit_keeps_one_open_position(env):
+    _scenario_a(env)
+    env.fill("BUY", 10, 104, d(17, 10, 20))
+    perf = _perf(env)
+    # open (25 * 100 + 10 * 104) / 35 = 101.142857; unrealized 35 * (105 - 101.142857) = 135
+    (pos,) = perf["positions"]
+    assert pos["open_qty"] == 35.0 and pos["avg_entry"] == pytest.approx(3540.0 / 35)
+    assert perf["unrealized_total"] == pytest.approx(135.0)
+    assert perf["realized_gross"] == pytest.approx(200.0) and pos["realized_so_far"] == 200.0
+    assert perf["metrics"]["trades_count"] == 0 and set(_counts(perf)) == {0}
+    _assert_money_reconciles(perf)
+
+
+def test_scenario_d2_reversal_ends_the_trade_and_opens_a_new_position(env):
+    env.fill("BUY", 45, 100, d(17, 9, 20))
+    env.fill("SELL", 60, 110, d(17, 9, 50))
+    perf = _perf(env)
+    # long closed: 45 * (110 - 100) = 450; new short 15 @ 110, unrealized 15 * (110 - 105) = 75
+    assert perf["realized_gross"] == pytest.approx(450.0)
+    (pos,) = perf["positions"]
+    assert (pos["direction"], pos["open_qty"], pos["avg_entry"]) == ("SHORT", 15.0, 110.0)
+    assert pos["realized_so_far"] == 0.0
+    assert perf["unrealized_total"] == pytest.approx(75.0)
+    (t,) = perf["trades"]
+    assert (t["direction"], t["closed_quantity"], t["legs"]) == ("LONG", 45.0, 1)
+    assert perf["metrics"]["trades_count"] == 1
+    _assert_money_reconciles(perf)
+
+
+def test_completed_trades_are_deterministic_across_rebuilds_and_insert_order(env):
+    fills = [
+        ("BUY", 45, 100, d(17, 9, 20)),
+        ("SELL", 20, 110, d(17, 9, 50)),
+        ("SELL", 25, 108, d(17, 10, 20)),
+        ("BUY", 10, 101, d(17, 10, 25)),
+        ("SELL", 30, 99, d(17, 10, 30)),
+    ]
+
+    def shape(perf):
+        keep = ("closed_quantity", "entry_price", "exit_price", "realized_pnl", "legs")
+        return (
+            [tuple(round(t[k], 9) for k in keep) for t in perf["trades"]],
+            perf["metrics"]["trades_count"],
+            perf["realized_gross"],
+            [(p["direction"], p["open_qty"], p["avg_entry"]) for p in perf["positions"]],
+        )
+
+    for f in fills:
+        env.fill(*f)
+    first = shape(_perf(env))
+    pnl.rebuild(force=True)
+    assert shape(_perf(env)) == first
+    with env.eng.begin() as c:
+        c.execute(text("DELETE FROM ledger_fills"))
+    shuffled = fills[:]
+    random.Random(7).shuffle(shuffled)
+    for f in shuffled:
+        env.fill(*f)
+    assert shape(_perf(env)) == first
+    # trades: +400 (2 legs) and -20 (the 10 @ 101 closed at 99); the reversal opens SHORT 20
+    assert first[0] == [(10.0, 101.0, 99.0, -20.0, 1), (45.0, 100.0, round(4900 / 45, 9), 400.0, 2)]
+
+
+def test_tcs_replay_is_one_losing_trade_with_unchanged_charges(env):
+    for side, qty, price, when in (
+        ("BUY", 4, 2392.6, d(17, 9, 20)),
+        ("BUY", 21, 2392.0, d(17, 9, 21)),
+        ("BUY", 20, 2401.8, d(17, 9, 22)),
+        ("SELL", 30, 2395.2, d(17, 10, 0)),
+        ("SELL", 15, 2395.2, d(17, 10, 1)),
+    ):
+        env.fill(side, qty, price, when, symbol="TCS")
+    perf = _perf(env, ltp=2400.0, symbol="TCS")
+    # buys 9570.4 + 50232 + 48036 = 107838.4, sells 45 * 2395.2 = 107784 -> -54.40
+    assert perf["realized_gross"] == pytest.approx(-54.40)
+    assert perf["charges"] == pytest.approx(38.2467, abs=1e-4)  # same figure as per leg
+    (t,) = perf["trades"]
+    assert (t["closed_quantity"], t["legs"]) == (45.0, 2)
+    assert t["entry_price"] == pytest.approx(107838.4 / 45)
+    m = perf["metrics"]
+    assert (m["trades_count"], m["win_rate"], m["profit_factor"]) == (1, 0.0, 0.0)
+    _assert_money_reconciles(perf)
+
+
+def test_partial_exit_on_day_one_and_close_on_day_two(env):
+    env.fill("BUY", 45, 100, d(16, 9, 20))
+    env.fill("SELL", 20, 110, d(16, 9, 50))
+    env.fill("SELL", 25, 108, d(17, 10, 20))
+    perf = _perf(env)
+    daily = {r["period"]: r for r in perf["by_period"]["daily"]}
+    # day 1: the +200 leg, no trade; day 2: the +200 leg and the ONE trade (+400)
+    assert (daily["2026-11-16"]["trades"], daily["2026-11-16"]["realized_gross"]) == (0, 200.0)
+    assert (daily["2026-11-17"]["trades"], daily["2026-11-17"]["realized_gross"]) == (1, 200.0)
+    assert daily["2026-11-17"]["wins"] == 1
+    (t,) = perf["trades"]
+    assert t["trade_date"] == "2026-11-17" and t["overnight"] is True
+    assert t["realized_pnl"] == pytest.approx(400.0)
+    pts = {p["date"]: p["pnl"] for p in perf["metrics"]["daily_pnl"]}
+    assert pts["2026-11-16"] == 200.0 and pts["2026-11-17"] == 200.0
+    # a period holding only day 1 shows its money and no trade
+    day1 = pnl.get_performance(period="custom", start="2026-11-16", end="2026-11-16")
+    assert day1["realized_gross"] == pytest.approx(200.0) and day1["metrics"]["trades_count"] == 0
+    assert day1["trades"] == []
+    day2 = pnl.get_performance(period="custom", start="2026-11-17", end="2026-11-17")
+    assert day2["realized_gross"] == pytest.approx(200.0) and day2["metrics"]["trades_count"] == 1
+    _assert_money_reconciles(perf)
+
+
+def test_reconciliation_holds_under_filters_and_truncation(env, monkeypatch):
+    _scenario_a(env)  # SBIN A: partial exit, still open
+    env.fill("SELL", 25, 108, d(17, 10, 20))  # ... now closed: one trade
+    env.fill("BUY", 10, 50, d(17, 9, 0), symbol="ITC", account="B")
+    env.fill("SELL", 4, 55, d(17, 9, 5), symbol="ITC", account="B")  # open, partial +20
+    env.fill("BUY", 5, 200, d(16, 9, 0), symbol="INFY", broker="zerodha", account="Z")
+    env.fill("SELL", 5, 190, d(16, 9, 30), symbol="INFY", broker="zerodha", account="Z")
+    env.fill("BUY", 5, 200, d(16, 10, 0), symbol="INFY", broker="zerodha", account="Z")
+    env.fill("SELL", 5, 204, d(16, 10, 30), symbol="INFY", broker="zerodha", account="Z")
+    monkeypatch.setattr(pnl, "TABLE_LIMIT", 1)
+    full = pnl.get_performance(period="all")
+    # SBIN +400 (1 trade), ITC +20 (no trade), INFY -50 and +20 (2 trades) -> 390, 3 trades
+    assert full["realized_gross"] == pytest.approx(390.0)
+    assert full["metrics"]["trades_count"] == 3 and full["trades_total"] == 3
+    assert len(full["trades"]) == 1 and full["trades_truncated"] == 2
+    _assert_money_reconciles(full)
+    for kw, gross, count in (
+        ({"broker": "zerodha"}, -30.0, 2),
+        ({"symbol": "ITC"}, 20.0, 0),
+        ({"account": "A"}, 400.0, 1),
+    ):
+        perf = pnl.get_performance(period="all", **kw)
+        assert perf["realized_gross"] == pytest.approx(gross), kw
+        assert perf["metrics"]["trades_count"] == count, kw
+        _assert_money_reconciles(perf)
+
+
+def test_completed_trade_fills_cover_every_leg_and_reject_a_stale_build(env):
+    _scenario_a(env)
+    env.fill("SELL", 25, 108, d(17, 10, 20))
+    perf = pnl.get_performance(period="all")
+    (t,) = perf["trades"]
+    out = pnl.get_trade_fills(t["id"], build_id=perf["build_id"])
+    assert [(f["role"], f["side"], f["qty_used"], f["price"]) for f in out["fills"]] == [
+        ("ENTRY", "BUY", 45.0, 100.0),
+        ("EXIT", "SELL", 20.0, 110.0),
+        ("EXIT", "SELL", 25.0, 108.0),
+    ]
+    assert out["trade"]["legs"] == 2 and out["linked_fills"] == 4
+    # the merged charges equal the trade's charges
+    assert sum(f["charge_allocated"] for f in out["fills"]) == pytest.approx(t["charges"])
+    env.fill("BUY", 1, 10, d(17, 10, 40), symbol="ITC")
+    with pytest.raises(pnl.BuildChanged):
+        pnl.get_trade_fills(t["id"], build_id=perf["build_id"])
+    assert pnl.get_trade_fills(999999) is None
+
+
+def test_open_position_id_is_not_a_trade(env):
+    _scenario_a(env)
+    perf = pnl.get_performance(period="all")
+    with env.eng.connect() as c:
+        pid = c.execute(text("SELECT id FROM disc_positions")).scalar()
+    assert pnl.get_trade_fills(pid, build_id=perf["build_id"]) is None
+    assert pnl.get_completed_trades() == [] and len(pnl.get_trades()) == 1  # one leg
+
+
+def test_quotes_off_default_makes_no_broker_call_with_completed_trades(env):
+    _scenario_a(env)
+    perf = pnl.get_performance(period="all")
+    assert env.quote_calls == [] and env.positionbook_calls == 0
+    assert perf["positions"][0]["unrealized"] is None
+    assert perf["positions"][0]["realized_so_far"] == 200.0

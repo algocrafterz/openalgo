@@ -68,10 +68,33 @@ Not verified without live data: Flattrade PositionBook average-price semantics (
 ``average_price`` is the net or the day-buy average) and MCX lot units (quantity in lots or
 units). Reconcile reports what the broker returns.
 
+Completed trades and legs
+-------------------------
+The book stores one row per CLOSING LEG (``disc_trades``: every partial exit is a leg) and
+one row per position (``disc_positions``). A COMPLETED trade is one position from flat to
+flat (a reversal ends it and opens a new position); it is built at read time by
+``discretionary_analytics.group_completed`` from a FLAT position and the legs sharing its
+identity and ``position_seq`` (no schema change). Its id is the position row id (stable
+within a build), quantity the total closed, entry / exit the quantity-weighted averages,
+P&L and charges the sums of the legs, hold from the position's opening to the final close,
+and ``trade_date`` the session date of the FINAL close.
+
+Money follows the legs: realized gross, charges, net, the equity curve, daily P&L and the
+daily / weekly / monthly rows sum EVERY leg on its own close date, so a partial exit counts on
+its day while the position is still open. Counts follow completed trades: trade counts,
+wins / losses, win rate, profit factor, average win / loss, expectancy, hold times and every
+by_* trades / wins / losses count. In a period, a completed trade is counted when its final
+close is in the period (its P&L, used by the ratios, is the whole position's). An open
+position carries ``realized_so_far`` (its closed legs' gross P&L, already in realized).
+``charges_unavailable_trades`` counts closing legs without a charge estimate (it qualifies
+the money figures).
+
 Metrics
 -------
-Closed trades go to ``strategy_metrics_service.compute_metrics`` with GROSS realized P&L by
-close date (no unrealized, no charges in the equity curve or drawdown). Discretionary has no
+Closing legs go to ``strategy_metrics_service.compute_metrics`` with GROSS realized P&L by
+close date (no unrealized, no charges in the equity curve or drawdown); the trade-count
+figures (``COUNT_METRICS``) are then replaced by those of a second call on the completed
+trades, so money and counts each use their own basis. Discretionary has no
 capital basis, so Sharpe, Sortino, the capital they assume and any return-on-capital are
 withheld with the reason ``no capital basis`` (compute_metrics would otherwise quietly use
 its 100,000 reference capital). Its start date is DISCRETIONARY_RELIABLE_SINCE, else the
@@ -134,6 +157,21 @@ DISCRETIONARY_STATES = (ledger.STATE_MANUAL, ledger.STATE_UI_MANUAL)
 NO_CAPITAL = "no capital basis"
 AVG_TOLERANCE = 0.0005  # 0.05 %
 QTY_EPS = 1e-9
+# compute_metrics figures that describe trades rather than money: taken from the completed
+# trades (position flat to flat), not from the closing legs.
+COUNT_METRICS = (
+    "trades_count",
+    "winning_trades",
+    "losing_trades",
+    "win_rate",
+    "gross_profit",
+    "gross_loss",
+    "profit_factor",
+    "expectancy",
+    "avg_win",
+    "avg_loss",
+    "payoff_ratio",
+)
 
 _rebuild_lock = threading.RLock()
 _tables_ready = False
@@ -398,6 +436,7 @@ def _rebuild_locked(fills: list[dict], force: bool = False) -> dict:
             "fills": meta["fill_count"],
             "trades": len(book.load_trades(build_id=meta["build_id"])),
             "positions": len(book.load_positions(build_id=meta["build_id"])),
+            "completed_trades": len(book.load_positions(status="FLAT", build_id=meta["build_id"])),
         }
     disc = [f for f in fills if f["attribution_state"] in DISCRETIONARY_STATES]
     result = reconstruct(disc)
@@ -431,11 +470,15 @@ def _rebuild_locked(fills: list[dict], force: bool = False) -> dict:
         "fills": len(fills),
         "trades": len(result["trades"]),
         "positions": len(result["positions"]),
+        "completed_trades": sum(1 for p in result["positions"] if p["status"] == "FLAT"),
     }
 
 
 def rebuild(force: bool = False) -> dict:
-    """Rebuild the derived book when the ledger fingerprint changed (or ``force``)."""
+    """Rebuild the derived book when the ledger fingerprint changed (or ``force``).
+
+    ``trades`` in the answer counts closing legs (rows of disc_trades); ``completed_trades``
+    counts positions that went back to flat."""
     with _rebuild_lock:
         return _rebuild_locked(_load_ledger_fills(), force)
 
@@ -461,17 +504,41 @@ def _snapshot(
             snap = {"build_id": bid, "fills": fills, "info": info}
             if trades:
                 snap["trades"] = book.load_trades(filters, start, end, build_id=bid)
+                snap["flat_positions"] = book.load_positions(filters, status="FLAT", build_id=bid)
             if positions:
                 snap["positions"] = book.load_positions(filters, status="OPEN", build_id=bid)
             if orphans:
                 snap["orphans"] = book.load_orphans(filters, build_id=bid)
             if trade_id is not None:
-                snap["trade"] = book.load_trade(trade_id, build_id=bid)
-                snap["trade_links"] = book.load_trade_fills(trade_id, bid) if snap["trade"] else []
+                snap.update(_completed_trade_read(trade_id, bid))
             meta = book.get_meta()
         if meta and meta["build_id"] == bid:
             return snap
     raise RuntimeError("discretionary book kept changing during a read")
+
+
+def _completed_trade_read(position_id: int, bid: str) -> dict:
+    """{"trade": the completed trade with id ``position_id`` in build ``bid`` (None when that
+    position does not exist or is still open), "trade_links": the fill links of ALL its legs}.
+    Caller holds the rebuild lock."""
+    pos = book.load_position(position_id, bid)
+    if pos is None or pos["status"] != "FLAT":
+        return {"trade": None, "trade_links": []}
+    ident = {k: pos[k] for k in ("broker", "account", "exchange", "symbol", "product")}
+    legs = [
+        t
+        for t in book.load_trades(ident, build_id=bid)
+        if int(t["position_seq"]) == int(pos["position_seq"])
+        # _filtered skips empty filter values: re-check the identity exactly
+        and all(t[k] == v for k, v in ident.items())
+    ]
+    completed = an.group_completed(legs, [pos])
+    if not completed:
+        return {"trade": None, "trade_links": []}
+    links = []
+    for leg in legs:
+        links.extend(book.load_trade_fills(leg["id"], bid))
+    return {"trade": completed[0], "trade_links": links}
 
 
 # ---------------------------------------------------------------- read API
@@ -495,9 +562,25 @@ def _unresolved_of(fills: list[dict], filters: dict) -> list[dict]:
 
 
 def get_trades(broker=None, account=None, symbol=None, start=None, end=None) -> list[dict]:
-    """Closed discretionary trades (close order), ``start``/``end`` on trade_date (inclusive)."""
+    """Closing LEGS (one row per closing fill, partial exits included; close order),
+    ``start``/``end`` on the leg's trade_date (inclusive). For completed trades (position flat
+    to flat) use ``get_completed_trades``."""
     filters = _clean_filters(broker, account, symbol)
     return _snapshot(filters, trades=True, start=start, end=end)["trades"]
+
+
+def get_completed_trades(
+    broker=None, account=None, symbol=None, start=None, end=None
+) -> list[dict]:
+    """Completed trades (one per position from flat to flat; close order), ``start``/``end``
+    on the trade_date of the FINAL close (inclusive)."""
+    snap = _snapshot(_clean_filters(broker, account, symbol), trades=True)
+    done = an.group_completed(snap["trades"], snap["flat_positions"])
+    return [
+        t
+        for t in done
+        if (not start or t["trade_date"] >= start) and (not end or t["trade_date"] <= end)
+    ]
 
 
 def get_unresolved(broker=None, account=None, symbol=None) -> list[dict]:
@@ -646,6 +729,7 @@ def _position_view(pos: dict, ltp, ts: datetime | None, status: str, now: dateti
         age = max(0.0, (now - ts).total_seconds())
     view = dict(pos)
     view.update(
+        realized_so_far=_round(pos.get("realized_gross") or 0.0),
         ltp=ltp,
         fetched_at=ts.strftime("%Y-%m-%d %H:%M:%S.%f") if ts else None,
         age_s=_round(age, 3),
@@ -743,6 +827,22 @@ def to_metric_trades(trades: list[dict]) -> list[dict]:
         }
         for t in trades
     ]
+
+
+def leg_and_trade_metrics(legs: list[dict], completed: list[dict], s: str, e: str) -> dict:
+    """compute_metrics on the closing ``legs`` (money: P&L, equity, drawdown, daily P&L, best /
+    worst day, streaks) with the COUNT_METRICS replaced by compute_metrics on the
+    ``completed`` trades (counts, wins / losses, ratios)."""
+    metrics = metrics_svc.compute_metrics(
+        to_metric_trades(legs), s, e, costs=[t["charges"] for t in legs], capital=None
+    )
+    counted = metrics_svc.compute_metrics(
+        to_metric_trades(completed), s, e, costs=[t["charges"] for t in completed], capital=None
+    )
+    for name in COUNT_METRICS:
+        metrics[name] = counted[name]
+    metrics["count_basis"] = "completed trades (a position from flat to flat)"
+    return metrics
 
 
 def withhold_capital_metrics(metrics: dict) -> dict:
@@ -907,7 +1007,10 @@ def _summary_parts(
     summary does not read the book again.
 
     Metrics, realized/charges/net and unrealized for the period; filters are
-    broker / account / symbol. Totals are sums of the per-identity figures.
+    broker / account / symbol. Totals are sums of the per-identity figures. Money sums the
+    closing legs closed in the period; ``trades`` counts (per identity and in the metrics)
+    are completed trades whose final close is in the period. ``trades`` in the answer are
+    those completed trades, ``legs`` the closing legs of the period.
 
     Naming: ``realized_gross`` is realized P&L before charges (the same basis as
     ``metrics.net_profit``, which is therefore gross despite its name); ``charges`` are
@@ -920,27 +1023,36 @@ def _summary_parts(
     s, e = metrics_svc.resolve_period(
         period, to_metric_trades(all_trades), today, start, end, floor=floor
     )
-    trades = [t for t in all_trades if s <= t["trade_date"] <= e]
+    legs = [t for t in all_trades if s <= t["trade_date"] <= e]
+    trades = [
+        t
+        for t in an.group_completed(all_trades, snap.get("flat_positions") or [])
+        if s <= t["trade_date"] <= e
+    ]
+
+    def _blank(t: dict) -> dict:
+        return {
+            "broker": t["broker"],
+            "account": t["account"],
+            "exchange": t["exchange"],
+            "symbol": t["symbol"],
+            "product": t["product"],
+            "trades": 0,
+            "realized_gross": 0.0,
+            "charges": 0.0,
+            "charges_unavailable_trades": 0,
+            "unrealized": 0.0,
+            "unrealized_unavailable_positions": 0,
+        }
 
     per: dict[tuple, dict] = {}
-    for t in trades:
+    for t in trades:  # completed trades: the count
+        key = (t["broker"], t["account"], t["exchange"], t["symbol"], t["product"])
+        per.setdefault(key, _blank(t))["trades"] += 1
+    for t in legs:  # closing legs: the money
         row = per.setdefault(
-            (t["broker"], t["account"], t["exchange"], t["symbol"], t["product"]),
-            {
-                "broker": t["broker"],
-                "account": t["account"],
-                "exchange": t["exchange"],
-                "symbol": t["symbol"],
-                "product": t["product"],
-                "trades": 0,
-                "realized_gross": 0.0,
-                "charges": 0.0,
-                "charges_unavailable_trades": 0,
-                "unrealized": 0.0,
-                "unrealized_unavailable_positions": 0,
-            },
+            (t["broker"], t["account"], t["exchange"], t["symbol"], t["product"]), _blank(t)
         )
-        row["trades"] += 1
         row["realized_gross"] += t["realized_pnl"]
         if t["charges"] is None:
             row["charges_unavailable_trades"] += 1
@@ -950,20 +1062,7 @@ def _summary_parts(
     pos_view, hours_source = _price_positions(snap["positions"], with_quotes)
     for p in pos_view:
         row = per.setdefault(
-            (p["broker"], p["account"], p["exchange"], p["symbol"], p["product"]),
-            {
-                "broker": p["broker"],
-                "account": p["account"],
-                "exchange": p["exchange"],
-                "symbol": p["symbol"],
-                "product": p["product"],
-                "trades": 0,
-                "realized_gross": 0.0,
-                "charges": 0.0,
-                "charges_unavailable_trades": 0,
-                "unrealized": 0.0,
-                "unrealized_unavailable_positions": 0,
-            },
+            (p["broker"], p["account"], p["exchange"], p["symbol"], p["product"]), _blank(p)
         )
         if p["unrealized"] is None:
             row["unrealized_unavailable_positions"] += 1
@@ -980,11 +1079,7 @@ def _summary_parts(
     unrealized_total = sum(r["unrealized"] for r in per.values())
     unrealized_missing = sum(r["unrealized_unavailable_positions"] for r in per.values())
 
-    metric_trades = to_metric_trades(trades)
-    costs = [t["charges"] for t in trades]
-    metrics = withhold_capital_metrics(
-        metrics_svc.compute_metrics(metric_trades, s, e, costs=costs, capital=None)
-    )
+    metrics = withhold_capital_metrics(leg_and_trade_metrics(legs, trades, s, e))
     metrics["charges_unavailable_trades"] = unavailable
 
     warnings = []
@@ -1051,6 +1146,7 @@ def _summary_parts(
     return {
         "summary": summary,
         "trades": trades,
+        "legs": legs,
         "positions": pos_view,
         "orphans": orphans,
         "today": today,
@@ -1071,8 +1167,16 @@ LABELS = {
     ),
     "net": "Same as realized_net_of_charges.",
     "unrealized_total": "Open positions marked to the last price; only with quotes=1.",
-    "buckets": "Daily, weekly (ISO, Monday start) and monthly buckets use the session date of the close.",
-    "ratios": "Win rate, profit factor and expectancy are computed per set of trades, never summed.",
+    "buckets": (
+        "Daily, weekly (ISO, Monday start) and monthly buckets use the session date of the close: "
+        "money on the date of each closing leg (a partial exit counts on its day), trade counts "
+        "on the date of the final close."
+    ),
+    "trades": (
+        "A completed trade is one position from flat to flat (a reversal ends it); partial "
+        "exits are legs of it. Open positions are not trades."
+    ),
+    "ratios": "Win rate, profit factor and expectancy are computed per set of completed trades, never summed.",
 }
 
 
@@ -1089,10 +1193,15 @@ class BuildChanged(Exception):
 
 
 def get_trade_fills(trade_id: int, build_id: str | None = None) -> dict | None:
-    """The ledger fills behind one closed trade of the CURRENT build, or None when the trade
-    does not exist in it. Trade ids are reassigned by every rebuild, so when ``build_id`` is
-    given and is not the current build this raises BuildChanged rather than return a
-    different trade that reuses the id. Entry fills first, then exits, each oldest first. Reads only; the
+    """The ledger fills behind one COMPLETED trade (position flat to flat) of the CURRENT
+    build, or None when it does not exist in it (an open position is not a trade). Ids are
+    reassigned by every rebuild, so when ``build_id`` is given and is not the current build
+    this raises BuildChanged rather than return a different trade that reuses the id.
+
+    Every leg's links are returned, merged per (fill, role): an entry fill consumed pro rata
+    by several legs is ONE row with the summed ``qty_used`` / ``charge_allocated``; a
+    reversing fill shows only its closing (EXIT) part. Entry fills first, then exits, each
+    oldest first. ``linked_fills`` counts the link rows before the merge. Reads only; the
     ledger rows are returned as stored (no raw hash, no tokens: the ledger holds none)."""
     snap = _snapshot({}, trade_id=trade_id)
     if build_id is not None and snap["build_id"] != build_id:
@@ -1101,8 +1210,20 @@ def get_trade_fills(trade_id: int, build_id: str | None = None) -> dict | None:
     if trade is None:
         return None
     by_id = {f["id"]: f for f in snap["fills"]}
-    fills = []
+    merged: dict[tuple, dict] = {}
     for link in snap["trade_links"]:
+        key = (link["fill_ref"], link["role"])
+        row = merged.get(key)
+        if row is None:
+            merged[key] = dict(link)
+            continue
+        row["qty_used"] += link["qty_used"]
+        if row["charge_allocated"] is None or link["charge_allocated"] is None:
+            row["charge_allocated"] = None
+        else:
+            row["charge_allocated"] += link["charge_allocated"]
+    fills = []
+    for link in merged.values():
         f = by_id.get(link["fill_ref"])
         if f is None:
             continue
@@ -1146,8 +1267,10 @@ def get_performance(
     """Everything the Discretionary Performance page needs from ONE snapshot (one build_id).
 
     ``get_summary`` plus: by_period {daily, weekly, monthly}, by_symbol, by_side, by_product,
-    by_holding {intraday, overnight}, hold, trades / positions (newest first, at most
-    TABLE_LIMIT each, with ``*_total`` and ``*_truncated``), withheld and labels. The
+    by_holding {intraday, overnight}, hold, trades (COMPLETED trades, each with ``legs``) /
+    positions (newest first, at most TABLE_LIMIT each, with ``*_total`` and ``*_truncated``;
+    every total is computed before the cut), withheld and labels. Breakdown money sums the
+    legs, breakdown counts the completed trades (see the module docstring). The
     broker / account / symbol filters apply to every figure, table and chart; pooled ratios
     are computed on the filtered set. ``with_quotes`` False (default) makes no broker call.
     Raises ValueError for a bad period or custom range.
@@ -1156,12 +1279,12 @@ def get_performance(
     snap = _snapshot(filters, trades=True, positions=True, orphans=True)
     parts = _summary_parts(snap, period, start, end, filters, with_quotes)
     out = dict(parts["summary"])
-    trades = parts["trades"]
-    out["by_period"] = {g: an.period_breakdown(trades, g) for g in an.GRANULARITIES}
-    out["by_symbol"] = an.group_breakdown(trades, "symbol")
-    out["by_side"] = an.group_breakdown(trades, "direction")
-    out["by_product"] = an.group_breakdown(trades, "product")
-    out["by_holding"] = an.holding_breakdown(trades)
+    trades, legs = parts["trades"], parts["legs"]  # completed trades / closing legs
+    out["by_period"] = {g: an.period_breakdown(trades, g, legs) for g in an.GRANULARITIES}
+    out["by_symbol"] = an.group_breakdown(trades, "symbol", legs)
+    out["by_side"] = an.group_breakdown(trades, "direction", legs)
+    out["by_product"] = an.group_breakdown(trades, "product", legs)
+    out["by_holding"] = an.holding_breakdown(trades, legs)
     out["hold"] = an.hold_summary(trades)
 
     newest = sorted(trades, key=lambda t: (t["closed_at"], t["id"]), reverse=True)
@@ -1339,6 +1462,7 @@ __all__ = [
     "fingerprint",
     "get_orphans",
     "get_positions",
+    "get_completed_trades",
     "get_summary",
     "get_trades",
     "get_unresolved",

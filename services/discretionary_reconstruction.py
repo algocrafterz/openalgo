@@ -2,7 +2,7 @@
 """
 Pure position/trade reconstruction for the Discretionary Trading Performance module.
 
-Stage 2 engine: fills in -> positions, closed trades, fill links and orphans out. No I/O, no
+Stage 2 engine: fills in -> positions, closing legs, fill links and orphans out. No I/O, no
 clock, no database, no broker, no charges (see services/discretionary_charges.py).
 
 The accounting is the weighted-average method of ``database/strategy_book_db`` apply_fill:
@@ -10,8 +10,16 @@ The accounting is the weighted-average method of ``database/strategy_book_db`` a
 * A fill in the position's direction (or into a flat position) raises the weighted average
   entry price. ``opened_at`` is set only when the position goes from flat to open.
 * A fill against the position closes ``min(fill, position)`` at the current average entry as
-  ONE closed trade (so every partial exit makes its own trade row). Any remainder opens the
-  opposite position at the fill price, with a new ``opened_at`` and a new ``position_seq``.
+  ONE closing LEG (the ``trades`` output; every partial exit makes its own leg). Any remainder
+  opens the opposite position at the fill price, with a new ``opened_at`` and a new
+  ``position_seq``.
+
+A leg is NOT a completed trade. A completed trade is one position from flat to flat: the
+position goes ``FLAT`` and its legs share its identity and ``position_seq``; a reversal ends
+it. ``services/discretionary_analytics.group_completed`` builds completed trades from the legs
+at read time. Legs carry the rupee accounting (each leg's ``realized_pnl`` counts on its own
+close date), the fill links and the charge allocation; trade counts and ratios use completed
+trades. ``realized_gross`` of a position is the sum of its legs so far.
 
 Differences from apply_fill, on purpose: values are never rounded here (the strategy book
 rounds quantity/price/pnl to 4 places; rounding would break the P&L identity checked by the

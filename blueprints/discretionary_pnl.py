@@ -176,7 +176,8 @@ def discretionary_summary():
 @check_session_validity
 @limiter.limit(DISCRETIONARY_PNL_READ_LIMIT)
 def discretionary_trade_fills(trade_id):
-    """The ledger fills (ENTRY / EXIT) behind one closed trade of the build named by the
+    """The ledger fills (ENTRY / EXIT, of every leg) behind one completed trade (a position
+    from flat to flat; its id is the position id) of the build named by the
     ``build_id`` query parameter. Trade ids are only unique within a build (a rebuild
     reassigns them), so a build_id that is not the current one answers 409 build_changed
     instead of returning whatever trade now holds that id."""
