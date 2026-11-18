@@ -1,31 +1,24 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  BaselineSeries,
-  ColorType,
-  createChart,
-  type IChartApi,
-  type ISeriesApi,
-  LineSeries,
-  LineStyle,
-  type UTCTimestamp,
-} from 'lightweight-charts'
 import { AlertTriangle, Download, Gauge, Loader2, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
+import { discretionaryPnlApi } from '@/api/discretionaryPnl'
 import {
   type BrokerCharges,
   type CapitalView,
   type DailyPnlPoint,
   type DateRange,
-  type EquityPoint,
   type PerformancePeriod,
   type SymbolPnl,
   strategyPnlApi,
 } from '@/api/strategyPnl'
 import { DataHealthBanner } from '@/components/DataHealthBanner'
+import { DiscretionaryPerformance } from '@/components/discretionary-pnl/DiscretionaryPerformance'
+import { SourceSelector } from '@/components/discretionary-pnl/SourceSelector'
 import { StrategyModeBadge } from '@/components/StrategyModeBadge'
 import { CloseBreakdowns } from '@/components/strategy-pnl/CloseBreakdowns'
 import { EdgeCheckCard } from '@/components/strategy-pnl/EdgeCheckCard'
+import { EquityDrawdownChart, NET_LINE_COLOR } from '@/components/strategy-pnl/EquityDrawdownChart'
 import { HoldBuckets } from '@/components/strategy-pnl/HoldBuckets'
 import { HoldStatsRow } from '@/components/strategy-pnl/HoldStats'
 import { ExcursionCard, GradeBadge, InsightsPanel } from '@/components/strategy-pnl/InsightsPanel'
@@ -68,6 +61,11 @@ import {
   saveStoredCapital,
   scaleRupeeFigures,
 } from '@/lib/capital'
+import {
+  DISCRETIONARY_SOURCE,
+  type SourceAvailability,
+  resolveSource,
+} from '@/lib/discretionaryPnlView'
 import {
   onlyStrategy,
   parseStrategyFilter,
@@ -308,160 +306,6 @@ function CalendarHeatmap({
   )
 }
 
-const NET_LINE_COLOR = '#6366f1'
-
-function EquityDrawdownChart({
-  equityCurve,
-  equityCurveNet,
-  isDarkMode,
-  formatCurrency,
-}: {
-  equityCurve: EquityPoint[]
-  equityCurveNet: EquityPoint[]
-  isDarkMode: boolean
-  formatCurrency: (v: number) => string
-}) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const chartRef = useRef<IChartApi | null>(null)
-  const equitySeriesRef = useRef<ISeriesApi<'Baseline'> | null>(null)
-  const drawdownSeriesRef = useRef<ISeriesApi<'Baseline'> | null>(null)
-  const netSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
-  // Bumped each time the chart is rebuilt (theme or currency change), so the
-  // data effect below reloads the new, empty series.
-  const [chartVersion, setChartVersion] = useState(0)
-
-  useEffect(() => {
-    if (!containerRef.current) return
-    const container = containerRef.current
-    if (chartRef.current) {
-      chartRef.current.remove()
-      chartRef.current = null
-    }
-
-    const chart = createChart(container, {
-      width: container.offsetWidth,
-      height: 400,
-      layout: {
-        background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: isDarkMode ? '#a6adbb' : '#333',
-        panes: {
-          enableResize: true,
-          separatorColor: isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-        },
-      },
-      grid: {
-        vertLines: { visible: false },
-        horzLines: {
-          color: isDarkMode ? 'rgba(166, 173, 187, 0.1)' : 'rgba(0, 0, 0, 0.08)',
-        },
-      },
-      rightPriceScale: {
-        borderColor: isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-        scaleMargins: { top: 0.1, bottom: 0.1 },
-      },
-      timeScale: {
-        borderColor: isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-        timeVisible: false,
-      },
-    })
-
-    const equitySeries = chart.addSeries(
-      BaselineSeries,
-      {
-        baseValue: { type: 'price', price: 0 },
-        topLineColor: '#22c55e',
-        topFillColor1: 'rgba(34, 197, 94, 0.28)',
-        topFillColor2: 'rgba(34, 197, 94, 0.02)',
-        bottomLineColor: '#ef4444',
-        bottomFillColor1: 'rgba(239, 68, 68, 0.02)',
-        bottomFillColor2: 'rgba(239, 68, 68, 0.28)',
-        lineWidth: 2,
-        priceScaleId: 'right',
-        priceFormat: { type: 'custom', formatter: (p: number) => formatCurrency(p) },
-      },
-      0
-    )
-
-    const netSeries = chart.addSeries(
-      LineSeries,
-      {
-        color: NET_LINE_COLOR,
-        lineWidth: 2,
-        lineStyle: LineStyle.Dashed,
-        priceScaleId: 'right',
-        lastValueVisible: false,
-        priceLineVisible: false,
-        priceFormat: { type: 'custom', formatter: (p: number) => formatCurrency(p) },
-      },
-      0
-    )
-
-    const drawdownSeries = chart.addSeries(
-      BaselineSeries,
-      {
-        baseValue: { type: 'price', price: 0 },
-        topLineColor: '#eab308',
-        topFillColor1: 'rgba(234, 179, 8, 0)',
-        topFillColor2: 'rgba(234, 179, 8, 0)',
-        bottomLineColor: '#eab308',
-        bottomFillColor1: 'rgba(234, 179, 8, 0.04)',
-        bottomFillColor2: 'rgba(234, 179, 8, 0.30)',
-        lineWidth: 2,
-        priceScaleId: 'right',
-        priceFormat: { type: 'custom', formatter: (p: number) => formatCurrency(p) },
-      },
-      1
-    )
-
-    const panes = chart.panes()
-    if (panes.length > 1) {
-      panes[0].setHeight(300)
-      panes[1].setHeight(100)
-    }
-
-    chartRef.current = chart
-    equitySeriesRef.current = equitySeries
-    drawdownSeriesRef.current = drawdownSeries
-    netSeriesRef.current = netSeries
-    setChartVersion((v) => v + 1)
-
-    const handleResize = () => {
-      chart.applyOptions({ width: container.offsetWidth })
-    }
-    window.addEventListener('resize', handleResize)
-
-    return () => {
-      window.removeEventListener('resize', handleResize)
-      chart.remove()
-      chartRef.current = null
-    }
-  }, [isDarkMode, formatCurrency])
-
-  useEffect(() => {
-    if (chartVersion === 0 || !equitySeriesRef.current || !drawdownSeriesRef.current) return
-    const toTime = (d: string) =>
-      Math.floor(new Date(`${d}T00:00:00Z`).getTime() / 1000) as UTCTimestamp
-
-    const equityData = equityCurve.map((p) => ({ time: toTime(p.date), value: p.value }))
-    let runningMax = Number.NEGATIVE_INFINITY
-    const drawdownData = equityCurve.map((p) => {
-      runningMax = Math.max(runningMax, p.value)
-      return { time: toTime(p.date), value: p.value - runningMax }
-    })
-
-    if (equityData.length > 0) {
-      equitySeriesRef.current.setData(equityData)
-      drawdownSeriesRef.current.setData(drawdownData)
-      netSeriesRef.current?.setData(
-        equityCurveNet.map((p) => ({ time: toTime(p.date), value: p.value }))
-      )
-      chartRef.current?.timeScale().fitContent()
-    }
-  }, [equityCurve, equityCurveNet, chartVersion])
-
-  return <div ref={containerRef} className="relative" style={{ height: '400px' }} />
-}
-
 function EquityLegend({ coverage }: { coverage: { covered: number; total: number } | undefined }) {
   const partial = !!coverage && coverage.covered < coverage.total
   return (
@@ -587,6 +431,23 @@ export default function StrategyDailyPerformance() {
   // Period, range and strategy live in the URL, so a refresh or a shared link
   // reopens the same view.
   const [searchParams, setSearchParams] = useSearchParams()
+  // The source (strategies or discretionary) is local to this page and in the URL. Discretionary
+  // applies only when the server says it is enabled; if that is unknown the page waits, and if the
+  // endpoint is missing, off or failing it falls back to strategies. Status is fetched once.
+  const statusQuery = useQuery({
+    queryKey: ['discretionary-status'],
+    queryFn: discretionaryPnlApi.status,
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+  })
+  const availability: SourceAvailability = statusQuery.isPending
+    ? 'pending'
+    : statusQuery.data
+      ? 'enabled'
+      : 'disabled'
+  const source = resolveSource(searchParams.get('source'), availability)
+  const isStrategies = source === 'strategies'
+  const isDisc = source === 'discretionary'
   const rawPeriod = searchParams.get('period') ?? '7d'
   const period = (PERIOD_VALUES.has(rawPeriod) ? rawPeriod : '7d') as PerformancePeriod
   const filter = useMemo(() => parseStrategyFilter(searchParams), [searchParams])
@@ -617,6 +478,17 @@ export default function StrategyDailyPerformance() {
     },
     [setSearchParams]
   )
+
+  const setSource = (next: 'strategies' | 'discretionary') =>
+    updateParams({ source: next === 'discretionary' ? 'discretionary' : null })
+
+  // The server says Discretionary is off (or unreachable): the page already shows strategies, so
+  // drop the stale ?source=discretionary from the URL. Replace, never a history entry.
+  useEffect(() => {
+    if (availability === 'disabled' && searchParams.get('source') === DISCRETIONARY_SOURCE) {
+      updateParams({ source: null })
+    }
+  }, [availability, searchParams, updateParams])
 
   const setPeriod = (value: PerformancePeriod) => {
     if (value !== 'custom') {
@@ -721,6 +593,7 @@ export default function StrategyDailyPerformance() {
   // First load and mode switches: apply the mode's capital to the URL before
   // any report is requested. A pending edit from the other mode is dropped.
   useEffect(() => {
+    if (!isStrategies) return
     if (appliedMode.current === clientMode) return
     const first = appliedMode.current === undefined
     appliedMode.current = clientMode
@@ -740,7 +613,12 @@ export default function StrategyDailyPerformance() {
     setCapitalText(plan.url ?? '')
     updateParams({ capital: plan.url })
     setCapitalApplied({ mode: clientMode, url: plan.url, settled: plan.url === urlCapital })
-  }, [clientMode, urlCapital, updateParams, cancelCapitalCommit])
+  }, [clientMode, urlCapital, updateParams, cancelCapitalCommit, isStrategies])
+
+  // A capital still being typed must not reach the URL once the Discretionary source is showing.
+  useEffect(() => {
+    if (!isStrategies) cancelCapitalCommit()
+  }, [isStrategies, cancelCapitalCommit])
 
   // The URL has caught up with the capital applied for this mode.
   useEffect(() => {
@@ -801,14 +679,14 @@ export default function StrategyDailyPerformance() {
     // With nothing selected this is one unfiltered request that only fills the
     // picker's strategy list; its rows are never shown.
     queryFn: () => strategyPnlApi.compare(period, range, nothingSelected ? undefined : filter),
-    enabled: rangeReady,
+    enabled: rangeReady && isStrategies,
     refetchInterval: nothingSelected ? false : POLL_MS,
   })
 
   const dailyQuery = useQuery({
     queryKey: ['strategy-daily', clientMode, filter, period, range?.start, range?.end, capital],
     queryFn: () => strategyPnlApi.daily(filter, period, range, capital),
-    enabled: queriesEnabled && capitalReady,
+    enabled: queriesEnabled && capitalReady && isStrategies,
     refetchInterval: POLL_MS,
   })
 
@@ -896,16 +774,17 @@ export default function StrategyDailyPerformance() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-3xl font-bold tracking-tight">Strategy Daily Performance</h1>
-            <StrategyModeBadge mode={daily?.mode} />
+            <h1 className="text-3xl font-bold tracking-tight">
+              {isDisc ? 'Discretionary Performance' : 'Strategy Daily Performance'}
+            </h1>
+            {isStrategies && <StrategyModeBadge mode={daily?.mode} />}
           </div>
           <p className="text-muted-foreground">
-            Day-by-day strategy performance with professional trade evaluation metrics - win rate,
-            profit factor, expectancy in R, estimated charges, Sharpe/Sortino/Calmar, drawdown and
-            streaks. 1D shows the last traded session's trades instead of ratios. Live and Analyze
-            mode are tracked separately.
+            {isDisc
+              ? 'Trades you placed yourself at the broker, rebuilt from the fill ledger: realized P&L before and after estimated charges, open positions and unrealized P&L when you fetch prices. Sharpe, Sortino and return % are not shown because there is no capital basis.'
+              : "Day-by-day strategy performance with professional trade evaluation metrics - win rate, profit factor, expectancy in R, estimated charges, Sharpe/Sortino/Calmar, drawdown and streaks. 1D shows the last traded session's trades instead of ratios. Live and Analyze mode are tracked separately."}
           </p>
-          {shownRange && (
+          {isStrategies && shownRange && (
             <p className="text-sm mt-1">
               Showing <span className="font-medium">{shownRange}</span>
               {isLastSession && (
@@ -913,45 +792,56 @@ export default function StrategyDailyPerformance() {
               )}
             </p>
           )}
-          {!nothingSelected && (includedChips.length > 0 || excludedChips.length > 0) && (
-            <div className="flex flex-wrap items-center gap-1.5 mt-2">
-              {includedChips.map((name) => (
-                <span key={`in-${name}`} className="rounded-full border px-2 py-0.5 text-xs">
-                  {name}
-                </span>
-              ))}
-              {excludedChips.map((name) => (
-                <span
-                  key={`out-${name}`}
-                  className="rounded-full border border-red-600/40 px-2 py-0.5 text-xs text-red-600"
-                >
-                  Excluded: {name}
-                </span>
-              ))}
-            </div>
-          )}
+          {isStrategies &&
+            !nothingSelected &&
+            (includedChips.length > 0 || excludedChips.length > 0) && (
+              <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                {includedChips.map((name) => (
+                  <span key={`in-${name}`} className="rounded-full border px-2 py-0.5 text-xs">
+                    {name}
+                  </span>
+                ))}
+                {excludedChips.map((name) => (
+                  <span
+                    key={`out-${name}`}
+                    className="rounded-full border border-red-600/40 px-2 py-0.5 text-xs text-red-600"
+                  >
+                    Excluded: {name}
+                  </span>
+                ))}
+              </div>
+            )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <StrategyFilterPicker filter={filter} names={strategyNames} onChange={setFilter} />
-          <div className="flex flex-col">
-            <Input
-              type="text"
-              inputMode="decimal"
-              aria-label="Capital per strategy (Rs)"
-              placeholder="Capital per strategy (Rs)"
-              className="w-[150px]"
-              value={capitalText}
-              onChange={(e) => onCapitalInput(e.target.value)}
-              onBlur={commitCapitalNow}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commitCapitalNow()
-              }}
-              aria-invalid={capitalMessage !== null}
-            />
-            {capitalMessage && (
-              <span className="text-xs text-red-600 mt-0.5">{capitalMessage}</span>
-            )}
-          </div>
+          <SourceSelector
+            enabled={availability === 'enabled'}
+            value={isDisc ? 'discretionary' : 'strategies'}
+            onChange={setSource}
+          />
+          {isStrategies && (
+            <>
+              <StrategyFilterPicker filter={filter} names={strategyNames} onChange={setFilter} />
+              <div className="flex flex-col">
+                <Input
+                  type="text"
+                  inputMode="decimal"
+                  aria-label="Capital per strategy (Rs)"
+                  placeholder="Capital per strategy (Rs)"
+                  className="w-[150px]"
+                  value={capitalText}
+                  onChange={(e) => onCapitalInput(e.target.value)}
+                  onBlur={commitCapitalNow}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitCapitalNow()
+                  }}
+                  aria-invalid={capitalMessage !== null}
+                />
+                {capitalMessage && (
+                  <span className="text-xs text-red-600 mt-0.5">{capitalMessage}</span>
+                )}
+              </div>
+            </>
+          )}
           <Select value={period} onValueChange={(v) => setPeriod(v as PerformancePeriod)}>
             <SelectTrigger className="w-[100px]">
               <SelectValue />
@@ -1008,37 +898,54 @@ export default function StrategyDailyPerformance() {
             <RefreshCw className={cn('h-4 w-4 mr-2', isFetching && 'animate-spin')} />
             Refresh
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={exportCsv}
-            disabled={!queriesEnabled || exporting}
-          >
-            <Download className={cn('h-4 w-4 mr-2', exporting && 'animate-pulse')} />
-            Export CSV
-          </Button>
+          {isStrategies && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={exportCsv}
+              disabled={!queriesEnabled || exporting}
+            >
+              <Download className={cn('h-4 w-4 mr-2', exporting && 'animate-pulse')} />
+              Export CSV
+            </Button>
+          )}
         </div>
       </div>
 
-      <DataHealthBanner health={daily?.data_health ?? compareQuery.data?.data_health} />
+      {isStrategies && (
+        <DataHealthBanner health={daily?.data_health ?? compareQuery.data?.data_health} />
+      )}
 
-      <div className="flex items-start gap-2 rounded-lg border border-muted-foreground/20 bg-muted/40 p-3 text-sm text-muted-foreground">
-        <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-        <span>
-          History starts from the day this page was deployed - trades closed before that are not
-          reconstructed. Rupee metrics stay on each strategy's own realized P&L. Sharpe and
-          Sortino are calculated on daily returns after charges and do not change with capital;
-          Calmar is still calculated on rupee daily P&L.
-          Percentage-of-capital figures appear only when you enter a capital per strategy. Est.
-          charges use the India intraday schedule (the placing broker's own brokerage, plus STT,
-          exchange fees, stamp duty, GST), count each entry order once however many exit legs
-          follow, and exclude slippage. "% of profit" is estimated charges divided by gross profit:
-          100% means charges took all of it. R is shown only for trades whose signal stop could be
-          identified.
-        </span>
-      </div>
+      {isStrategies && (
+        <div className="flex items-start gap-2 rounded-lg border border-muted-foreground/20 bg-muted/40 p-3 text-sm text-muted-foreground">
+          <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+          <span>
+            History starts from the day this page was deployed - trades closed before that are not
+            reconstructed. Rupee metrics stay on each strategy's own realized P&L. Sharpe and
+            Sortino are calculated on daily returns after charges and do not change with capital;
+            Calmar is still calculated on rupee daily P&L. Percentage-of-capital figures appear only
+            when you enter a capital per strategy. Est. charges use the India intraday schedule (the
+            placing broker's own brokerage, plus STT, exchange fees, stamp duty, GST), count each
+            entry order once however many exit legs follow, and exclude slippage. "% of profit" is
+            estimated charges divided by gross profit: 100% means charges took all of it. R is shown
+            only for trades whose signal stop could be identified.
+          </span>
+        </div>
+      )}
 
-      {!rangeReady ? (
+      {source === 'pending' ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin" />
+        </div>
+      ) : isDisc ? (
+        <DiscretionaryPerformance
+          period={period}
+          range={range}
+          rangeReady={rangeReady}
+          formatCurrency={formatCurrency}
+          isDarkMode={isDarkMode}
+        />
+      ) : !rangeReady ? (
         <div className="text-center py-12 text-muted-foreground">
           Choose a start and end date, then press Apply.
         </div>
@@ -1237,191 +1144,204 @@ export default function StrategyDailyPerformance() {
         </>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Strategy Comparison</CardTitle>
-        </CardHeader>
-        <CardContent className="py-0">
-          {nothingSelected ? (
-            <div className="text-center py-12 text-muted-foreground">
-              Select at least one strategy.
-            </div>
-          ) : compareQuery.isLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin" />
-            </div>
-          ) : strategies.length === 0 ? (
-            <EmptyState
-              icon={Gauge}
-              title="No strategies with closed trades yet"
-              description="A strategy appears here once it has at least one closed trade in the selected period."
-            />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Strategy</TableHead>
-                  <TableHead className="text-right">Trades</TableHead>
-                  <TableHead className="text-right">Win Rate</TableHead>
-                  <TableHead className="text-right">Profit Factor</TableHead>
-                  <TableHead className="text-right">Net P&L</TableHead>
-                  <TableHead className="text-right">Charges</TableHead>
-                  <TableHead className="text-right">Charges % of profit</TableHead>
-                  <TableHead className="text-right">After charges</TableHead>
-                  <TableHead className="text-right">Expectancy</TableHead>
-                  <TableHead
-                    className="text-right"
-                    title="Average result per trade after estimated charges"
-                  >
-                    Net/trade
-                  </TableHead>
-                  <TableHead
-                    className="text-right"
-                    title="Whether the average per trade is unlikely to be luck (needs 30+ trades)"
-                  >
-                    Edge
-                  </TableHead>
-                  <TableHead className="text-right">Avg Hold</TableHead>
-                  {!isToday && <TableHead className="text-right">Sharpe</TableHead>}
-                  {!isToday && <TableHead className="text-right">Max Drawdown (before charges)</TableHead>}
-                  {!isToday && <TableHead className="text-right">Gross PF</TableHead>}
-                  {!isToday && <TableHead className="text-right">Net PF</TableHead>}
-                  {!isToday && <TableHead className="text-right">Avg R (net)</TableHead>}
-                  {!isToday && <TableHead className="text-right">Return on capital</TableHead>}
-                  {!isToday && <TableHead className="text-right">Drawdown % (net)</TableHead>}
-                  {!isToday && <TableHead className="text-right">Recovery</TableHead>}
-                  {!isToday && <TableHead className="text-right">Best day share</TableHead>}
-                  {!isToday && <TableHead className="text-right">Grade</TableHead>}
-                  {!isToday && <TableHead className="text-right">Validation</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {strategies.map((row) => (
-                  <TableRow
-                    key={row.strategy}
-                    className={cn(
-                      'cursor-pointer',
-                      filter.include.length === 1 &&
-                        filter.include[0] === row.strategy &&
-                        'bg-muted/50'
-                    )}
-                    onClick={() => setFilter(onlyStrategy(row.strategy))}
-                  >
-                    <TableCell className="font-medium">{row.strategy}</TableCell>
-                    <TableCell className="text-right font-mono">{row.trades_count}</TableCell>
-                    <TableCell className="text-right font-mono">
-                      {row.win_rate.toFixed(1)}%
-                    </TableCell>
-                    <TableCell className="text-right font-mono">
-                      {fmtRatio(row.profit_factor)}
-                    </TableCell>
-                    <TableCell
-                      className={cn(
-                        'text-right font-mono',
-                        row.net_profit > 0
-                          ? 'text-green-600'
-                          : row.net_profit < 0
-                            ? 'text-red-600'
-                            : ''
-                      )}
+      {isStrategies && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Strategy Comparison</CardTitle>
+          </CardHeader>
+          <CardContent className="py-0">
+            {nothingSelected ? (
+              <div className="text-center py-12 text-muted-foreground">
+                Select at least one strategy.
+              </div>
+            ) : compareQuery.isLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin" />
+              </div>
+            ) : strategies.length === 0 ? (
+              <EmptyState
+                icon={Gauge}
+                title="No strategies with closed trades yet"
+                description="A strategy appears here once it has at least one closed trade in the selected period."
+              />
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Strategy</TableHead>
+                    <TableHead className="text-right">Trades</TableHead>
+                    <TableHead className="text-right">Win Rate</TableHead>
+                    <TableHead className="text-right">Profit Factor</TableHead>
+                    <TableHead className="text-right">Net P&L</TableHead>
+                    <TableHead className="text-right">Charges</TableHead>
+                    <TableHead className="text-right">Charges % of profit</TableHead>
+                    <TableHead className="text-right">After charges</TableHead>
+                    <TableHead className="text-right">Expectancy</TableHead>
+                    <TableHead
+                      className="text-right"
+                      title="Average result per trade after estimated charges"
                     >
-                      {formatCurrency(row.net_profit)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-muted-foreground">
-                      {row.est_costs == null ? '—' : formatCurrency(row.est_costs)}
-                    </TableCell>
-                    <TableCell
-                      className={cn(
-                        'text-right font-mono',
-                        chargesDragClass(row.charges_pct_of_gross)
-                      )}
+                      Net/trade
+                    </TableHead>
+                    <TableHead
+                      className="text-right"
+                      title="Whether the average per trade is unlikely to be luck (needs 30+ trades)"
                     >
-                      {row.charges_pct_of_gross == null
-                        ? '—'
-                        : `${row.charges_pct_of_gross.toFixed(1)}%`}
-                    </TableCell>
-                    <TableCell
-                      className={cn(
-                        'text-right font-mono',
-                        (row.net_after_costs ?? 0) > 0
-                          ? 'text-green-600'
-                          : (row.net_after_costs ?? 0) < 0
-                            ? 'text-red-600'
-                            : ''
-                      )}
-                    >
-                      {row.net_after_costs == null ? '—' : formatCurrency(row.net_after_costs)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono">
-                      {formatCurrency(row.expectancy)}
-                    </TableCell>
-                    <TableCell
-                      className={cn('text-right font-mono', pnlClass(row.net_expectancy ?? 0))}
-                    >
-                      {row.net_expectancy == null ? '—' : formatCurrency(row.net_expectancy)}
-                    </TableCell>
-                    <TableCell className="text-right">{edgeShortLabel(row.edge_verdict)}</TableCell>
-                    <TableCell className="text-right font-mono">
-                      {fmtDuration(row.avg_hold_min)}
-                    </TableCell>
+                      Edge
+                    </TableHead>
+                    <TableHead className="text-right">Avg Hold</TableHead>
+                    {!isToday && <TableHead className="text-right">Sharpe</TableHead>}
                     {!isToday && (
-                      <TableCell className="text-right font-mono">
-                        {fmtRatio(row.sharpe_ratio)}
-                      </TableCell>
+                      <TableHead className="text-right">Max Drawdown (before charges)</TableHead>
                     )}
-                    {!isToday && (
-                      <TableCell className="text-right font-mono text-red-600">
-                        {formatCurrency(Math.abs(row.max_drawdown))}
-                      </TableCell>
-                    )}
-                    {!isToday && (
-                      <>
-                        <TableCell className="text-right font-mono">
-                          {fmtRatio(row.gross_profit_factor)}
-                        </TableCell>
-                        <TableCell className="text-right font-mono">
-                          {fmtRatio(row.net_profit_factor)}
-                        </TableCell>
-                        <TableCell className="text-right font-mono">
-                          {row.expectancy_net_r == null ? '—' : fmtR(row.expectancy_net_r)}
-                        </TableCell>
-                        <TableCell className="text-right font-mono">
-                          {row.return_on_capital_pct == null
-                            ? '—'
-                            : `${row.return_on_capital_pct.toFixed(2)}%`}
-                        </TableCell>
-                        <TableCell className="text-right font-mono">
-                          {row.max_drawdown_pct == null ? '—' : `${row.max_drawdown_pct.toFixed(2)}%`}
-                        </TableCell>
-                        <TableCell className="text-right font-mono">
-                          {fmtRatio(row.recovery_factor)}
-                        </TableCell>
-                        <TableCell className="text-right font-mono">
-                          {row.top1_day_share_pct == null ? '—' : `${row.top1_day_share_pct.toFixed(1)}%`}
-                        </TableCell>
-                        <TableCell className="text-right" title={row.overall_note ?? undefined}>
-                          <GradeBadge grade={row.overall_grade} preliminary={row.preliminary_grade} />
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <ValidationBadge
-                            state={row.validation_status}
-                            label={row.validation_label}
-                            title={row.validation_summary}
-                          />
-                        </TableCell>
-                      </>
-                    )}
+                    {!isToday && <TableHead className="text-right">Gross PF</TableHead>}
+                    {!isToday && <TableHead className="text-right">Net PF</TableHead>}
+                    {!isToday && <TableHead className="text-right">Avg R (net)</TableHead>}
+                    {!isToday && <TableHead className="text-right">Return on capital</TableHead>}
+                    {!isToday && <TableHead className="text-right">Drawdown % (net)</TableHead>}
+                    {!isToday && <TableHead className="text-right">Recovery</TableHead>}
+                    {!isToday && <TableHead className="text-right">Best day share</TableHead>}
+                    {!isToday && <TableHead className="text-right">Grade</TableHead>}
+                    {!isToday && <TableHead className="text-right">Validation</TableHead>}
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isToday && !nothingSelected && compareQuery.data && strategies.length > 0 && (
-            <PortfolioComparison data={compareQuery.data} formatCurrency={formatCurrency} />
-          )}
-        </CardContent>
-      </Card>
-      <StrategyReports />
+                </TableHeader>
+                <TableBody>
+                  {strategies.map((row) => (
+                    <TableRow
+                      key={row.strategy}
+                      className={cn(
+                        'cursor-pointer',
+                        filter.include.length === 1 &&
+                          filter.include[0] === row.strategy &&
+                          'bg-muted/50'
+                      )}
+                      onClick={() => setFilter(onlyStrategy(row.strategy))}
+                    >
+                      <TableCell className="font-medium">{row.strategy}</TableCell>
+                      <TableCell className="text-right font-mono">{row.trades_count}</TableCell>
+                      <TableCell className="text-right font-mono">
+                        {row.win_rate.toFixed(1)}%
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
+                        {fmtRatio(row.profit_factor)}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          'text-right font-mono',
+                          row.net_profit > 0
+                            ? 'text-green-600'
+                            : row.net_profit < 0
+                              ? 'text-red-600'
+                              : ''
+                        )}
+                      >
+                        {formatCurrency(row.net_profit)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-muted-foreground">
+                        {row.est_costs == null ? '—' : formatCurrency(row.est_costs)}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          'text-right font-mono',
+                          chargesDragClass(row.charges_pct_of_gross)
+                        )}
+                      >
+                        {row.charges_pct_of_gross == null
+                          ? '—'
+                          : `${row.charges_pct_of_gross.toFixed(1)}%`}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          'text-right font-mono',
+                          (row.net_after_costs ?? 0) > 0
+                            ? 'text-green-600'
+                            : (row.net_after_costs ?? 0) < 0
+                              ? 'text-red-600'
+                              : ''
+                        )}
+                      >
+                        {row.net_after_costs == null ? '—' : formatCurrency(row.net_after_costs)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
+                        {formatCurrency(row.expectancy)}
+                      </TableCell>
+                      <TableCell
+                        className={cn('text-right font-mono', pnlClass(row.net_expectancy ?? 0))}
+                      >
+                        {row.net_expectancy == null ? '—' : formatCurrency(row.net_expectancy)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {edgeShortLabel(row.edge_verdict)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
+                        {fmtDuration(row.avg_hold_min)}
+                      </TableCell>
+                      {!isToday && (
+                        <TableCell className="text-right font-mono">
+                          {fmtRatio(row.sharpe_ratio)}
+                        </TableCell>
+                      )}
+                      {!isToday && (
+                        <TableCell className="text-right font-mono text-red-600">
+                          {formatCurrency(Math.abs(row.max_drawdown))}
+                        </TableCell>
+                      )}
+                      {!isToday && (
+                        <>
+                          <TableCell className="text-right font-mono">
+                            {fmtRatio(row.gross_profit_factor)}
+                          </TableCell>
+                          <TableCell className="text-right font-mono">
+                            {fmtRatio(row.net_profit_factor)}
+                          </TableCell>
+                          <TableCell className="text-right font-mono">
+                            {row.expectancy_net_r == null ? '—' : fmtR(row.expectancy_net_r)}
+                          </TableCell>
+                          <TableCell className="text-right font-mono">
+                            {row.return_on_capital_pct == null
+                              ? '—'
+                              : `${row.return_on_capital_pct.toFixed(2)}%`}
+                          </TableCell>
+                          <TableCell className="text-right font-mono">
+                            {row.max_drawdown_pct == null
+                              ? '—'
+                              : `${row.max_drawdown_pct.toFixed(2)}%`}
+                          </TableCell>
+                          <TableCell className="text-right font-mono">
+                            {fmtRatio(row.recovery_factor)}
+                          </TableCell>
+                          <TableCell className="text-right font-mono">
+                            {row.top1_day_share_pct == null
+                              ? '—'
+                              : `${row.top1_day_share_pct.toFixed(1)}%`}
+                          </TableCell>
+                          <TableCell className="text-right" title={row.overall_note ?? undefined}>
+                            <GradeBadge
+                              grade={row.overall_grade}
+                              preliminary={row.preliminary_grade}
+                            />
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <ValidationBadge
+                              state={row.validation_status}
+                              label={row.validation_label}
+                              title={row.validation_summary}
+                            />
+                          </TableCell>
+                        </>
+                      )}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+            {!isToday && !nothingSelected && compareQuery.data && strategies.length > 0 && (
+              <PortfolioComparison data={compareQuery.data} formatCurrency={formatCurrency} />
+            )}
+          </CardContent>
+        </Card>
+      )}
+      {isStrategies && <StrategyReports />}
     </div>
   )
 }
