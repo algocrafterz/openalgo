@@ -3,7 +3,8 @@
 Discretionary Ledger Migration Script for OpenAlgo
 
 Creates the Stage 1 tables of the Discretionary Trading Performance module:
-`ledger_fills`, `ledger_sync_runs`, `ledger_attribution_audit` (plus indexes).
+`ledger_fills`, `ledger_sync_runs`, `ledger_attribution_audit`,
+`ledger_account_identity` (plus indexes).
 
 Create-only: uses CREATE TABLE / INDEX IF NOT EXISTS, never alters, drops or rewrites
 rows, so running it twice changes nothing.
@@ -34,7 +35,12 @@ MIGRATION_VERSION = "015"
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(parent_dir, ".env"))
 
-TABLES = ("ledger_fills", "ledger_sync_runs", "ledger_attribution_audit")
+TABLES = (
+    "ledger_fills",
+    "ledger_sync_runs",
+    "ledger_attribution_audit",
+    "ledger_account_identity",
+)
 
 DDL = (
     """
@@ -93,6 +99,16 @@ DDL = (
     """,
     "CREATE INDEX IF NOT EXISTS ix_ledger_attribution_audit_fill_ref "
     "ON ledger_attribution_audit (fill_ref)",
+    """
+    CREATE TABLE IF NOT EXISTS ledger_account_identity (
+        id INTEGER NOT NULL PRIMARY KEY,
+        broker VARCHAR(40) NOT NULL,
+        auth_name VARCHAR(255) NOT NULL,
+        account VARCHAR(64) NOT NULL,
+        first_seen DATETIME NOT NULL,
+        CONSTRAINT uq_ledger_account_identity_broker_auth UNIQUE (broker, auth_name)
+    )
+    """,
 )
 
 

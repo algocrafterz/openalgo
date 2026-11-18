@@ -847,20 +847,22 @@ def test_sync_run_label_equals_ledger_account_label(env, monkeypatch):
     assert run == rows(env)[0]["account"] == "FAKE-ACCT"
 
 
-def test_account_falls_back_to_auth_user_id_then_name(env, monkeypatch):
+def test_account_falls_back_to_auth_user_id_never_the_name(env, monkeypatch):
     install_fake_broker(monkeypatch, [fake_fill("A1", account="")])
     sync_real(FAKE_BROKER)  # sync_real auth: user_id = "id-alice"
     assert rows(env)[0]["account"] == "id-alice"
     assert rows(env, "SELECT account FROM ledger_sync_runs")[0]["account"] == "id-alice"
-    # no user_id -> the Auth name
+    # no user_id and no canonical account: the fill is skipped, the name is never a label
     auth = SimpleNamespace(name="nm", user_id="", broker=FAKE_BROKER, is_revoked=False)
     with (
         patch("database.auth_db.get_auth_token_dbquery", return_value=auth),
         patch("database.auth_db.get_auth_token", return_value="T"),
         patch("utils.session.has_login_this_trading_session", return_value=True),
     ):
-        svc.sync_once("nm", now_fn)
-    assert "nm" in {r["account"] for r in rows(env)}
+        out = svc.sync_once("nm", now_fn)
+    assert out["skipped"] == 1 and out["inserted"] == 0
+    assert "nm" not in {r["account"] for r in rows(env)}
+    assert rows(env, "SELECT account FROM ledger_sync_runs ORDER BY id")[-1]["account"] == ""
 
 
 def test_flattrade_sync_run_label_equals_ledger_label(env):
@@ -1671,3 +1673,91 @@ def test_real_case_continuous_15_minute_syncs_give_manual_after_grace(env, monke
     }
     sync([], now=at(11, 0))
     assert states(env) == dict.fromkeys(("f1", "f2", "f3", "f4", "f5"), "manual")
+
+
+# ------------------------------------------------------------------ canonical account identity
+
+
+def sync_as(fills, auth, now=now_fn, token="TOKEN-MASKED"):
+    """sync_once for ``auth`` with fetch_fills mocked (a plain list of normalized fills)."""
+    with (
+        patch("database.auth_db.get_auth_token_dbquery", return_value=auth),
+        patch("database.auth_db.get_auth_token", return_value=token),
+        patch("utils.session.has_login_this_trading_session", return_value=True),
+        patch.object(svc, "fetch_fills", side_effect=lambda *a, **k: copy.deepcopy(fills)),
+    ):
+        return svc.sync_once(auth.name, now)
+
+
+def flattrade_auth(name="alice", user_id=None):
+    return SimpleNamespace(name=name, user_id=user_id, broker="flattrade", is_revoked=False)
+
+
+def run_labels(env):
+    return [r["account"] for r in rows(env, "SELECT account FROM ledger_sync_runs ORDER BY id")]
+
+
+def test_empty_first_sync_then_fills_give_the_same_canonical_account(env):
+    auth = flattrade_auth()
+    assert sync_as([], auth)["status"] == "ok"
+    sync_as([mk(fill_id="F1", account="FZ01")], auth)
+    sync_as([], auth)
+    assert run_labels(env) == ["", "FZ01", "FZ01"]
+    assert ledger.get_identity("flattrade", "alice") == "FZ01"
+    assert "alice" not in run_labels(env) + [r["account"] for r in rows(env)]
+
+
+def test_fill_without_account_takes_the_canonical_account(env, monkeypatch):
+    calls = install_fake_broker(monkeypatch, [fake_fill("A1", account="")])
+    ledger.remember_identity(FAKE_BROKER, "alice", "FZ09")
+    auth = SimpleNamespace(name="alice", user_id=None, broker=FAKE_BROKER, is_revoked=False)
+    with (
+        patch("database.auth_db.get_auth_token_dbquery", return_value=auth),
+        patch("database.auth_db.get_auth_token", return_value="T"),
+        patch("utils.session.has_login_this_trading_session", return_value=True),
+    ):
+        svc.sync_once("alice", now_fn)
+    assert calls == ["T"]
+    assert rows(env)[0]["account"] == "FZ09" and run_labels(env) == ["FZ09"]
+
+
+def test_two_real_accounts_stay_separate(env):
+    sync_as([mk(fill_id="F1", account="FZ01")], flattrade_auth("alice"))
+    sync_as([mk(fill_id="F1", account="FZ02")], flattrade_auth("bob"))
+    sync_as([], flattrade_auth("alice"))
+    sync_as([], flattrade_auth("bob"))
+    assert run_labels(env) == ["FZ01", "FZ02", "FZ01", "FZ02"]
+    assert ledger.get_identity("flattrade", "alice") == "FZ01"
+    assert ledger.get_identity("flattrade", "bob") == "FZ02"
+    assert sorted(r["account"] for r in rows(env)) == ["FZ01", "FZ02"]
+
+
+def test_two_actids_in_one_fetch_are_not_remembered(env):
+    sync_as([mk(fill_id="F1", account="FZ01"), mk(fill_id="F2", account="FZ02")], flattrade_auth())
+    assert ledger.get_identity("flattrade", "alice") is None
+    assert run_labels(env) == [""]
+
+
+def test_user_name_never_used_as_a_label_when_an_actid_is_reported(env):
+    auth = flattrade_auth("alice", user_id=None)
+    with (
+        patch("database.auth_db.get_auth_token_dbquery", return_value=auth),
+        patch("database.auth_db.get_auth_token", return_value="T"),
+        patch("utils.session.has_login_this_trading_session", return_value=True),
+        patch("broker.flattrade.api.order_api.get_trade_book", return_value=[fl_row("F1")]),
+        patch(
+            "broker.flattrade.mapping.order_data.get_oa_symbol",
+            side_effect=lambda sym, exch: {"SBIN-EQ": "SBIN"}.get(sym),
+        ),
+    ):
+        svc.sync_once("alice", now_fn)
+    assert rows(env)[0]["account"] == "ACT" and run_labels(env) == ["ACT"]
+    assert ledger.get_identity("flattrade", "alice") == "ACT"
+
+
+def test_flattrade_row_without_actid_or_uid_is_skipped_and_counted(env):
+    out = sync_flattrade([fl_row("F1"), fl_row("F2", actid=None)])
+    assert out["inserted"] == 1 and out["skipped"] == 1
+    assert runs(env)[0]["error"] == "unverifiable_skipped=1"
+    out = sync_flattrade([fl_row("F3", actid=None, uid="UIDX")])
+    assert out["inserted"] == 1 and {r["account"] for r in rows(env)} == {"ACT", "UIDX"}

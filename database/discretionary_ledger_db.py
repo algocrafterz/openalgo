@@ -11,6 +11,8 @@ Rules:
   mutable columns of ``ledger_fills`` are ``attribution_state`` and ``strategy``, and
   every change to them is mirrored by an append-only ``ledger_attribution_audit`` row.
 * Rows are never deleted.
+* ``ledger_account_identity`` maps an OpenAlgo login (broker, auth name) to the account id
+  the broker reports on its fills.
 * Inserts are idempotent on ``dedup_key`` (UNIQUE). With a broker fill id the key is
   ``broker|account|exchange|YYYY-MM-DD|order_id|fill_id`` (the exchange trade number may
   be unique only per instrument, so the order id is part of the key); without one it is ``broker|account|exchange|order_id|symbol|side|
@@ -30,6 +32,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     select,
     update,
 )
@@ -145,6 +148,95 @@ class LedgerAttributionAudit(Base):
     reason = Column(String(200), nullable=False, default="")
     source = Column(String(20), nullable=False, default="none")
     at = Column(DateTime, nullable=False, default=datetime.now)
+
+
+class LedgerAccountIdentity(Base):
+    """Canonical broker account of an OpenAlgo login, learnt from the broker's own fills.
+
+    One row per (broker, auth_name). ``account`` is the account id the broker reported
+    (e.g. the broker's account id field), never the OpenAlgo user name.
+    """
+
+    __tablename__ = "ledger_account_identity"
+
+    id = Column(Integer, primary_key=True)
+    broker = Column(String(40), nullable=False)
+    auth_name = Column(String(255), nullable=False)
+    account = Column(String(64), nullable=False)
+    first_seen = Column(DateTime, nullable=False, default=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint("broker", "auth_name", name="uq_ledger_account_identity_broker_auth"),
+    )
+
+
+def get_identity(broker: str, auth_name: str) -> str | None:
+    """Canonical account remembered for (broker, auth_name); None when unknown."""
+    try:
+        return db_session.execute(
+            select(LedgerAccountIdentity.account).where(
+                LedgerAccountIdentity.broker == broker,
+                LedgerAccountIdentity.auth_name == auth_name,
+            )
+        ).scalar()
+    finally:
+        db_session.remove()
+
+
+def auth_names_for_account(broker: str, account: str) -> list[str]:
+    """Auth names whose remembered canonical account on ``broker`` is ``account``."""
+    try:
+        rows = db_session.execute(
+            select(LedgerAccountIdentity.auth_name).where(
+                LedgerAccountIdentity.broker == broker,
+                LedgerAccountIdentity.account == account,
+            )
+        ).all()
+        return [r[0] for r in rows]
+    finally:
+        db_session.remove()
+
+
+def remember_identity(broker: str, auth_name: str, account: str) -> bool:
+    """Store or update the canonical account of (broker, auth_name). True when written."""
+    if not (broker and auth_name and account):
+        return False
+    with _write_lock:
+        try:
+            row = db_session.execute(
+                select(LedgerAccountIdentity).where(
+                    LedgerAccountIdentity.broker == broker,
+                    LedgerAccountIdentity.auth_name == auth_name,
+                )
+            ).scalar()
+            if row is not None and row.account == account:
+                return False
+            if row is None:
+                db_session.add(
+                    LedgerAccountIdentity(
+                        broker=broker,
+                        auth_name=auth_name,
+                        account=account,
+                        first_seen=datetime.now(),
+                    )
+                )
+            else:
+                logger.warning(
+                    "Discretionary ledger: canonical account of a login changed on broker %s",
+                    broker,
+                )
+                row.account = account
+                row.first_seen = datetime.now()
+            db_session.commit()
+            return True
+        except IntegrityError:
+            db_session.rollback()  # a concurrent writer stored it first
+            return False
+        except Exception:
+            db_session.rollback()
+            raise
+        finally:
+            db_session.remove()
 
 
 def init_discretionary_ledger_db() -> None:

@@ -1,7 +1,7 @@
 # Discretionary attribution: the coverage rule and what it means
 
 Source of truth: `services/discretionary_ledger_service.py` (`classify`, `get_coverage_anchor`,
-`is_covered`, `same_day_covered`, `attribute_unresolved`). This note describes what that code does today.
+`is_covered`, `same_day_covered`, `attribute_unresolved`, `resolve_account`). This note describes what that code does today.
 
 ## What is decided
 
@@ -134,6 +134,33 @@ discretionary figures.
 A tag can also arrive late or a pruned tag can disappear: `manual` rows are re-checked on every
 sync and may move to `strategy_tag`, `strategy_engine` or `ui_manual`, never back. If the
 strategy book failed to initialise at boot, untagged automated orders may be classed manual.
+
+## Account identity
+
+A ledger account label is always a broker account id, never the OpenAlgo user name.
+
+- A fill's account is the one the broker reports (Flattrade: `actid`, else `uid`). A
+  Flattrade row with neither is skipped and counted (`unverifiable_skipped`).
+- For a broker whose fills carry no account, the login's canonical account is used:
+  `ledger_account_identity` (broker, Auth name) -> account, else the Auth row's broker
+  `user_id`. With neither, the fill is skipped and counted.
+- When one fetch reports exactly one account, it is remembered in `ledger_account_identity`
+  for that (broker, Auth name). Two accounts in one fetch are stored as reported but not
+  remembered.
+- A sync run is labelled with the account of its fills when they share one, otherwise with
+  the canonical account, otherwise `""` (for example an empty first sync before any fill
+  was seen). `""` runs count for the coverage anchor and the same-day heartbeat (both ignore
+  accounts) and never produce a per-account warning, but a bad latest `""` run warns at
+  broker level (see Sync health below).
+- Reconcile finds the session of an account by the Auth row's `user_id`, then through
+  `ledger_account_identity`, then by the Auth name (all exact).
+- Sync health: besides the per-account "latest ledger sync for broker B account A ended S"
+  warning, the latest run of each broker over ALL labels (broker `""` is its own group)
+  warns "latest ledger sync for broker B (no account known) ended S" when S is in
+  partial / error / no_auth / broker_error and that very run has not already produced the
+  per-account warning. A later ok run clears it.
+- The new table is created by `init_discretionary_ledger_db` and by
+  `upgrade/migrate_discretionary_ledger.py` (create-only, idempotent).
 
 ## What is not collected
 

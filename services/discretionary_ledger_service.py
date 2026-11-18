@@ -124,7 +124,8 @@ price); ledgering those would double count, so the sync records status "no_fill_
 Each fill returned is a dict (see FILL_FIELDS) and is checked by validate_fill() before
 insertion; a fill that fails is skipped and counted with the broker's own skips:
 
-  account    str, optional ("" or missing -> the Auth row's user_id, then its name)
+  account    str, optional ("" or missing -> the canonical account, see below; none known ->
+             the fill is skipped and counted)
   order_id   str, optional ("" if unknown); used for attribution
   fill_id    str | None  broker execution id; None only if the broker has none (the dedup key
              then falls back to the order/symbol/side/qty/price/time tuple). The dedup key
@@ -147,9 +148,17 @@ run's error text. ``skipped_unmapped=N`` counts rows lost to the mapping layer (
 ``unverifiable_skipped=M`` counts the rest (missing broker data, contract violations). When
 N > 0 the run status is "partial" (not "ok") and one warning with the counts is logged.
 
-Account label: the account of the fills (broker-supplied, else the Auth row's user_id, then
-name). The sync-run record uses the same label as ledger_fills when the fetch returned fills
-of one account; with no fills it uses the fallback (Auth user_id, then name).
+Account label (canonical account identity): the account of a fill is the one the broker
+reports; a fill without one gets the login's canonical account (resolve_account: the account
+remembered in ledger_account_identity for (broker, Auth name), else the Auth row's broker
+user_id); with neither the fill is skipped and counted. The OpenAlgo user name is never used
+as an account label. When a fetch's fills report exactly one account, it is remembered as
+the login's canonical account (remember_account). The sync-run record uses the same label as
+ledger_fills when the fetch returned fills of one account; otherwise the canonical account,
+or "" when none is known yet (an empty first sync). Runs with account "" are
+account-agnostic: they count for the coverage anchor and same-day heartbeats (which ignore
+accounts anyway) but never yield a per-account "latest sync bad" warning; the pnl service instead warns when the
+latest run of a broker (any label) is bad.
 """
 
 import importlib
@@ -202,6 +211,10 @@ class FillBatch(list):
 
     skipped: int = 0  # all skipped rows (unverifiable + unmapped)
     unmapped: int = 0  # subset lost because symbol/product could not be mapped
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.reported_accounts: set[str] = set()  # accounts the broker itself reported
 
 
 def manual_grace_minutes() -> int:
@@ -313,9 +326,12 @@ def validate_fill(fill, broker: str, default_account: str = "") -> dict | None:
         return None
     if not _is_number(fill.get("qty")) or not _is_number(fill.get("price")):
         return None
+    account = account or (default_account or "").strip()
+    if not account:
+        return None  # no broker account and no canonical one: never guess a label
     return {
         "broker": broker,
-        "account": account or default_account,
+        "account": account,
         "order_id": order_id,
         "fill_id": fill_id,
         "symbol": required_text["symbol"],
@@ -385,7 +401,7 @@ def fetch_fills(broker: str, auth_token: str, auth_obj, reader=None) -> FillBatc
         raise NoPerFillDataError(
             f"broker {broker or '?'} has no per-fill reader (map_trade_fills); not ledgered"
         )
-    default_account = _fallback_account(auth_obj)
+    default_account = resolve_account(broker, getattr(auth_obj, "name", ""), auth_obj)
     raw_response = reader.get_trade_book(auth_token)
     try:
         mapped, skipped = reader.map_trade_fills(raw_response, default_account)
@@ -402,11 +418,40 @@ def fetch_fills(broker: str, auth_token: str, auth_obj, reader=None) -> FillBatc
             fills.skipped += 1
         else:
             fills.append(clean)
+            reported = item.get("account")
+            if isinstance(reported, str) and reported.strip():
+                fills.reported_accounts.add(reported.strip())
     return fills
 
 
-def _fallback_account(auth_obj) -> str:
-    return (getattr(auth_obj, "user_id", None) or getattr(auth_obj, "name", "")) or ""
+# ---------------------------------------------------------------- account identity
+
+
+def resolve_account(broker: str, user: str, auth_obj) -> str:
+    """Canonical account label of an OpenAlgo login; "" when none is known.
+
+    Order: the account remembered in ledger_account_identity (learnt from the broker's own
+    fills), else the Auth row's broker user_id, else "". The OpenAlgo user name is never
+    used as an account label.
+    """
+    if broker and user:
+        try:
+            known = ledger.get_identity(broker, user)
+        except Exception as e:
+            logger.warning("Could not read ledger account identity: %s", type(e).__name__)
+            known = None
+        if known:
+            return known
+    return (getattr(auth_obj, "user_id", None) or "").strip()
+
+
+def remember_account(broker: str, user: str, account: str) -> bool:
+    """Remember ``account`` as the canonical account of (broker, user). Never raises."""
+    try:
+        return ledger.remember_identity(broker, user, account)
+    except Exception as e:
+        logger.warning("Could not store ledger account identity: %s", type(e).__name__)
+        return False
 
 
 # ---------------------------------------------------------------- dedup
@@ -805,7 +850,7 @@ def sync_once(user: str, now_fn: Callable[[], datetime] = now_ist) -> dict:
     """Sync one OpenAlgo user's broker account. Never raises; returns the run summary."""
     started = now_fn()
     broker = ""
-    account = user or ""
+    account = ""  # never the OpenAlgo user name (see resolve_account)
     token = None
     try:
         from database.auth_db import get_auth_token, get_auth_token_dbquery
@@ -820,8 +865,7 @@ def sync_once(user: str, now_fn: Callable[[], datetime] = now_ist) -> dict:
             name=auth_obj.name, user_id=auth_obj.user_id, broker=auth_obj.broker
         )
         broker = (auth_obj.broker or "").strip().lower()
-        fallback = _fallback_account(auth_obj) or user
-        account = fallback
+        account = resolve_account(broker, user, auth_obj)
         reader = load_broker_reader(broker)
         if reader is not None and in_skip_window(started, reader.skip_window):
             _record(broker, account, started, "skipped_window")
@@ -865,6 +909,11 @@ def sync_once(user: str, now_fn: Callable[[], datetime] = now_ist) -> dict:
                 unmapped,
                 unverifiable,
             )
+        reported = getattr(fills, "reported_accounts", None)
+        if reported is None:  # a plain list: every account came from the broker
+            reported = {f["account"] for f in fills if f.get("account")}
+        if len(reported) == 1:
+            remember_account(broker, user, next(iter(reported)))
         accounts = {f["account"] for f in fills}
         if len(accounts) == 1:
             account = next(iter(accounts))  # run record and ledger rows use one label

@@ -1381,3 +1381,81 @@ def test_sync_health_makes_no_broker_call(env):
     env.fill("BUY", 10, 100, d(17, 10, 0))
     pnl.get_summary(with_quotes=False)
     assert env.quote_calls == [] and env.positionbook_calls == 0
+
+
+# ---------------------------------------------------------------- canonical account identity
+
+
+def test_reconcile_session_lookup_through_the_identity_table(env, monkeypatch):
+    # Flattrade: Auth.user_id is NULL, the fills carry the broker account id
+    monkeypatch.setattr(pnl, "_auth_rows", lambda broker: [("alice", None), ("bob", None)])
+    monkeypatch.setattr(pnl, "_tokens_for", lambda name: (f"tok-{name}", "feed"))
+    assert pnl._default_account_auth("flattrade", "FZ74") is None
+    ledger.remember_identity("flattrade", "alice", "FZ74")
+    assert pnl._default_account_auth("flattrade", "FZ74") == ("tok-alice", "feed")
+    assert pnl._default_account_auth("flattrade", "FZ75") is None
+
+
+def test_identity_of_another_broker_does_not_match(env, monkeypatch):
+    monkeypatch.setattr(pnl, "_auth_rows", lambda broker: [("alice", None)])
+    monkeypatch.setattr(pnl, "_tokens_for", lambda name: (f"tok-{name}", "feed"))
+    ledger.remember_identity("zerodha", "alice", "FZ74")
+    assert pnl._default_account_auth("flattrade", "FZ74") is None
+
+
+def _latest_warnings(out):
+    return [w for w in out["warnings"] if w.startswith("latest ledger sync")]
+
+
+def test_account_less_failed_runs_warn_at_broker_level(env):
+    _run(env, "ok", d(17, 9, 30), account="FZ74")
+    _run(env, "no_auth", d(17, 10, 30), account="")
+    _run(env, "broker_error", d(17, 10, 45), broker="zerodha", account="")
+    out = pnl.get_summary(with_quotes=False)
+    bad = _latest_warnings(out)
+    assert sorted(bad) == [
+        "latest ledger sync for broker flattrade (no account known) ended no_auth at "
+        "2026-11-17 10:30.",
+        "latest ledger sync for broker zerodha (no account known) ended broker_error at "
+        "2026-11-17 10:45.",
+    ]
+    assert out["sync_health"]["runs_by_day"]["2026-11-17"] == {
+        "ok": 1,
+        "no_auth": 1,
+        "broker_error": 1,
+    }
+
+
+def test_account_less_error_with_broker_less_label_warns_globally(env):
+    _run(env, "ok", d(17, 9, 30), account="FZ74")
+    _run(env, "no_auth", d(17, 10, 30), broker="", account="")  # early no_auth path
+    bad = _latest_warnings(pnl.get_summary(with_quotes=False))
+    assert bad == [
+        "latest ledger sync for broker ? (no account known) ended no_auth at 2026-11-17 10:30."
+    ]
+
+
+def test_ok_run_after_an_account_less_failure_clears_the_warning(env):
+    _run(env, "no_auth", d(17, 9, 30), account="")
+    assert len(_latest_warnings(pnl.get_summary(with_quotes=False))) == 1
+    _run(env, "ok", d(17, 10, 0), account="")
+    assert _latest_warnings(pnl.get_summary(with_quotes=False)) == []
+    _run(env, "error", d(17, 10, 30), account="")
+    assert len(_latest_warnings(pnl.get_summary(with_quotes=False))) == 1
+    _run(env, "ok", d(17, 11, 0), account="FZ74")  # a later run of the broker, any label
+    assert _latest_warnings(pnl.get_summary(with_quotes=False)) == []
+
+
+def test_no_duplicate_when_the_account_run_already_warns(env):
+    _run(env, "no_auth", d(17, 9, 30), account="")
+    _run(env, "error", d(17, 11, 0), account="FZ74")
+    bad = _latest_warnings(pnl.get_summary(with_quotes=False))
+    assert len(bad) == 1 and "account FZ74 ended error" in bad[0]
+
+
+def test_account_less_failure_after_an_account_run_warns_once_at_broker_level(env):
+    _run(env, "error", d(17, 9, 30), account="FZ74")  # superseded by the later run below
+    _run(env, "ok", d(17, 10, 0), account="FZ74")
+    _run(env, "no_auth", d(17, 11, 0), account="")
+    bad = _latest_warnings(pnl.get_summary(with_quotes=False))
+    assert len(bad) == 1 and "(no account known) ended no_auth" in bad[0]

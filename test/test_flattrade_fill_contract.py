@@ -111,13 +111,14 @@ def test_prices_stay_unrounded_and_input_is_not_mutated():
     assert rows == before
 
 
-def test_account_is_actid_then_uid_then_default():
+def test_account_is_actid_then_uid_never_the_default():
     r = dict(LIVE_ROWS[0])
     assert od.map_trade_fills([r], "D")[0][0]["account"] == "ACCT01"
     r.pop("actid")
     assert od.map_trade_fills([r], "D")[0][0]["account"] == "ACCT01"  # uid
     r.pop("uid")
-    assert od.map_trade_fills([r], "D")[0][0]["account"] == "D"
+    fills, skipped = od.map_trade_fills([r], "D")  # no account: skipped, never guessed
+    assert fills == [] and skipped == 1 and skipped.missing_fields == 1
 
 
 def test_declares_skip_window_and_error_markers():

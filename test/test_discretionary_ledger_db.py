@@ -158,3 +158,61 @@ def test_record_sync_run(env):
         tag_min_created_at=None,
     )
     assert _count(env, "ledger_sync_runs") == 1
+
+
+# ---------------------------------------------------------------- account identity
+
+
+def test_identity_table_is_unique_per_broker_and_login(env):
+    assert ledger.remember_identity("flattrade", "alice", "FZ01") is True
+    assert ledger.remember_identity("flattrade", "alice", "FZ01") is False  # unchanged
+    assert ledger.remember_identity("zerodha", "alice", "ZR01") is True
+    assert ledger.get_identity("flattrade", "alice") == "FZ01"
+    assert ledger.auth_names_for_account("flattrade", "FZ01") == ["alice"]
+    assert ledger.remember_identity("flattrade", "alice", "") is False
+    with pytest.raises(IntegrityError):
+        with env.begin() as c:
+            c.execute(
+                text(
+                    "INSERT INTO ledger_account_identity (broker, auth_name, account, first_seen)"
+                    " VALUES ('flattrade', 'alice', 'X', '2026-11-18 09:00:00')"
+                )
+            )
+    assert _count(env, "ledger_account_identity") == 2
+
+
+def _schema(path):
+    import sqlite3
+
+    con = sqlite3.connect(path)
+    try:
+        return sorted(
+            (r[0], r[1], r[2] or "")
+            for r in con.execute("SELECT type, name, sql FROM sqlite_master")
+        )
+    finally:
+        con.close()
+
+
+def test_ledger_migration_creates_identity_table_and_is_idempotent(tmp_path, monkeypatch):
+    import importlib.util
+    import pathlib
+
+    path = pathlib.Path(ledger.__file__).resolve().parent.parent / "upgrade"
+    monkeypatch.syspath_prepend(str(path))  # the script imports its sibling _pragmas
+    spec = importlib.util.spec_from_file_location(
+        "migrate_ledger", path / "migrate_discretionary_ledger.py"
+    )
+    mig = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mig)
+    db = str(tmp_path / "m.db")
+    assert mig.run(db) == 0
+    first = _schema(db)
+    assert mig.run(db) == 0
+    assert _schema(db) == first
+    assert "ledger_account_identity" in {name for _t, name, _s in first}
+    # the ORM create_all on the migrated DB adds nothing either
+    eng = create_engine(f"sqlite:///{db}")
+    ledger.Base.metadata.create_all(eng)
+    eng.dispose()
+    assert _schema(db) == first

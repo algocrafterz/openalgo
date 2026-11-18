@@ -82,8 +82,9 @@ Sync health
 ``get_summary`` reads ``ledger_sync_runs`` (read-only) and adds ``sync_health`` plus warnings:
 the last successful (ok/partial) sync, weekdays since the first sync with no successful run
 (fills of such a day may be lost: the broker TradeBook is a current-day book), and the latest
-run per broker/account when it ended partial/error/no_auth/broker_error. A failure to read
-the runs or the calendar never breaks the summary.
+run per broker/account when it ended partial/error/no_auth/broker_error. Runs with account ""
+(no canonical account known yet) count for the successful-sync checks but never produce a
+per-account warning. A failure to read the runs or the calendar never breaks the summary.
 
 Known limits (documented, not fixed)
 ------------------------------------
@@ -554,17 +555,29 @@ def _default_auth(broker: str, account: str | None = None):
     return None
 
 
+def _identity_names(broker: str, account: str) -> list[str]:
+    """Auth names whose canonical ledger account on ``broker`` is ``account``; [] on error."""
+    try:
+        return ledger.auth_names_for_account(broker, account)
+    except Exception as e:
+        logger.warning("Discretionary identity lookup failed: %s", type(e).__name__)
+        return []
+
+
 def _default_account_auth(broker: str, account: str):
     """(auth_token, feed_token) of exactly ``account`` on ``broker``, else None.
 
     For account-specific reads (the PositionBook): no fallback to another user of the broker.
-    ``account`` must equal the Auth row's broker user_id (preferred) or name, exactly.
+    ``account`` must equal, exactly, the Auth row's broker user_id (preferred), else the
+    canonical account remembered for that login in ledger_account_identity, else its name.
     """
     try:
         rows = _auth_rows(broker) if account else []
-        # exact broker user_id first, then exact name; case-sensitive, nothing stripped
+        known = set(_identity_names(broker, account)) if rows else set()
+        # exact broker user_id first, then identity, then exact name; case-sensitive
         for matches in (
             [r for r in rows if r[1] == account],
+            [r for r in rows if r[0] in known],
             [r for r in rows if r[0] == account],
         ):
             for name, _uid in matches:
@@ -844,11 +857,25 @@ def _sync_health(now: datetime, period_start) -> tuple[dict, list[str]]:
 
     latest: dict[tuple, tuple] = {}
     for r in runs:
-        latest[(r[0], r[1])] = r
+        if r[1]:  # account "" (no account known yet) is account-agnostic: no per-account warning
+            latest[(r[0], r[1])] = r
     for (broker, account), r in sorted(latest.items()):
         if r[4] in SYNC_BAD_LATEST:
             warnings.append(
                 f"latest ledger sync for broker {broker or '?'} account {account or '?'} "
+                f"ended {r[4]} at {r[2].strftime('%Y-%m-%d %H:%M')}."
+            )
+    # Runs labelled account "" (no_auth, broker_error, error, an early no_auth with broker "")
+    # never enter the per-account map. The latest run of each broker across ALL labels
+    # (broker "" is its own group) warns on its own when it is bad and the per-account loop
+    # above has not already warned about that very run. A later ok run clears it.
+    latest_broker: dict[str, tuple] = {}
+    for r in runs:
+        latest_broker[r[0]] = r
+    for broker, r in sorted(latest_broker.items()):
+        if r[4] in SYNC_BAD_LATEST and not (r[1] and latest.get((r[0], r[1])) is r):
+            warnings.append(
+                f"latest ledger sync for broker {broker or '?'} (no account known) "
                 f"ended {r[4]} at {r[2].strftime('%Y-%m-%d %H:%M')}."
             )
     return health, warnings

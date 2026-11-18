@@ -670,7 +670,9 @@ def map_trade_fills(raw_response, default_account=""):
     A row is skipped and counted when flid, flqty (>0), flprc (>0) or a valid fltm is missing,
     when the side, exchange or symbol is unusable, when the symbol has no OpenAlgo mapping
     (never stored under the raw broker symbol) or the product code has no OpenAlgo name.
-    ``account`` is actid, else uid, else ``default_account``. Prices stay unrounded floats.
+    ``account`` is actid, else uid; a row with neither is skipped and counted under
+    missing_fields (``default_account`` is accepted for the contract but never used: the
+    account is never guessed). Prices stay unrounded floats.
     """
     import hashlib
 
@@ -686,6 +688,7 @@ def map_trade_fills(raw_response, default_account=""):
         price = _fill_number(row.get("flprc"))
         exchange = str(row.get("exch", "") or "").strip()
         broker_symbol = str(row.get("tsym", "") or "").strip()
+        account = str(row.get("actid") or row.get("uid") or "").strip()
         if (
             side is None
             or not fill_id
@@ -696,6 +699,7 @@ def map_trade_fills(raw_response, default_account=""):
             or price <= 0
             or not exchange
             or not broker_symbol
+            or not account
         ):
             missing_fields += 1
             continue
@@ -712,7 +716,7 @@ def map_trade_fills(raw_response, default_account=""):
         ).hexdigest()
         fills.append(
             {
-                "account": str(row.get("actid") or row.get("uid") or default_account or "").strip(),
+                "account": account,
                 "order_id": str(row.get("norenordno", "") or "").strip(),
                 "fill_id": fill_id,
                 "symbol": symbol,
