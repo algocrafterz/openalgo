@@ -181,6 +181,26 @@ def test_identity_table_is_unique_per_broker_and_login(env):
     assert _count(env, "ledger_account_identity") == 2
 
 
+def test_relabel_sync_runs_touches_runs_and_identity_only(env):
+    for acct in ("alice", "alice", "FZ01"):
+        ledger.record_sync_run(
+            broker="flattrade",
+            account=acct,
+            started_at=datetime(2026, 11, 18, 9, 0),
+            status="ok",
+            fetched=0,
+            inserted=0,
+        )
+    ledger.insert_fills([_fill(account="alice")])
+    assert ledger.relabel_sync_runs("flattrade", "alice", "FZ01") == 2
+    with env.connect() as c:
+        labels = [r[0] for r in c.execute(text("SELECT account FROM ledger_sync_runs"))]
+        fill_acct = c.execute(text("SELECT account FROM ledger_fills")).scalar()
+    assert labels == ["FZ01"] * 3 and fill_acct == "alice"
+    assert ledger.get_identity("flattrade", "alice") == "FZ01"
+    assert ledger.relabel_sync_runs("flattrade", "alice", "FZ01") == 0
+
+
 def _schema(path):
     import sqlite3
 

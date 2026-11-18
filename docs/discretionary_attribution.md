@@ -1,7 +1,8 @@
 # Discretionary attribution: the coverage rule and what it means
 
 Source of truth: `services/discretionary_ledger_service.py` (`classify`, `get_coverage_anchor`,
-`is_covered`, `same_day_covered`, `attribute_unresolved`, `resolve_account`). This note describes what that code does today.
+`is_covered`, `same_day_covered`, `attribute_unresolved`, `resolve_account`,
+`normalize_run_accounts`). This note describes what that code does today.
 
 ## What is decided
 
@@ -87,6 +88,20 @@ was in place and the ledger was collecting.
   a boot in the 05:00 to 06:00 skip window records `skipped_window`, which is not a
   heartbeat). Do not relax G or the 15-minute lead to compensate.
 
+## Safe production repair procedure
+
+1. Stop the app (nothing may write the DB during the repair).
+2. Back up the DB (the CLI also writes its own `<db>.bak-<YYYYmmdd-HHMMSS>` before writing).
+3. Dry run: `uv run repair_discretionary_accounts.py --db <path>`; read the items. Brokers
+   reported `ambiguous_login` or `ambiguous` are left alone.
+4. Apply: `uv run repair_discretionary_accounts.py --db <path> --apply --yes`. `--apply`
+   alone only prints what would change and exits non-zero.
+5. Re-run the dry run: expect `runs_reported=0`.
+6. Verify checksums: `ledger_fills` must be identical before and after (for example a hash
+   of `SELECT * FROM ledger_fills ORDER BY id` taken from the backup and from the DB).
+7. Roll back if needed: stop the app and copy the backup over the DB (the CLI prints the
+   exact command).
+
 ## What follows from it
 
 **Fills before coverage are unresolved, not manual.** Nothing can show that a strategy did not
@@ -154,6 +169,17 @@ A ledger account label is always a broker account id, never the OpenAlgo user na
   broker level (see Sync health below).
 - Reconcile finds the session of an account by the Auth row's `user_id`, then through
   `ledger_account_identity`, then by the Auth name (all exact).
+- Older runs labelled with a user name are repaired by
+  `upgrade/repair_discretionary_accounts.py --db <path>` (dry run by default; writing needs
+  BOTH `--apply` and `--yes`; output masked). A run qualifies when its account equals an Auth
+  name (or an identity auth name), its broker has exactly ONE login (distinct Auth names of
+  that broker plus its identity rows) and that login is the run label, and the broker has
+  exactly one other account in `ledger_fills`. The runs of that broker item are relabelled in
+  ONE transaction per broker item (not one transaction for the whole repair) and the
+  identity row is stored in the same transaction. A broker with two or more logins is
+  skipped and reported as `ambiguous_login` (count and reason in the output); a broker with
+  two or more fill accounts is skipped (`ambiguous`), and so is a name that the broker itself
+  reports as a fill account. `ledger_fills` is never touched; a second run finds nothing.
 - Sync health: besides the per-account "latest ledger sync for broker B account A ended S"
   warning, the latest run of each broker over ALL labels (broker `""` is its own group)
   warns "latest ledger sync for broker B (no account known) ended S" when S is in

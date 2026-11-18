@@ -83,6 +83,10 @@ Coverage rule: implications (see docs/discretionary_attribution.md for the long 
   at 09:15, the first heartbeat after T = 09:00): a run finished before T exists only after a
   boot before T (boot catch-up; not inside the 05:00-06:00 skip window, which records
   skipped_window, not a heartbeat). Do not relax G or the 15-minute lead to compensate.
+* Run-account repair (normalize_run_accounts): a broker with two or more logins (distinct
+  Auth names of that broker plus its identity rows) is never repaired automatically; it is
+  reported as ambiguous_login. See upgrade/repair_discretionary_accounts.py for the guarded
+  CLI (needs --apply and --yes, writes a backup first).
 * Known ways an automated order is still counted as discretionary (documented, not fixed):
   broker auto square-off of an automated position (no OpenAlgo tag, no engine row ->
   manual); the UI "close all" on an automated position (label in UI_ORDER_LABELS ->
@@ -158,7 +162,9 @@ ledger_fills when the fetch returned fills of one account; otherwise the canonic
 or "" when none is known yet (an empty first sync). Runs with account "" are
 account-agnostic: they count for the coverage anchor and same-day heartbeats (which ignore
 accounts anyway) but never yield a per-account "latest sync bad" warning; the pnl service instead warns when the
-latest run of a broker (any label) is bad.
+latest run of a broker (any label) is bad. Older runs labelled
+with a user name are relabelled by normalize_run_accounts (dry run by default;
+upgrade/repair_discretionary_accounts.py), which never touches ledger_fills.
 """
 
 import importlib
@@ -972,3 +978,137 @@ def sync_all(now_fn: Callable[[], datetime] = now_ist) -> list[dict]:
             logger.error("Discretionary ledger sync crashed: %s", type(e).__name__)
             results.append({"status": "error"})
     return results
+
+
+# ---------------------------------------------------------------- account label repair
+
+
+def _all_auth_logins() -> dict[str, str]:
+    """{Auth name: broker} for every Auth row."""
+    from database.auth_db import Auth, db_session
+
+    try:
+        return {a.name: (a.broker or "") for a in Auth.query.all() if a.name}
+    finally:
+        db_session.remove()
+
+
+def normalize_run_accounts(
+    dry_run: bool = True, auth_names: dict[str, str] | set[str] | None = None
+) -> dict:
+    """Relabel ledger_sync_runs whose account is an OpenAlgo user name (repair).
+
+    ``auth_names`` maps each Auth name to its broker (default: every Auth row). A plain set
+    of names is accepted for callers without broker data: every name then counts as a login
+    of every broker, which makes any broker with a second name ambiguous (the safe side).
+
+    Eligibility is per broker AND per login. A run is a candidate when its account equals an
+    Auth name or an auth_name in ledger_account_identity. The broker is repaired only when it
+    has exactly ONE distinct login (Auth names of that broker plus its identity rows) and the
+    run label equals that name; otherwise the item is reported as ``ambiguous_login`` and
+    nothing is written (two logins on one broker cannot be told apart from fills alone).
+    The broker must also have exactly one distinct non-name, non-empty account in
+    ledger_fills: that account becomes the label and the (broker, name) -> account identity
+    row is stored; two or more such accounts give ``ambiguous``. ledger_fills is never
+    touched. Idempotent. With ``dry_run`` nothing is written. Each broker item is written in
+    its own transaction (relabel_sync_runs). Returns {"dry_run", "items", "reported",
+    "written", "ambiguous_login"} where ``ambiguous_login`` is the number of such items.
+    """
+    from sqlalchemy import distinct, func, select
+
+    if auth_names is None:
+        auth_map = _all_auth_logins()
+    elif isinstance(auth_names, dict):
+        auth_map = dict(auth_names)
+    else:
+        auth_map = dict.fromkeys(auth_names)  # None: belongs to every broker
+    names = set(auth_map)
+    identity: list[tuple] = []
+    try:
+        try:
+            identity = [
+                (r[0], r[1])
+                for r in ledger.db_session.execute(
+                    select(
+                        ledger.LedgerAccountIdentity.broker,
+                        ledger.LedgerAccountIdentity.auth_name,
+                    )
+                )
+            ]
+            names |= {n for _b, n in identity}
+        except Exception as e:  # table not created yet (dry run on an unmigrated DB)
+            ledger.db_session.rollback()
+            logger.warning("Ledger account identity unreadable: %s", type(e).__name__)
+        name_runs = (
+            ledger.db_session.execute(
+                select(
+                    ledger.LedgerSyncRun.broker,
+                    ledger.LedgerSyncRun.account,
+                    func.count(ledger.LedgerSyncRun.id),
+                )
+                .where(ledger.LedgerSyncRun.account.in_(sorted(names)))
+                .group_by(ledger.LedgerSyncRun.broker, ledger.LedgerSyncRun.account)
+            ).all()
+            if names
+            else []
+        )
+        all_fill_accounts: dict[str, set] = {}
+        for broker in {r[0] for r in name_runs}:
+            all_fill_accounts[broker] = {
+                r[0]
+                for r in ledger.db_session.execute(
+                    select(distinct(ledger.LedgerFill.account)).where(
+                        ledger.LedgerFill.broker == broker
+                    )
+                )
+                if r[0]
+            }
+    finally:
+        ledger.db_session.remove()
+
+    def logins_of(broker: str) -> set[str]:
+        found = {n for n, b in auth_map.items() if b is None or b == broker}
+        return found | {n for b, n in identity if b == broker}
+
+    items = []
+    for broker, name, count in sorted(name_runs):
+        every = all_fill_accounts.get(broker, set())
+        accounts = every - names
+        item = {"broker": broker, "from": name, "to": None, "runs": int(count), "status": ""}
+        logins = logins_of(broker)
+        if logins != {name}:
+            item["status"] = "ambiguous_login"
+            logger.warning(
+                "Ledger account repair: broker %s has %d logins (or the run label is not its "
+                "login); runs left unchanged",
+                broker,
+                len(logins),
+            )
+        elif name in every:
+            item["status"] = "is_fill_account"  # the broker reports it: a real account id
+        elif len(accounts) == 1:
+            item["to"] = next(iter(accounts))
+            item["status"] = "relabel"
+        elif accounts:
+            item["status"] = "ambiguous"
+            logger.warning(
+                "Ledger account repair: broker %s has %d fill accounts; runs left unchanged",
+                broker,
+                len(accounts),
+            )
+        else:
+            item["status"] = "no_fill_account"
+        items.append(item)
+    written = 0
+    if not dry_run:
+        for item in items:
+            if item["status"] == "relabel":
+                written += ledger.relabel_sync_runs(item["broker"], item["from"], item["to"])
+    reported = sum(i["runs"] for i in items if i["status"] == "relabel")
+    return {
+        "dry_run": dry_run,
+        "items": items,
+        "reported": reported,
+        "written": written,
+        "ambiguous_login": sum(1 for i in items if i["status"] == "ambiguous_login"),
+    }

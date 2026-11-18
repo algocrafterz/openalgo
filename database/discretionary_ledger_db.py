@@ -12,7 +12,8 @@ Rules:
   every change to them is mirrored by an append-only ``ledger_attribution_audit`` row.
 * Rows are never deleted.
 * ``ledger_account_identity`` maps an OpenAlgo login (broker, auth name) to the account id
-  the broker reports on its fills.
+  the broker reports on its fills; the only rewrite of ``ledger_sync_runs.account`` is the
+  explicit repair (``relabel_sync_runs``) that replaces a user-name label with that id.
 * Inserts are idempotent on ``dedup_key`` (UNIQUE). With a broker fill id the key is
   ``broker|account|exchange|YYYY-MM-DD|order_id|fill_id`` (the exchange trade number may
   be unique only per instrument, so the order id is part of the key); without one it is ``broker|account|exchange|order_id|symbol|side|
@@ -232,6 +233,44 @@ def remember_identity(broker: str, auth_name: str, account: str) -> bool:
         except IntegrityError:
             db_session.rollback()  # a concurrent writer stored it first
             return False
+        except Exception:
+            db_session.rollback()
+            raise
+        finally:
+            db_session.remove()
+
+
+def relabel_sync_runs(broker: str, auth_name: str, account: str) -> int:
+    """Repair: runs of ``broker`` labelled ``auth_name`` get ``account``; identity row stored.
+
+    One transaction. Never touches ledger_fills. Returns the number of runs relabelled.
+    """
+    if not (broker and auth_name and account) or auth_name == account:
+        return 0
+    with _write_lock:
+        try:
+            res = db_session.execute(
+                update(LedgerSyncRun)
+                .where(LedgerSyncRun.broker == broker, LedgerSyncRun.account == auth_name)
+                .values(account=account)
+            )
+            row = db_session.execute(
+                select(LedgerAccountIdentity).where(
+                    LedgerAccountIdentity.broker == broker,
+                    LedgerAccountIdentity.auth_name == auth_name,
+                )
+            ).scalar()
+            if row is None:
+                db_session.add(
+                    LedgerAccountIdentity(
+                        broker=broker,
+                        auth_name=auth_name,
+                        account=account,
+                        first_seen=datetime.now(),
+                    )
+                )
+            db_session.commit()
+            return int(res.rowcount or 0)
         except Exception:
             db_session.rollback()
             raise

@@ -1761,3 +1761,157 @@ def test_flattrade_row_without_actid_or_uid_is_skipped_and_counted(env):
     assert runs(env)[0]["error"] == "unverifiable_skipped=1"
     out = sync_flattrade([fl_row("F3", actid=None, uid="UIDX")])
     assert out["inserted"] == 1 and {r["account"] for r in rows(env)} == {"ACT", "UIDX"}
+
+
+def test_dedup_unaffected_by_run_label_change(env):
+    auth = flattrade_auth()
+    sync_as([], auth)  # label ""
+    assert sync_as([mk(fill_id="F1", account="FZ01")], auth)["inserted"] == 1
+    assert sync_as([mk(fill_id="F1", account="FZ01")], auth)["inserted"] == 0
+    with env.engine.begin() as c:
+        c.execute(text("UPDATE ledger_sync_runs SET account='alice'"))
+    svc.normalize_run_accounts(dry_run=False, auth_names=AUTH_ALICE)
+    assert sync_as([mk(fill_id="F1", account="FZ01")], auth)["inserted"] == 0
+    assert len(rows(env)) == 1
+
+
+AUTH_ALICE = {"alice": "flattrade"}
+
+
+def _forget_identity(env):
+    """Legacy state: the fills exist but no identity row was ever stored."""
+    with env.engine.begin() as c:
+        c.execute(text("DELETE FROM ledger_account_identity"))
+
+
+def _name_labelled_runs(env, n=3, name="alice", broker="flattrade"):
+    for i in range(n):
+        add_run(env, t18(8 + i, 30), account=name, broker=broker)
+
+
+def test_repair_dry_run_counts_three_runs_and_writes_nothing(env):
+    _name_labelled_runs(env)
+    sync_as([mk(fill_id="F1", account="FZ74")], flattrade_auth("other"))
+    _forget_identity(env)
+    before = run_labels(env)
+    out = svc.normalize_run_accounts(dry_run=True, auth_names=AUTH_ALICE)
+    assert out["reported"] == 3 and out["written"] == 0
+    assert out["items"] == [
+        {"broker": "flattrade", "from": "alice", "to": "FZ74", "runs": 3, "status": "relabel"}
+    ]
+    assert run_labels(env) == before
+    assert ledger.get_identity("flattrade", "alice") is None
+
+
+def test_repair_apply_relabels_then_repeat_finds_nothing(env):
+    _name_labelled_runs(env)
+    sync_as([mk(fill_id="F1", account="FZ74")], flattrade_auth("other"))
+    _forget_identity(env)
+    fills_before = rows(env)
+    out = svc.normalize_run_accounts(dry_run=False, auth_names=AUTH_ALICE)
+    assert out["written"] == 3
+    assert run_labels(env) == ["FZ74"] * 4
+    assert ledger.get_identity("flattrade", "alice") == "FZ74"
+    assert rows(env) == fills_before  # ledger_fills untouched
+    again = svc.normalize_run_accounts(dry_run=False, auth_names=AUTH_ALICE)
+    assert (again["reported"], again["written"], again["items"]) == (0, 0, [])
+
+
+def test_repair_skips_an_ambiguous_broker(env):
+    _name_labelled_runs(env)
+    sync_as(
+        [mk(fill_id="F1", account="FZ01"), mk(fill_id="F2", account="FZ02")],
+        flattrade_auth("other"),
+    )
+    out = svc.normalize_run_accounts(dry_run=False, auth_names=AUTH_ALICE)
+    assert [i["status"] for i in out["items"]] == ["ambiguous"]
+    assert (out["reported"], out["written"]) == (0, 0)
+    assert run_labels(env).count("alice") == 3
+
+
+def test_repair_skips_a_name_the_broker_reports_as_an_account(env):
+    _name_labelled_runs(env, name="FZ01")
+    sync_as(
+        [mk(fill_id="F1", account="FZ01"), mk(fill_id="F2", account="FZ02")],
+        flattrade_auth("other"),
+    )
+    out = svc.normalize_run_accounts(dry_run=False, auth_names={"FZ01": "flattrade"})
+    assert [i["status"] for i in out["items"]] == ["is_fill_account"]
+    assert out["written"] == 0
+
+
+def test_coverage_anchor_unaffected_by_relabel(env):
+    _name_labelled_runs(env)
+    sync_as([mk(fill_id="F1", account="FZ74")], flattrade_auth("other"))
+    _forget_identity(env)
+    before = svc.get_coverage_anchor(None)
+    svc.normalize_run_accounts(dry_run=False, auth_names=AUTH_ALICE)
+    assert svc.get_coverage_anchor(None) == before == NOW
+
+
+def test_repair_cli_dry_run_then_apply(tmp_path, capsys, monkeypatch):
+    import importlib.util
+
+    db = tmp_path / "copy.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE auth (id INTEGER PRIMARY KEY, name TEXT, broker TEXT)")
+    con.execute("INSERT INTO auth (name, broker) VALUES ('alice', 'flattrade')")
+    con.commit()
+    con.close()
+    eng = create_engine(f"sqlite:///{db}")
+    ledger.Base.metadata.tables["ledger_sync_runs"].create(eng)
+    ledger.Base.metadata.tables["ledger_fills"].create(eng)
+    eng.dispose()
+    con = sqlite3.connect(db)
+    for i in range(3):
+        con.execute(
+            "INSERT INTO ledger_sync_runs (broker, account, started_at, status, fetched, inserted)"
+            " VALUES ('flattrade', 'alice', ?, 'ok', 0, 0)",
+            (f"2026-11-18 08:3{i}:00",),
+        )
+    con.execute(
+        "INSERT INTO ledger_fills (broker, account, order_id, symbol, exchange, product, side, qty,"
+        " price, fill_time, occurrence_idx, dedup_key, attribution_state, synced_at) VALUES"
+        " ('flattrade','FZ0074','O','TCS','NSE','MIS','BUY',1,1,'2026-11-18 09:46:18',0,'k',"
+        "'unresolved','2026-11-18 10:00:00')"
+    )
+    con.commit()
+    con.close()
+    path = pathlib.Path(svc.__file__).resolve().parent.parent / "upgrade"
+    spec = importlib.util.spec_from_file_location(
+        "repair_cli", path / "repair_discretionary_accounts.py"
+    )
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'unused.db'}")  # restored after
+    orig = ledger.db_session.session_factory.kw.get("bind"), ledger.engine
+    try:
+        assert cli.main(["--db", str(db)]) == 0
+        out = capsys.readouterr().out
+        assert "runs_reported=3 runs_written=0" in out and "from=al***ce to=FZ***74" in out
+        tables = {r[0] for r in sqlite3.connect(db).execute("SELECT name FROM sqlite_master")}
+        assert "ledger_account_identity" not in tables  # a dry run writes nothing
+        assert cli.main(["--db", str(db), "--apply", "--yes"]) == 0
+        assert "runs_written=3" in capsys.readouterr().out
+        assert cli.main(["--db", str(db)]) == 0
+        assert "runs_reported=0 runs_written=0" in capsys.readouterr().out
+    finally:
+        ledger.db_session.remove()
+        ledger.db_session.configure(bind=orig[0])
+        ledger.engine = orig[1]
+
+
+def test_repair_skips_a_broker_with_two_logins_and_stores_no_identity(env):
+    _name_labelled_runs(env)
+    _name_labelled_runs(env, name="bob")
+    sync_as([mk(fill_id="F1", account="FZ74")], flattrade_auth("carol"))
+    _forget_identity(env)
+    before = run_labels(env)
+    out = svc.normalize_run_accounts(
+        dry_run=False, auth_names={"alice": "flattrade", "bob": "flattrade"}
+    )
+    assert {i["status"] for i in out["items"]} == {"ambiguous_login"}
+    assert (out["reported"], out["written"], out["ambiguous_login"]) == (0, 0, 2)
+    assert run_labels(env) == before
+    assert ledger.get_identity("flattrade", "alice") is None
+    assert ledger.get_identity("flattrade", "bob") is None
