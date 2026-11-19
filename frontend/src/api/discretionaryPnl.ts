@@ -100,6 +100,188 @@ export interface BreakdownRow {
   net_charges_complete?: boolean
   avg_hold_minutes: number | null
   median_hold_minutes: number | null
+  /** "How you trade" rows only: distinct session dates of the row's completed trades. */
+  trading_days?: number
+  /** "How you trade" rows only: the row meets the edge-check sample rule (show its profit factor). */
+  sample_ok?: boolean
+  /** The row is below the edge-check sample rule: show its profit factor with a marker. */
+  low_sample?: boolean
+}
+
+/** Sample-size context of a set of completed trades (the existing edge-check rule). */
+export interface SampleContext {
+  completed_trades: number
+  trading_days: number
+  min_trades: number
+  min_days: number
+  sufficient: boolean
+  rule?: string
+}
+
+/** A completed trade named by the risk strip; `id` + `build_id` open the fills drill-down. */
+export interface TradeRef {
+  id: number
+  build_id?: string | null
+  broker: string
+  account: string
+  symbol: string
+  exchange: string
+  product: string
+  direction: 'LONG' | 'SHORT'
+  realized_pnl: number
+  charges: number | null
+  charges_status?: ChargesStatus | null
+  net_pnl: number | null
+  closed_at: string
+  trade_date: string
+}
+
+/** Risk and consistency strip; gross realized unless the name says net. */
+export interface ConsistencyBlock {
+  basis?: string
+  completed_trades: number
+  largest_win: TradeRef | null
+  largest_loss: TradeRef | null
+  max_consecutive_wins: number
+  max_consecutive_losses: number
+  streak_rule?: string
+  trading_days: number
+  profitable_days: number
+  losing_days: number
+  flat_days: number
+  /** Null (with the reason) below 2 trading days. */
+  avg_daily_pnl: number | null
+  avg_daily_net: number | null
+  avg_daily_net_complete: boolean
+  avg_daily_unavailable_reason: string | null
+  max_drawdown: number | null
+  max_drawdown_unavailable_reason: string | null
+  drawdown_basis?: string
+  avg_hold_minutes: number | null
+  median_hold_minutes: number | null
+}
+
+/** "How you trade" breakdowns (entry time of day, entry weekday, holding time). */
+export interface TradingBreakdowns {
+  time_of_day: BreakdownRow[]
+  weekday: BreakdownRow[]
+  hold_bucket: BreakdownRow[]
+}
+
+/**
+ * Candidate executions of the period in one state each:
+ * collected = awaiting_attribution + attributed_open + included + not_placed.
+ */
+export interface DataQuality {
+  scope?: string
+  collected: number
+  awaiting_attribution: number
+  awaiting_grace: number
+  awaiting_other: number
+  grace_minutes?: number
+  earliest_attributable_at?: string | null
+  attributed_open: number
+  included: number
+  not_placed: number
+  reconciles: boolean
+  charges_incomplete_legs: number
+  charges_incomplete_trades: number
+  prices: {
+    requested: boolean
+    open_positions: number
+    statuses: Record<string, number>
+    missing: number
+    stale: number
+  }
+  sync: {
+    last_successful_sync: string | null
+    days_without_sync: string[]
+    problems: string[]
+  }
+}
+
+export interface ProvisionalFill {
+  fill_ref: number
+  role: 'ENTRY' | 'EXIT'
+  side: string
+  qty_used: number
+  price: number
+  fill_time: string | null
+  charge_allocated: number | null
+}
+
+/** A completed trade rebuilt from UNRESOLVED fills: not in any total. */
+export interface ProvisionalTrade {
+  id: number
+  provisional: true
+  broker: string
+  account: string
+  symbol: string
+  exchange: string
+  product: string
+  direction: 'LONG' | 'SHORT'
+  closed_quantity: number
+  entry_price: number
+  exit_price: number
+  opened_at: string
+  closed_at: string
+  trade_date: string
+  overnight: boolean
+  hold_minutes: number | null
+  realized_pnl: number
+  charges: number | null
+  charges_status: ChargesStatus
+  net_pnl: number | null
+  legs: number
+  opening_unknown: boolean
+  fills: ProvisionalFill[]
+  /** True when an open position of the same instrument exists; see overlap_note. */
+  overlaps_open_position?: boolean
+  overlap_note?: string | null
+}
+
+export interface ProvisionalOpenPosition {
+  broker: string
+  account: string
+  symbol: string
+  exchange: string
+  product: string
+  direction: 'LONG' | 'SHORT'
+  open_qty: number
+  avg_entry: number
+  opened_at: string
+  realized_so_far: number | null
+  opening_unknown: boolean
+  /** Provisional positions carry a negative id (never a ledger id). */
+  id?: number
+  overlaps_open_position?: boolean
+  overlap_note?: string | null
+}
+
+export interface ProvisionalBlock {
+  definition?: string
+  fills: number
+  trades: ProvisionalTrade[]
+  open_positions: ProvisionalOpenPosition[]
+  orphans: UnresolvedFill[]
+  metrics: {
+    trades: number
+    wins: number
+    losses: number
+    win_rate: number
+    profit_factor: number | null
+    expectancy: number
+    avg_win: number
+    avg_loss: number
+    realized_gross: number
+    charges: number
+    net_of_charges: number
+    charges_unavailable_trades: number
+    net_charges_complete: boolean
+    charges_missing_completed?: number
+    low_sample?: boolean
+  }
+  sample: SampleContext
 }
 
 export interface HoldStat {
@@ -182,7 +364,137 @@ export interface PerIdentityRow {
   unrealized_unavailable_positions: number
 }
 
+/** A position whose FINAL close is in the current session (one row per position, flat to flat). */
+export interface TodayClosedPosition {
+  /** Position id within `build_id` (the same id the fills drill-down takes). */
+  id: number
+  build_id?: string | null
+  broker: string
+  account: string
+  symbol: string
+  exchange: string
+  product: string
+  direction: 'LONG' | 'SHORT'
+  /** Full position size over its life (every closing leg summed). */
+  total_quantity: number
+  /** Quantity-weighted average entry / exit. */
+  entry_price: number
+  exit_price: number
+  opened_at: string
+  /** Session date of the entry; earlier than the session for a carried position. */
+  opened_session: string | null
+  closed_at: string
+  /** Gross P&L of the whole position (all its legs, whatever day). */
+  gross_pnl: number
+  /** Gross P&L of the legs closed in this session (part of today's realized). */
+  realized_today: number
+  charges: number | null
+  charges_status: ChargesStatus
+  net_pnl: number | null
+  legs: number
+  status: 'Closed'
+}
+
+/** A position open now (whatever day it opened); "Partially closed" when it has exit legs. */
+export interface TodayOpenPosition {
+  id?: number | null
+  broker: string
+  account: string
+  symbol: string
+  exchange: string
+  product: string
+  direction: 'LONG' | 'SHORT'
+  open_qty: number
+  closed_qty: number
+  total_quantity: number
+  avg_entry: number
+  opened_at: string
+  opened_session?: string | null
+  realized_so_far?: number | null
+  realized_today: number
+  exit_legs: number
+  ltp?: number | null
+  price_status: PriceStatus
+  unrealized: number | null
+  status: 'Open' | 'Partially closed'
+}
+
+/** An unresolved fill held by the manual grace window; never counted until attributed. */
+export interface GraceHeldFill {
+  id: number
+  broker: string
+  account: string
+  symbol: string
+  exchange: string
+  product: string
+  side: string
+  qty: number
+  price: number
+  fill_time: string
+  /** fill_time + grace: the earliest time a sync can classify it. */
+  attributable_from: string
+  /** The window has passed: it waits only for the next ledger sync. */
+  due: boolean
+  /** The fill's identity has an open discretionary position (its quantity may change). */
+  affects_open_position: boolean
+}
+
+export interface PendingAttribution {
+  grace_minutes: number
+  last_evaluated_at: string | null
+  grace_count: number
+  earliest_attributable_at: string | null
+  grace_fills: GraceHeldFill[]
+  /** Unresolved fills of the session held for another reason (coverage, tag mode, ...). */
+  other_today: number
+  other_total: number
+}
+
+/**
+ * The current trading session (session date of now, IST), from the same build as the rest of the
+ * summary. Ignores the page period; honours the broker / account / symbol filters.
+ */
+export interface DiscretionaryToday {
+  session_date: string
+  session_definition?: string
+  realized_gross: number
+  charges: number
+  charges_unavailable_legs: number
+  charges_complete: boolean
+  net: number
+  realized_net_of_charges: number
+  exit_legs: number
+  /** Null when prices were not requested or none is usable. */
+  unrealized: number | null
+  unrealized_unavailable_positions: number
+  price_statuses: Record<string, number>
+  quotes_requested: boolean
+  completed_positions: number
+  open_positions: number
+  partially_closed_positions: number
+  metrics: Partial<
+    Pick<
+      DiscretionaryMetrics,
+      | 'trades_count'
+      | 'winning_trades'
+      | 'losing_trades'
+      | 'win_rate'
+      | 'gross_profit'
+      | 'gross_loss'
+      | 'profit_factor'
+      | 'expectancy'
+      | 'avg_win'
+      | 'avg_loss'
+    >
+  >
+  closed_positions: TodayClosedPosition[]
+  open_position_rows: TodayOpenPosition[]
+  pending_attribution: PendingAttribution
+}
+
 export interface DiscretionarySummary {
+  /** The current session; absent from older servers. */
+  today?: DiscretionaryToday | null
   period: { period: string; start: string; end: string; reliable_since?: string }
   metrics: DiscretionaryMetrics
   build_id: string | null
@@ -197,6 +509,21 @@ export interface DiscretionarySummary {
   per_identity: PerIdentityRow[]
   sync_health: SyncHealth
   warnings: string[]
+  /**
+   * Ledger fills of the period and filters that are manual, ui_manual or unresolved (strategy
+   * fills are not counted). Read-only; absent from older servers.
+   */
+  executions_collected?: number
+  /** The unresolved part of executions_collected: awaiting attribution, excluded from P&L. */
+  executions_unresolved?: number
+  /** Ledger fills of the period per read-time source label (SIGNAL_LIVE / MANUAL / UNCLASSIFIED). */
+  source_labels?: Record<string, number>
+  /** Sample-size context of the ratios; absent from older servers. */
+  sample?: SampleContext
+  /** Four-state count of the period's candidate executions; absent from older servers. */
+  data_quality?: DataQuality | null
+  /** Unresolved fills replayed as if manual; never in any total. Absent from older servers. */
+  provisional?: ProvisionalBlock | null
   market_hours_source?: 'calendar' | 'clock' | 'mixed' | string
   withheld: Record<string, string>
   labels?: Record<string, string>
@@ -207,6 +534,10 @@ export interface DiscretionarySummary {
   by_product: BreakdownRow[]
   by_holding: { intraday: BreakdownRow; overnight: BreakdownRow }
   hold: HoldSummary
+  /** "How you trade" rows; absent from older servers. */
+  breakdowns?: TradingBreakdowns | null
+  /** Risk and consistency strip; absent from older servers. */
+  consistency?: ConsistencyBlock | null
   trades: DiscretionaryTrade[]
   trades_total: number
   trades_truncated: number
@@ -258,6 +589,10 @@ export interface UnresolvedFill {
   fill_time?: string | null
   order_id?: string
   attribution_state?: string
+  /** Read-time source label: SIGNAL_LIVE, MANUAL or UNCLASSIFIED (display only). */
+  source_label?: string
+  /** Short label of the broker order's source evidence; null when none was recorded. */
+  source_evidence?: string | null
 }
 
 export interface UnresolvedResponse {

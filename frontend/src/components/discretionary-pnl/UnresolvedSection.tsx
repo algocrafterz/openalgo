@@ -63,6 +63,11 @@ function FillRows({ title, rows }: { title: string; rows: UnresolvedFill[] }) {
               <TableCell className="font-mono text-xs">{row.order_id || '—'}</TableCell>
               <TableCell className="text-xs">
                 {reasonText(row.reason ?? row.attribution_state)}
+                {row.source_evidence && (
+                  <div className="text-muted-foreground" data-testid="unresolved-evidence">
+                    Source evidence: {row.source_evidence}
+                  </div>
+                )}
               </TableCell>
             </TableRow>
           ))}
@@ -73,8 +78,15 @@ function FillRows({ title, rows }: { title: string; rows: UnresolvedFill[] }) {
 }
 
 /** Fills the ledger could not classify or place. They are listed here and never counted in P&L. */
-export function UnresolvedSection({ filters }: { filters: DiscretionaryFilters }) {
-  const [open, setOpen] = useState(false)
+export function UnresolvedSection({
+  filters,
+  defaultOpen = false,
+}: {
+  filters: DiscretionaryFilters
+  /** Start expanded (the page does so when every execution of the selection awaits attribution). */
+  defaultOpen?: boolean
+}) {
+  const [open, setOpen] = useState(defaultOpen)
   const query = useQuery({
     queryKey: ['discretionary-pnl', 'unresolved', filters],
     queryFn: () => discretionaryPnlApi.unresolved(filters),
@@ -86,7 +98,7 @@ export function UnresolvedSection({ filters }: { filters: DiscretionaryFilters }
   const count = (query.data?.unresolved_count ?? 0) + (query.data?.orphans_count ?? 0)
 
   return (
-    <Card>
+    <Card id="discretionary-unresolved" data-testid="discretionary-unresolved">
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger
           className="flex w-full items-center justify-between px-6 py-4 text-left"

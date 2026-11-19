@@ -38,6 +38,24 @@ vi.mock('@/components/strategy-pnl/StrategyReports', () => ({
   StrategyReports: () => <div data-testid="strategy-reports" />,
 }))
 vi.mock('@/components/DataHealthBanner', () => ({ DataHealthBanner: () => null }))
+const sock = vi.hoisted(() => {
+  const handlers = new Map<string, Set<(p: unknown) => void>>()
+  return {
+    handlers,
+    socket: {
+      on: (e: string, h: (p: unknown) => void) => {
+        if (!handlers.has(e)) handlers.set(e, new Set())
+        handlers.get(e)?.add(h)
+      },
+      off: (e: string, h: (p: unknown) => void) => {
+        handlers.get(e)?.delete(h)
+      },
+    },
+  }
+})
+vi.mock('@/components/socket/SocketProvider', () => ({
+  useSocketContext: () => ({ socket: sock.socket, playAlertSound: () => {} }),
+}))
 
 const { default: StrategyDailyPerformance } = await import('./StrategyDailyPerformance')
 
@@ -183,5 +201,16 @@ describe('URL and refresh housekeeping', () => {
     const keys = spy.mock.calls.map((c) => JSON.stringify((c[0] as { queryKey: unknown }).queryKey))
     expect(keys).toContain(JSON.stringify(['strategy-daily']))
     expect(keys.some((k) => k.includes('discretionary-pnl'))).toBe(false)
+  })
+
+  it('Strategies view: no order_update listener, so a broker fill refetches nothing there', async () => {
+    status.mockResolvedValue(true)
+    renderPage('/strategy-pnl/daily')
+    await waitFor(() => expect(compare).toHaveBeenCalled())
+    expect(sock.handlers.get('order_update')?.size ?? 0).toBe(0)
+    // the Strategies refresh is unchanged: same events as before
+    expect(orderEventRefresh.mock.calls.at(-1)?.[1]).toEqual({
+      events: ['order_event', 'analyzer_update'],
+    })
   })
 })

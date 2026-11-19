@@ -1,7 +1,19 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DiscretionaryApiError } from '@/api/discretionaryPnl'
-import { breakdownRow, emptySummary, position, summary, trade } from '@/test/discretionaryFixtures'
+import {
+  breakdownRow,
+  consistency,
+  dataQuality,
+  emptySummary,
+  emptyToday,
+  position,
+  provisional,
+  summary,
+  todayClosed,
+  trade,
+  tradingBreakdowns,
+} from '@/test/discretionaryFixtures'
 import { act, render, screen, userEvent, waitFor, within } from '@/test/test-utils'
 
 const summaryFn = vi.fn()
@@ -74,6 +86,89 @@ describe('empty and error states', () => {
     expect(await screen.findByText('No discretionary trades yet')).toBeInTheDocument()
     expect(screen.getByText(/ledger sync has to be running/i)).toBeInTheDocument()
     expect(screen.queryByText('Net realized (after est. charges)')).not.toBeInTheDocument()
+  })
+
+  it('says every execution awaits attribution, with the counts, and opens the unresolved list', async () => {
+    summaryFn.mockResolvedValue({
+      ...emptySummary(),
+      executions_collected: 5,
+      executions_unresolved: 5,
+      warnings: ['5 unresolved fill(s) are excluded from P&L until attributed.'],
+    })
+    unresolvedFn.mockResolvedValue({
+      unresolved: [
+        {
+          id: 1,
+          broker: 'flattrade',
+          symbol: 'TCS',
+          product: 'MIS',
+          side: 'BUY',
+          qty: 4,
+          price: 2392.6,
+          fill_time: '2026-11-18 09:46:18',
+          order_id: 'O-1',
+          attribution_state: 'unresolved',
+        },
+      ],
+      unresolved_count: 5,
+      orphans: [],
+      orphans_count: 0,
+    })
+    renderIt()
+    const block = await screen.findByTestId('discretionary-awaiting-attribution')
+    expect(
+      within(block).getByText(
+        'No attributable trades available for performance analysis yet. 5 executions collected; 5 awaiting attribution. Their P&L is excluded until classification is resolved.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByText('No discretionary trades yet')).not.toBeInTheDocument()
+    expect(screen.queryByText(/ledger sync has to be running/i)).not.toBeInTheDocument()
+    expect(screen.queryByText('Net realized (after est. charges)')).not.toBeInTheDocument()
+    // the unresolved list is shown open, with its count and rows; the warning stays
+    const trigger = screen.getByRole('button', { name: 'Unresolved fills' })
+    await waitFor(() => expect(trigger).toHaveTextContent('(5)'))
+    expect(await screen.findByText('TCS')).toBeInTheDocument()
+    expect(screen.getByText(/could not be reliably classified are excluded/)).toBeInTheDocument()
+    expect(screen.getByTestId('discretionary-warnings')).toHaveTextContent(
+      '5 unresolved fill(s) are excluded'
+    )
+  })
+
+  it('fills in N from the counts', async () => {
+    summaryFn.mockResolvedValue({
+      ...emptySummary(),
+      executions_collected: 7,
+      executions_unresolved: 2,
+    })
+    renderIt()
+    expect(
+      await screen.findByText(
+        'No attributable trades available for performance analysis yet. 7 executions collected; 2 awaiting attribution. Their P&L is excluded until classification is resolved.'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('keeps the generic message when the period holds no execution', async () => {
+    summaryFn.mockResolvedValue({
+      ...emptySummary(),
+      executions_collected: 0,
+      executions_unresolved: 0,
+    })
+    renderIt()
+    expect(await screen.findByText('No discretionary trades yet')).toBeInTheDocument()
+    expect(screen.getByText(/ledger sync has to be running/i)).toBeInTheDocument()
+    expect(screen.queryByTestId('discretionary-awaiting-attribution')).not.toBeInTheDocument()
+    // the unresolved list stays collapsed
+    expect(screen.queryByText('No unresolved fills.')).not.toBeInTheDocument()
+  })
+
+  it('shows no empty state when trades exist, even with fills awaiting attribution', async () => {
+    summaryFn.mockResolvedValue(summary({ executions_collected: 9, executions_unresolved: 3 }))
+    renderIt()
+    expect(await screen.findByText('Closed trades')).toBeInTheDocument()
+    expect(screen.queryByTestId('discretionary-awaiting-attribution')).not.toBeInTheDocument()
+    expect(screen.queryByText('No discretionary trades yet')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Unresolved fills' })).toBeInTheDocument()
   })
 
   it('says the filters matched nothing when a filter is set', async () => {
@@ -739,5 +834,197 @@ describe('completed trades (a position from flat to flat)', () => {
     expect(within(dialog).getByText('ORD-2')).toBeInTheDocument()
     expect(within(dialog).getByText('ORD-3')).toBeInTheDocument()
     expect(within(dialog).getAllByText('Exit')).toHaveLength(2)
+  })
+})
+
+describe("today's performance", () => {
+  it('is shown above the metric cards and opens the fills of a closed row with the build id', async () => {
+    summaryFn.mockResolvedValue(
+      summary({
+        today: emptyToday({
+          realized_gross: 450,
+          net: 437.5,
+          completed_positions: 1,
+          closed_positions: [todayClosed()],
+        }),
+      })
+    )
+    renderIt()
+    const section = await screen.findByTestId('discretionary-today')
+    expect(within(section).getByText("Today's closed positions")).toBeInTheDocument()
+    // the section comes before the period cards
+    const cards = screen.getByText('Net realized (after est. charges)')
+    expect(section.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    await userEvent.click(within(section).getByTestId('today-closed-row'))
+    await waitFor(() => expect(fillsFn).toHaveBeenCalledWith(11, 'b1'))
+  })
+
+  it('coexists with the awaiting-attribution state: zeros and the pending note', async () => {
+    summaryFn.mockResolvedValue({
+      ...emptySummary(),
+      executions_collected: 1,
+      executions_unresolved: 1,
+      today: emptyToday({
+        pending_attribution: {
+          ...emptyToday().pending_attribution,
+          grace_count: 1,
+          earliest_attributable_at: '2026-11-17 11:20:00',
+          grace_fills: [
+            {
+              id: 1,
+              broker: 'flattrade',
+              account: 'A1',
+              symbol: 'TCS',
+              exchange: 'NSE',
+              product: 'MIS',
+              side: 'BUY',
+              qty: 4,
+              price: 2392.6,
+              fill_time: '2026-11-17 10:50:00',
+              attributable_from: '2026-11-17 11:20:00',
+              due: false,
+              affects_open_position: false,
+            },
+          ],
+        },
+      }),
+    })
+    renderIt()
+    expect(await screen.findByTestId('discretionary-awaiting-attribution')).toBeInTheDocument()
+    const section = screen.getByTestId('discretionary-today')
+    expect(within(section).getByTestId('today-pending')).toHaveTextContent(
+      'Earliest attribution at 11:20 IST'
+    )
+    expect(within(section).getByText('No positions closed today yet')).toBeInTheDocument()
+  })
+
+  it('is absent when an older server sends no today block', async () => {
+    renderIt()
+    await screen.findByText('Net realized (after est. charges)')
+    expect(screen.queryByTestId('discretionary-today')).not.toBeInTheDocument()
+  })
+})
+
+describe('dashboard additions', () => {
+  function full() {
+    return summary({
+      sample: {
+        completed_trades: 2,
+        trading_days: 1,
+        min_trades: 30,
+        min_days: 10,
+        sufficient: false,
+      },
+      consistency: consistency(),
+      breakdowns: tradingBreakdowns(),
+      data_quality: dataQuality(),
+    })
+  }
+
+  it('renders every new section in page order with sample context', async () => {
+    summaryFn.mockResolvedValue(full())
+    renderIt()
+    const dq = await screen.findByTestId('data-quality')
+    const risk = screen.getByTestId('risk-strip')
+    const how = screen.getByTestId('how-you-trade')
+    expect(screen.getByTestId('daily-pnl-chart')).toBeInTheDocument()
+    expect(screen.getByTestId('discretionary-sample-note')).toHaveTextContent(
+      'Ratios based on 2 completed trade(s) over 1 trading day(s).'
+    )
+    // data quality near the top, then the risk strip, then How you trade
+    expect(dq.compareDocumentPosition(risk) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(risk.compareDocumentPosition(how) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // the existing breakdown tables stay, so no table is shown twice
+    expect(screen.getByText('By symbol')).toBeInTheDocument()
+    expect(within(how).queryByText('By symbol')).not.toBeInTheDocument()
+  })
+
+  it('opens the fills of the largest win with the summary build id', async () => {
+    summaryFn.mockResolvedValue(full())
+    renderIt()
+    await userEvent.click(await screen.findByRole('button', { name: /largest win, RELIANCE/ }))
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(fillsFn).toHaveBeenCalledWith(11, 'b1')
+    await userEvent.keyboard('{Escape}')
+    await userEvent.click(screen.getByRole('button', { name: /largest loss, INFY/ }))
+    await waitFor(() => expect(fillsFn).toHaveBeenLastCalledWith(12, 'b1'))
+  })
+
+  it('shows a dash with the reason on the drawdown card for a single trading day', async () => {
+    summaryFn.mockResolvedValue(
+      summary({
+        consistency: consistency({
+          max_drawdown: null,
+          max_drawdown_unavailable_reason: 'needs at least 2 trading days',
+        }),
+      })
+    )
+    renderIt()
+    // the metric card comes first; the risk strip below has its own Max drawdown tile
+    const [label] = await screen.findAllByText('Max drawdown', { selector: 'div' })
+    expect(label.parentElement?.querySelector('.font-mono')?.textContent).toBe('—')
+    expect(screen.getByTestId('risk-drawdown')).toHaveTextContent('needs at least 2 trading days')
+    expect(
+      screen.getByText(
+        'needs at least 2 trading days; basis: gross realized, excludes charges and unrealized'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('shows the position age next to the opening date', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-17T05:45:00Z')) // 11:15 IST
+    try {
+      summaryFn.mockResolvedValue(
+        summary({ positions: [position({ opened_at: '2026-11-17 09:00:00' })] })
+      )
+      renderIt()
+      const open = (await screen.findByText('Open positions')).closest(
+        '[data-slot="card"]'
+      ) as HTMLElement
+      expect(within(open).getByRole('columnheader', { name: 'Age' })).toBeInTheDocument()
+      expect(within(open).getByText('2h 15m')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the awaiting message and adds the provisional TCS panel when only unresolved fills exist', async () => {
+    summaryFn.mockResolvedValue({
+      ...emptySummary(),
+      executions_collected: 5,
+      executions_unresolved: 5,
+      data_quality: dataQuality({
+        collected: 5,
+        awaiting_attribution: 5,
+        awaiting_grace: 0,
+        awaiting_other: 5,
+        attributed_open: 0,
+        included: 0,
+        not_placed: 0,
+      }),
+      provisional: provisional(),
+    })
+    renderIt()
+    const block = await screen.findByTestId('discretionary-awaiting-attribution')
+    expect(block).toHaveTextContent(
+      'No attributable trades available for performance analysis yet. 5 executions collected; 5 awaiting attribution. Their P&L is excluded until classification is resolved.'
+    )
+    const panel = screen.getByTestId('provisional-panel')
+    expect(panel).toHaveTextContent(
+      'Pending attribution: provisional figures (not included in any total above)'
+    )
+    expect(within(panel).getByTestId('provisional-row')).toHaveTextContent('Rs -92.65')
+    expect(screen.getByTestId('dq-awaiting')).toHaveTextContent('5')
+    // nothing provisional reaches the headline: the cards are not rendered at all here
+    expect(screen.queryByText('Net realized (after est. charges)')).not.toBeInTheDocument()
+  })
+
+  it('keeps provisional figures out of the populated headline cards', async () => {
+    summaryFn.mockResolvedValue({ ...full(), provisional: provisional() })
+    renderIt()
+    await screen.findByTestId('provisional-panel')
+    expect(cardValue('Gross realized')).toBe('Rs 60.00')
+    expect(cardValue('Completed trades')).toBe('2')
   })
 })

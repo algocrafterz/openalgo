@@ -1,9 +1,14 @@
 import type {
   BreakdownRow,
+  DataQuality,
   DiscretionaryPosition,
   DiscretionarySummary,
+  DiscretionaryToday,
   DiscretionaryTrade,
+  PendingAttribution,
+  PeriodRow,
   PriceStatus,
+  SampleContext,
   SyncHealth,
 } from '@/api/discretionaryPnl'
 
@@ -400,6 +405,32 @@ export function isEmptyBook(
   )
 }
 
+/**
+ * Executions of the selected period and filters while the book is empty (no completed trade, no
+ * open position, no closed leg) and some of them await attribution; null otherwise.
+ * ``collected`` counts the discretionary candidates (manual + unresolved fills, never strategy
+ * fills), ``unresolved`` the part awaiting attribution. An older server without the counts
+ * gives null, so the page keeps its generic empty state.
+ */
+export function awaitingAttribution(
+  summary:
+    | (Pick<DiscretionarySummary, 'trades_total' | 'positions_total'> &
+        Partial<
+          Pick<DiscretionarySummary, 'by_period' | 'executions_collected' | 'executions_unresolved'>
+        >)
+    | undefined
+): { collected: number; unresolved: number } | null {
+  if (!summary || !isEmptyBook(summary)) return null
+  const unresolved = summary.executions_unresolved ?? 0
+  if (unresolved <= 0) return null
+  return { collected: Math.max(summary.executions_collected ?? 0, unresolved), unresolved }
+}
+
+/** The empty-state message while every execution of the selection awaits attribution. */
+export function awaitingAttributionText(collected: number, unresolved: number): string {
+  return `No attributable trades available for performance analysis yet. ${collected} executions collected; ${unresolved} awaiting attribution. Their P&L is excluded until classification is resolved.`
+}
+
 /** Sorted distinct non-empty values, for a filter's choices. */
 export function distinctOptions(values: (string | null | undefined)[]): string[] {
   return [...new Set(values.filter((v): v is string => !!v && v.trim() !== ''))].sort()
@@ -442,3 +473,315 @@ export function holdingRows(
     .filter((name) => !!holding[name])
     .map((name) => ({ ...holding[name], key: name }))
 }
+
+// ---------------------------------------------------------------- today (current session)
+
+/** Unrealized of today's open positions: the value when known and the worst price status. */
+export function todayUnrealized(
+  today: Pick<
+    DiscretionaryToday,
+    | 'open_positions'
+    | 'quotes_requested'
+    | 'unrealized'
+    | 'unrealized_unavailable_positions'
+    | 'price_statuses'
+  >
+): UnrealizedSummary {
+  if (today.open_positions === 0) return { kind: 'none', value: 0, unpriced: 0, badge: null }
+  if (!today.quotes_requested) {
+    return {
+      kind: 'not_requested',
+      value: 0,
+      unpriced: today.open_positions,
+      badge: priceBadge('not_requested'),
+    }
+  }
+  let worst: string | null = null
+  for (const status of Object.keys(today.price_statuses ?? {})) {
+    if (worst === null || (BADGE_RANK[status] ?? 0) > (BADGE_RANK[worst] ?? 0)) worst = status
+  }
+  const unpriced = today.unrealized_unavailable_positions ?? 0
+  return {
+    kind: today.unrealized == null ? 'none' : unpriced > 0 ? 'partial' : 'complete',
+    value: today.unrealized ?? 0,
+    unpriced,
+    badge: worst ? priceBadge(worst) : null,
+  }
+}
+
+/** "HH:MM" of a backend IST timestamp ("2026-11-17 11:20:00"). */
+export function fmtClock(value: string | null | undefined): string {
+  if (!value) return '—'
+  return value.replace('T', ' ').slice(11, 16)
+}
+
+/**
+ * Why some of today's executions are not counted yet; empty when nothing is pending. Fills held
+ * by the grace window give their count and the earliest time a sync can classify them; fills
+ * held for another reason point to the Unresolved fills list. Nothing here is counted in P&L.
+ */
+export function pendingAttributionLines(pending: PendingAttribution | undefined): string[] {
+  if (!pending) return []
+  const lines: string[] = []
+  const held = pending.grace_count ?? 0
+  if (held > 0) {
+    const due = (pending.grace_fills ?? []).filter((f) => f.due).length
+    const waiting = held - due
+    let text = `${held} execution(s) awaiting attribution: they are inside the ${pending.grace_minutes}-minute safety window that lets a strategy order tag arrive, and are not counted in P&L yet.`
+    if (waiting > 0 && pending.earliest_attributable_at) {
+      const next = (pending.grace_fills ?? []).find((f) => !f.due)
+      text += ` Earliest attribution at ${fmtClock(next?.attributable_from ?? pending.earliest_attributable_at)} IST, at the first ledger sync after it.`
+    }
+    if (due > 0) text += ` ${due} passed the window and wait only for the next ledger sync.`
+    if ((pending.grace_fills ?? []).some((f) => f.affects_open_position)) {
+      text += ' Some belong to an open position, so its quantity may still change.'
+    }
+    lines.push(text)
+  }
+  if ((pending.other_today ?? 0) > 0) {
+    lines.push(
+      `${pending.other_today} execution(s) of today stay unresolved for another reason and are excluded from P&L; see Unresolved fills.`
+    )
+  }
+  return lines
+}
+
+// ---------------------------------------------------------------- dashboard additions
+
+/** Backend timestamps are naive IST ("2026-11-17 09:46:18"); IST is UTC+05:30 all year. */
+const IST_OFFSET_MS = 330 * 60_000
+
+/** Epoch ms of a naive IST timestamp, whatever the browser's time zone; null when unparsable. */
+export function parseIstStamp(value: string | null | undefined): number | null {
+  if (!value) return null
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(value)
+  if (!m) return null
+  const [, y, mo, d, h, mi, s] = m
+  return Date.UTC(+y, +mo - 1, +d, +h, +mi, +(s ?? 0)) - IST_OFFSET_MS
+}
+
+/** Position age from its opening to `nowMs`: "45m", "2h 15m", "1d 3h"; '—' when unknown. */
+export function fmtPositionAge(openedAt: string | null | undefined, nowMs: number): string {
+  const opened = parseIstStamp(openedAt)
+  if (opened == null) return '—'
+  const minutes = Math.floor((nowMs - opened) / 60_000)
+  if (minutes < 0) return '—'
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ${minutes % 60}m`
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`
+}
+
+export const DAILY_CHART_CAPTION =
+  'Daily realized P&L, gross (before charges): the same basis as the equity curve. Hover a bar for its estimated charges and net.'
+
+export interface DailyBar {
+  date: string
+  gross: number
+  charges: number
+  net: number
+  netComplete: boolean
+  /** Bar length as a percent of the largest absolute day (0-100). */
+  pct: number
+}
+
+/** Bars of the daily P&L chart (one per day with a close) and the day counts behind them. */
+export function dailyBars(rows: PeriodRow[] | undefined): {
+  bars: DailyBar[]
+  profitable: number
+  losing: number
+  flat: number
+} {
+  const list = rows ?? []
+  const peak = Math.max(0, ...list.map((r) => Math.abs(r.realized_gross)))
+  const bars = list.map((r) => ({
+    date: r.period,
+    gross: r.realized_gross,
+    charges: r.charges,
+    net: r.net_of_charges,
+    netComplete: !netIncomplete(r),
+    pct: peak > 0 ? (Math.abs(r.realized_gross) / peak) * 100 : 0,
+  }))
+  return {
+    bars,
+    profitable: list.filter((r) => r.realized_gross > 0).length,
+    losing: list.filter((r) => r.realized_gross < 0).length,
+    flat: list.filter((r) => r.realized_gross === 0).length,
+  }
+}
+
+/** "based on N completed trades over D trading days" plus a low-sample note by the server's rule. */
+export function sampleNote(
+  sample: SampleContext | undefined
+): { text: string; low: boolean } | null {
+  if (!sample) return null
+  const base = `Ratios based on ${sample.completed_trades} completed trade(s) over ${sample.trading_days} trading day(s).`
+  if (sample.sufficient) return { text: base, low: false }
+  return {
+    text: `${base} Low sample: fewer than ${sample.min_trades} completed trades or ${sample.min_days} trading days, so win rate, profit factor and expectancy are indicative only.`,
+    low: true,
+  }
+}
+
+/** Whether a row's ratios rest on a sample below the edge-check rule (server flag, else sample_ok). */
+export function isLowSample(row: Pick<BreakdownRow, 'low_sample' | 'sample_ok'>): boolean {
+  if (typeof row.low_sample === 'boolean') return row.low_sample
+  return row.sample_ok === false
+}
+
+/**
+ * Profit factor of a breakdown row: always the number (dash only when it is null), with
+ * `low` set when the group is below the sample rule so the UI adds a muted "low sample" marker.
+ */
+export function rowProfitFactor(
+  row: Pick<
+    BreakdownRow,
+    'trades' | 'profit_factor' | 'wins' | 'losses' | 'sample_ok' | 'low_sample'
+  >,
+  sample?: Pick<SampleContext, 'min_trades' | 'min_days'>
+): { value: string; low: boolean; title?: string } {
+  if (row.trades === 0) return { value: '—', low: false, title: 'No completed trade in this group' }
+  const low = isLowSample(row)
+  const rule = sample
+    ? `at least ${sample.min_trades} completed trades over ${sample.min_days} trading days`
+    : 'a larger sample'
+  return {
+    value: fmtProfitFactor(row.profit_factor, row.wins, row.losses),
+    low,
+    title: low
+      ? `Low sample: indicative only; needs ${rule} (this group has ${row.trades})`
+      : undefined,
+  }
+}
+
+export type HowYouTradeKey = 'time_of_day' | 'weekday' | 'hold_bucket'
+
+/**
+ * Selector options of the "How you trade" card. Symbol, Long/Short, Product and Intraday vs
+ * overnight stay in the Breakdowns card above (unchanged), so no table appears twice.
+ */
+export const HOW_YOU_TRADE_OPTIONS: {
+  key: HowYouTradeKey
+  label: string
+  column: string
+  note: string
+}[] = [
+  {
+    key: 'time_of_day',
+    label: 'Time of day',
+    column: 'Entry time (IST)',
+    note: 'By the entry time of the position (IST). Each bucket includes its start and excludes its end; "other" is outside 09:15-15:30 (pre-open, MCX evening).',
+  },
+  {
+    key: 'weekday',
+    label: 'Weekday',
+    column: 'Entry day',
+    note: 'By the session date of the entry. A weekend or holiday session is listed under its own weekday.',
+  },
+  {
+    key: 'hold_bucket',
+    label: 'Holding time',
+    column: 'Held',
+    note: 'By the holding time of the trade; a partial exit counts its money in its own bucket. Overnight: closed in a later session than it opened.',
+  },
+]
+
+/** Human label for a "How you trade" bucket key. */
+export function bucketLabel(key: string): string {
+  const labels: Record<string, string> = {
+    other: 'Other (outside 09:15-15:30)',
+    '<5m': 'Under 5 min',
+    '5-15m': '5-15 min',
+    '15-60m': '15-60 min',
+    '1-4h': '1-4 h',
+    '>4h same day': 'Over 4 h, same day',
+    overnight: 'Overnight',
+    unknown: 'Unknown',
+    Mon: 'Monday',
+    Tue: 'Tuesday',
+    Wed: 'Wednesday',
+    Thu: 'Thursday',
+    Fri: 'Friday',
+    Sat: 'Saturday',
+    Sun: 'Sunday',
+  }
+  return labels[key] ?? key
+}
+
+export interface DataQualityState {
+  key: 'collected' | 'awaiting' | 'open' | 'included' | 'not_placed'
+  step: string
+  label: string
+  count: number
+  detail?: string
+  title?: string
+}
+
+export const IN_COMPLETED_TITLE =
+  'Fills of completed trades. Partial exits of positions still open are counted under Attributed, position still open; their realised P&L is already in your totals.'
+export const ATTRIBUTED_OPEN_TITLE =
+  'Fills of positions still open. Partial exits among them contribute realised P&L, which is already in your totals.'
+
+/** The four execution states (plus "not placed" when any) of the data-quality strip. */
+export function dataQualityStates(dq: DataQuality): DataQualityState[] {
+  const states: DataQualityState[] = [
+    {
+      key: 'collected',
+      step: '1',
+      label: 'Collected',
+      count: dq.collected,
+      detail: 'manual and unresolved executions',
+    },
+    {
+      key: 'awaiting',
+      step: '2',
+      label: 'Awaiting attribution',
+      count: dq.awaiting_attribution,
+      detail:
+        dq.awaiting_attribution > 0
+          ? `${dq.awaiting_grace} in the safety window, ${dq.awaiting_other} other`
+          : undefined,
+    },
+    {
+      key: 'open',
+      step: '3',
+      label: 'Attributed, position still open',
+      count: dq.attributed_open,
+      detail: 'partial exits: realised P&L already in totals',
+      title: ATTRIBUTED_OPEN_TITLE,
+    },
+    {
+      key: 'included',
+      step: '4',
+      label: 'In completed trades',
+      count: dq.included,
+      title: IN_COMPLETED_TITLE,
+    },
+  ]
+  if (dq.not_placed > 0) {
+    states.push({
+      key: 'not_placed',
+      step: '5',
+      label: 'Not placed',
+      count: dq.not_placed,
+      detail: 'opening not in the ledger or invalid',
+    })
+  }
+  return states
+}
+
+/** One line on the open-position prices, or "prices not requested". */
+export function dataQualityPrices(dq: DataQuality): string {
+  const p = dq.prices
+  if (!p.requested) return 'Prices not requested'
+  if (p.open_positions === 0) return 'No open positions to price'
+  const parts: string[] = []
+  if (p.missing > 0) parts.push(`${p.missing} without a usable price`)
+  if (p.stale > 0) parts.push(`${p.stale} stale, last close or cached`)
+  return parts.length > 0 ? `Prices: ${parts.join(', ')}` : 'Prices: all live'
+}
+
+export const PROVISIONAL_TITLE =
+  'Pending attribution: provisional figures (not included in any total above)'
+export const PROVISIONAL_EXPLANATION =
+  'These executions are excluded from your P&L until classified as manual. Figures are computed from the broker fills as if they were yours; if any of them were placed by a strategy they would be removed.'

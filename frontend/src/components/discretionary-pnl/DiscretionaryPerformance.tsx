@@ -3,6 +3,8 @@ import { AlertTriangle, Gauge, Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { type DiscretionaryFilters, discretionaryPnlApi } from '@/api/discretionaryPnl'
 import type { PerformancePeriod } from '@/api/strategyPnl'
+import { EquityDrawdownChart } from '@/components/strategy-pnl/EquityDrawdownChart'
+import { MetricCard } from '@/components/strategy-pnl/MetricCard'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -18,11 +20,11 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { EquityDrawdownChart } from '@/components/strategy-pnl/EquityDrawdownChart'
-import { MetricCard } from '@/components/strategy-pnl/MetricCard'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import {
   actionableWarnings,
+  awaitingAttribution,
+  awaitingAttributionText,
   DISCRETIONARY_POLL_MS,
   DRAWDOWN_BASIS,
   EQUITY_CAPTION,
@@ -41,11 +43,20 @@ import {
 import { fmtDate, fmtDuration, pnlClass } from '@/lib/strategyPnlView'
 import { cn } from '@/lib/utils'
 import {
+  DailyPnlChart,
+  DataQualityStrip,
+  HowYouTradeCard,
+  RiskStrip,
+  SampleNote,
+} from './DiscretionaryInsights'
+import {
   BreakdownTable,
   ClosedTradesTable,
   OpenPositionsTable,
   PeriodTable,
 } from './DiscretionaryTables'
+import { ProvisionalPanel } from './ProvisionalPanel'
+import { TodayPerformance } from './TodayPerformance'
 import { type SelectedTrade, TradeFillsDialog } from './TradeFillsDialog'
 import { UnresolvedSection } from './UnresolvedSection'
 
@@ -191,6 +202,13 @@ export function DiscretionaryPerformance({
     (v) => `${v.toFixed(2)}%`
   )
   const withheldNote = withheldSentence(withheld)
+  // Executions exist but none is attributable yet (all await attribution): a specific message
+  // instead of the generic empty state, and the Unresolved fills list opens.
+  const awaiting = awaitingAttribution(summary)
+  const openTrade = (id: number, buildId?: string | null) => {
+    const bid = buildId ?? summary?.build_id
+    if (bid) setSelectedTrade({ id, buildId: bid })
+  }
 
   const toolbar = (
     <div className="flex flex-wrap items-center gap-2" data-testid="discretionary-filters">
@@ -294,7 +312,20 @@ export function DiscretionaryPerformance({
             ? `${unrealized.unpriced} position(s) unpriced or not listed`
             : undefined
 
-    body = empty ? (
+    body = awaiting ? (
+      <div
+        className="flex flex-col items-center justify-center py-12 text-center"
+        data-testid="discretionary-awaiting-attribution"
+      >
+        <Gauge className="h-12 w-12 text-muted-foreground/50 mb-4" />
+        <p className="text-base font-medium max-w-2xl">
+          {awaitingAttributionText(awaiting.collected, awaiting.unresolved)}
+        </p>
+        <p className="text-sm text-muted-foreground mt-1">
+          They are listed under Unresolved fills below.
+        </p>
+      </div>
+    ) : empty ? (
       <EmptyState
         icon={Gauge}
         title={
@@ -394,16 +425,26 @@ export function DiscretionaryPerformance({
             value={noTrades ? '—' : formatCurrency(metrics.expectancy)}
             hint="gross, per trade"
           />
-          <MetricCard
-            label="Max drawdown"
-            value={formatCurrency(Math.abs(metrics.max_drawdown ?? 0))}
-            negative
-            hint={`basis: ${DRAWDOWN_BASIS}`}
-          />
+          {summary.consistency?.max_drawdown_unavailable_reason ? (
+            // one trading day has no peak to fall from: say so instead of showing 0
+            <MetricCard
+              label="Max drawdown"
+              value="—"
+              hint={`${summary.consistency.max_drawdown_unavailable_reason}; basis: ${DRAWDOWN_BASIS}`}
+            />
+          ) : (
+            <MetricCard
+              label="Max drawdown"
+              value={formatCurrency(Math.abs(metrics.max_drawdown ?? 0))}
+              negative
+              hint={`basis: ${DRAWDOWN_BASIS}`}
+            />
+          )}
           <MetricCard label="Sharpe" value={sharpe.value} />
           <MetricCard label="Sortino" value={sortino.value} />
           <MetricCard label="Return %" value={returnPct.value} />
         </div>
+        <SampleNote sample={summary.sample} />
         {withheldNote && <p className="text-xs text-muted-foreground">{withheldNote}</p>}
         {summary.net_definition && (
           <p className="text-xs text-muted-foreground">
@@ -424,8 +465,24 @@ export function DiscretionaryPerformance({
                 formatCurrency={formatCurrency}
               />
               <p className="mt-2 text-xs text-muted-foreground">{EQUITY_CAPTION}</p>
+              {(summary.by_period?.daily ?? []).length > 0 && (
+                <div className="mt-6">
+                  <DailyPnlChart
+                    rows={summary.by_period?.daily ?? []}
+                    formatCurrency={formatCurrency}
+                  />
+                </div>
+              )}
             </CardContent>
           </Card>
+        )}
+
+        {summary.consistency && (
+          <RiskStrip
+            consistency={summary.consistency}
+            formatCurrency={formatCurrency}
+            onSelectTrade={(t) => openTrade(t.id, t.build_id)}
+          />
         )}
 
         <Card>
@@ -508,6 +565,14 @@ export function DiscretionaryPerformance({
           </CardContent>
         </Card>
 
+        {summary.breakdowns && (
+          <HowYouTradeCard
+            breakdowns={summary.breakdowns}
+            sample={summary.sample}
+            formatCurrency={formatCurrency}
+          />
+        )}
+
         <Card>
           <CardHeader>
             <CardTitle>Closed trades</CardTitle>
@@ -519,9 +584,7 @@ export function DiscretionaryPerformance({
               <ClosedTradesTable
                 trades={summary.trades}
                 formatCurrency={formatCurrency}
-                onSelect={(id) => {
-                  if (summary.build_id) setSelectedTrade({ id, buildId: summary.build_id })
-                }}
+                onSelect={(id) => openTrade(id)}
               />
             )}
             {summary.trades_truncated > 0 && (
@@ -611,15 +674,41 @@ export function DiscretionaryPerformance({
           </AlertDescription>
         </Alert>
       )}
-      {summary && !sync.problem && (
+      {summary && !sync.problem && !summary.data_quality && (
+        // with the data-quality panel the same line is shown inside it
         <p className="text-xs text-muted-foreground" data-testid="discretionary-sync-line">
           {sync.text}
         </p>
       )}
 
+      {summary?.data_quality && <DataQualityStrip dq={summary.data_quality} />}
+
+      {summary?.today && (
+        // the current session, whatever the period; same build as everything below
+        <TodayPerformance
+          today={summary.today}
+          formatCurrency={formatCurrency}
+          onSelectClosed={(id) => {
+            if (summary.build_id) setSelectedTrade({ id, buildId: summary.build_id })
+          }}
+        />
+      )}
+
       {body}
 
-      {summary && <UnresolvedSection filters={queryFilters} />}
+      {summary?.provisional && (
+        // unresolved fills as if they were yours: shown even in the empty state, in no total
+        <ProvisionalPanel provisional={summary.provisional} formatCurrency={formatCurrency} />
+      )}
+
+      {summary && (
+        // keyed on the awaiting state so it opens when the page switches into that state
+        <UnresolvedSection
+          key={awaiting ? 'awaiting' : 'normal'}
+          filters={queryFilters}
+          defaultOpen={awaiting !== null}
+        />
+      )}
 
       <TradeFillsDialog
         selected={selectedTrade}

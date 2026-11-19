@@ -16,11 +16,12 @@ import {
 import {
   breakdownLabel,
   chargesBadge,
-  netIncomplete,
+  fmtPositionAge,
   fmtPrice,
   fmtProfitFactor,
   fmtQty,
   fmtWinRate,
+  netIncomplete,
   type PriceBadge,
   priceBadge,
 } from '@/lib/discretionaryPnlView'
@@ -303,19 +304,24 @@ export function ClosedTradesTable({
   )
 }
 
-/** Open positions with the price behind each unrealized figure. */
+/** Open positions with the price behind each unrealized figure and their age. */
 export function OpenPositionsTable({
   positions,
   formatCurrency,
+  nowMs,
 }: {
   positions: DiscretionaryPosition[]
   formatCurrency: Money
+  /** Clock for the Age column (tests pin it); defaults to now. */
+  nowMs?: number
 }) {
+  const now = nowMs ?? Date.now()
   return (
     <Table>
       <TableHeader>
         <TableRow>
           <TableHead>Opened</TableHead>
+          <TableHead>Age</TableHead>
           <TableHead>Broker</TableHead>
           <TableHead>Account</TableHead>
           <TableHead>Symbol</TableHead>
@@ -335,6 +341,12 @@ export function OpenPositionsTable({
           <TableRow key={`${p.broker}-${p.account}-${p.exchange}-${p.symbol}-${p.product}-${i}`}>
             <TableCell className="font-mono">
               {p.opened_at ? p.opened_at.slice(0, 10) : '—'}
+            </TableCell>
+            <TableCell
+              className="font-mono whitespace-nowrap"
+              title={p.opened_at ? `opened ${p.opened_at} IST` : undefined}
+            >
+              {fmtPositionAge(p.opened_at, now)}
             </TableCell>
             <TableCell>{p.broker}</TableCell>
             <TableCell>{p.account || '—'}</TableCell>
