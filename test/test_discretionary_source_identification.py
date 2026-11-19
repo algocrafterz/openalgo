@@ -881,6 +881,34 @@ def test_remarks_tag_upgrades_an_earlier_manual_fill(lenv, monkeypatch):
     assert states(lenv) == ["strategy_tag"] + ["manual"] * 6
 
 
+def test_unresolved_and_provisional_outputs_carry_source_labels(lenv, monkeypatch):
+    from services import discretionary_pnl_service as pnl
+
+    flags_on(monkeypatch, "DISCRETIONARY_SOURCE_FROM_ORDERBOOK")
+    for row in lenv.ob:
+        row["ordersource"] = "API"
+    run_sync(lenv, LAST_FILL + timedelta(seconds=40))
+    monkeypatch.setattr(pnl, "_now", lambda: LAST_FILL + timedelta(minutes=1))
+    rows = pnl.get_unresolved(symbol="TCS")
+    assert len(rows) == 7  # untagged API orders: never manual, not even the 11:36 fill
+    assert {r["source_label"] for r in rows} == {"UNCLASSIFIED"}
+    labels = sorted(r["source_evidence"] for r in rows)
+    assert labels == ["orderbook ok, ordersource API"] * 6 + [
+        "orderbook ok, ordersource API, remarks foreign"
+    ]
+    assert all("source_evidence" in r and "{" not in r["source_evidence"] for r in rows)
+    fills = pnl._load_ledger_fills()
+    block = pnl.provisional_block(fills, {"symbol": "TCS"})
+    assert block["source_label"] == "UNCLASSIFIED"
+    assert sum(block["source_evidence"].values()) == block["fills"] == 7
+    assert all(f["source_label"] == "UNCLASSIFIED" for t in block["trades"] for f in t["fills"])
+    assert pnl.source_label_counts(fills, {}, "2026-11-19", "2026-11-19") == {
+        "SIGNAL_LIVE": 0,
+        "MANUAL": 0,
+        "UNCLASSIFIED": 7,
+    }
+
+
 # ------------------------------------------------------------------ migration
 
 
@@ -1115,6 +1143,8 @@ def test_rms_square_off_of_a_manual_position_stays_unclassified(lenv, monkeypatc
     Accounting consequence (by design, the safe direction): the manual position keeps an
     open/EXIT PENDING leg until the SELL is resolved; it is never booked as a manual exit.
     """
+    from services import discretionary_pnl_service as pnl
+
     flags_on(monkeypatch, *ALL_GATES)
     rms = next(r for r in lenv.ob if r["norenordno"] == "26111900000104")
     rms.update(remarks="SQUARE OFF BY RMS", src_uid="RMSADMIN")
@@ -1126,6 +1156,10 @@ def test_rms_square_off_of_a_manual_position_stays_unclassified(lenv, monkeypatc
     assert {r["attribution_state"] for o, r in by_order.items() if o != "26111900000104"} == {
         "manual"
     }
+    monkeypatch.setattr(pnl, "_now", lambda: LAST_FILL + timedelta(days=1))
+    pending = pnl.get_unresolved(symbol="TCS")
+    assert [r["source_label"] for r in pending] == ["UNCLASSIFIED"]
+    assert "system marker square_off" in pending[0]["source_evidence"]
 
 
 # ------------------------------------------------------------------ tag conflicts / collisions

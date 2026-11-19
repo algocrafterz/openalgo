@@ -712,6 +712,22 @@ def test_unresolved_route(client, env, monkeypatch):
     assert none["unresolved_count"] == 0
 
 
+def test_summary_carries_execution_counts(client, env, monkeypatch):
+    enable(monkeypatch)
+    for mm in (20, 21, 22):
+        env.fill("BUY", 1, 10, d(17, 9, mm), symbol="TCS", state="unresolved")
+    body = summary(client, period="1d")
+    assert (body["executions_collected"], body["executions_unresolved"]) == (3, 3)
+    assert body["trades_total"] == 0 and body["positions_total"] == 0
+    assert "executions_collected" in body["labels"]["executions"]
+    seed(env)  # on the 17th: one manual ITC buy, one unresolved and one strategy fill
+    day = {"period": "custom", "start": "2026-11-17", "end": "2026-11-17"}
+    body = summary(client, **day)
+    assert (body["executions_collected"], body["executions_unresolved"]) == (5, 4)
+    body = summary(client, **day, symbol="SBIN")
+    assert (body["executions_collected"], body["executions_unresolved"]) == (0, 0)
+
+
 # ---------------------------------------------------------------- single flight
 
 
@@ -789,3 +805,25 @@ def test_blueprint_declares_only_get_routes():
     for rule in make_app().url_map.iter_rules():
         if rule.rule.startswith("/api/discretionary-pnl"):
             assert rule.methods - {"HEAD", "OPTIONS"} == {"GET"}, rule.rule
+
+
+def test_summary_carries_the_today_block_and_honours_filters(client, env, monkeypatch):
+    enable(monkeypatch)
+    env.fill("BUY", 45, 100, d(17, 9, 30))
+    env.fill("SELL", 20, 110, d(17, 9, 45))
+    env.fill("BUY", 3, 10, d(17, 9, 50), symbol="TCS", state="unresolved")
+    body = summary(client, period="30d")
+    t = body["today"]
+    assert t["session_date"] == "2026-11-17" and t["quotes_requested"] is False
+    assert (t["completed_positions"], t["open_positions"], t["partially_closed_positions"]) == (
+        0,
+        1,
+        1,
+    )
+    assert t["realized_gross"] == 200 and t["unrealized"] is None
+    pending = t["pending_attribution"]
+    assert pending["grace_count"] + pending["other_total"] == 1
+    assert "today" in body["labels"]
+    other = summary(client, period="30d", symbol="ITC")["today"]
+    assert other["open_positions"] == 0 and other["realized_gross"] == 0
+    assert other["pending_attribution"]["grace_count"] == 0

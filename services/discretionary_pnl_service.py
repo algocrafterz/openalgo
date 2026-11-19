@@ -12,7 +12,9 @@ through helpers that tests replace.
 Which fills count
 -----------------
 Discretionary = attribution_state in (manual, ui_manual). ``unresolved`` fills are listed
-(``get_unresolved``) and excluded from P&L; ``strategy_*`` fills are excluded.
+(``get_unresolved``) and excluded from P&L; ``strategy_*`` fills are excluded. The summary's
+``executions_collected`` / ``executions_unresolved`` count the manual + unresolved fills of the
+period and filters (see ``execution_counts``); they are informational and change no figure.
 
 Rebuild
 -------
@@ -99,6 +101,17 @@ capital basis, so Sharpe, Sortino, the capital they assume and any return-on-cap
 withheld with the reason ``no capital basis`` (compute_metrics would otherwise quietly use
 its 100,000 reference capital). Its start date is DISCRETIONARY_RELIABLE_SINCE, else the
 session date of the first synced fill.
+
+Today (current session)
+-----------------------
+``summary["today"]`` (``today_block``) is a read-only view of the SAME build rows for the
+session ``session_date(now)`` (IST; the previous day before SESSION_EXPIRY_TIME): realized
+gross / charges / net of the exit legs of the session (partial exits on their own day, so it
+equals the daily row of the session), completed positions whose FINAL close is in the session
+(with compute_metrics counts and ratios on them only), every open position (partially closed
+= open with at least one closing leg) and ``pending_attribution`` (unresolved fills, those
+held by the manual grace window with the earliest time they can be classified). It ignores
+the page period, honours the broker / account / symbol filters and changes no attribution.
 
 Sync health
 -----------
@@ -492,6 +505,7 @@ def _snapshot(
     start=None,
     end=None,
     trade_id: int | None = None,
+    links=False,
 ) -> dict:
     """One consistent read: load the ledger and fingerprint once, rebuild at most once, then
     read the requested tables for that SAME build_id. Retries if another process replaced the
@@ -509,6 +523,8 @@ def _snapshot(
                 snap["positions"] = book.load_positions(filters, status="OPEN", build_id=bid)
             if orphans:
                 snap["orphans"] = book.load_orphans(filters, build_id=bid)
+            if links:  # every link of the build (data-quality states); unscoped read, so filter
+                snap["links"] = [lk for lk in book.load_links() if lk.get("build_id") == bid]
             if trade_id is not None:
                 snap.update(_completed_trade_read(trade_id, bid))
             meta = book.get_meta()
@@ -544,6 +560,16 @@ def _completed_trade_read(position_id: int, bid: str) -> dict:
 # ---------------------------------------------------------------- read API
 
 
+def _source_fields(f: dict) -> dict:
+    """Read-time source label (SIGNAL_LIVE / MANUAL / UNCLASSIFIED) and evidence label of a
+    ledger fill. Display only: no figure, state or accounting reads them."""
+    evidence = ledger_svc.parse_evidence(f.get("source_evidence"))
+    return {
+        "source_label": ledger_svc.source_label(f.get("attribution_state")),
+        "source_evidence": ledger_svc.evidence_label(evidence) if evidence else None,
+    }
+
+
 def _unresolved_of(fills: list[dict], filters: dict) -> list[dict]:
     out = []
     for f in fills:
@@ -551,14 +577,62 @@ def _unresolved_of(fills: list[dict], filters: dict) -> list[dict]:
             continue
         if any(f.get(k) != v for k, v in filters.items()):
             continue
-        out.append(
-            {
-                k: (v.strftime("%Y-%m-%d %H:%M:%S") if isinstance(v, datetime) else v)
-                for k, v in f.items()
-                if k not in ("raw_hash",)
-            }
-        )
+        row = {
+            k: (v.strftime("%Y-%m-%d %H:%M:%S") if isinstance(v, datetime) else v)
+            for k, v in f.items()
+            if k not in ("raw_hash", "source_evidence")
+        }
+        row.update(_source_fields(f))
+        out.append(row)
     return out
+
+
+def source_label_counts(fills: list[dict], filters: dict, start: str, end: str) -> dict:
+    """Read-only count of ALL ledger fills of the period and filters per source label.
+
+    Every state counts here (strategy fills included, as SIGNAL_LIVE), so it describes source
+    identification only; it feeds no P&L, metric or attribution.
+    """
+    counts = {ledger_svc.SIGNAL_LIVE: 0, ledger_svc.MANUAL: 0, ledger_svc.UNCLASSIFIED: 0}
+    for f in fills:
+        if any(f.get(k) != v for k, v in filters.items()):
+            continue
+        if f.get("fill_time") is None:
+            continue
+        day = session_date(f["fill_time"]).isoformat()
+        if not (start <= day <= end):
+            continue
+        counts[ledger_svc.source_label(f.get("attribution_state"))] += 1
+    return counts
+
+
+def execution_counts(fills: list[dict], filters: dict, start: str, end: str) -> dict:
+    """Read-only counts of discretionary CANDIDATE executions for the period and filters.
+
+    ``executions_collected``: ledger fills whose state is manual, ui_manual or unresolved
+    (the fills that are, or may become, discretionary) whose session date of ``fill_time`` is
+    in [``start``, ``end``] and that match the broker / account / symbol ``filters``.
+    strategy_* fills are NOT counted: they belong to the strategy side, never to this view.
+    ``executions_unresolved``: the unresolved share of that same set (awaiting attribution,
+    excluded from P&L). These counts only describe the ledger; they feed no P&L, metric or
+    attribution, and the unresolved list (``get_unresolved``) stays unbounded by period.
+    """
+    collected = unresolved = 0
+    for f in fills:
+        state = f["attribution_state"]
+        if state not in DISCRETIONARY_STATES and state != ledger.STATE_UNRESOLVED:
+            continue
+        if any(f.get(k) != v for k, v in filters.items()):
+            continue
+        if f.get("fill_time") is None:
+            continue
+        day = session_date(f["fill_time"]).isoformat()
+        if not (start <= day <= end):
+            continue
+        collected += 1
+        if state == ledger.STATE_UNRESOLVED:
+            unresolved += 1
+    return {"executions_collected": collected, "executions_unresolved": unresolved}
 
 
 def get_trades(broker=None, account=None, symbol=None, start=None, end=None) -> list[dict]:
@@ -990,8 +1064,20 @@ def get_summary(
 ) -> dict:
     """Metrics, realized/charges/net and unrealized for the period (see ``_summary_parts``)."""
     filters = _clean_filters(**{k: (filters or {}).get(k) for k in ("broker", "account", "symbol")})
-    snap = _snapshot(filters, trades=True, positions=True, orphans=True)
+    snap = _snapshot(filters, trades=True, positions=True, orphans=True, links=True)
     return _summary_parts(snap, period, start, end, filters, with_quotes)["summary"]
+
+
+def _safe_block(name: str, build, warnings: list[str]):
+    """Build one OPTIONAL summary block. A failure never fails the summary: it is logged
+    (exception type only, no ids or values), the block becomes None and a warning names it.
+    The page renders a short 'unavailable' note for a null block."""
+    try:
+        return build()
+    except Exception as e:
+        logger.error("Discretionary summary block failed: block=%s %s", name, type(e).__name__)
+        warnings.append(f"{name} block unavailable (computation failed); totals are unaffected.")
+        return None
 
 
 def _summary_parts(
@@ -1081,6 +1167,15 @@ def _summary_parts(
 
     metrics = withhold_capital_metrics(leg_and_trade_metrics(legs, trades, s, e))
     metrics["charges_unavailable_trades"] = unavailable
+    # Discretionary path only, after compute_metrics (shared with Live/Paper, unchanged): its
+    # drawdown seeds the equity peak from the FIRST day, so a first-day loss is invisible.
+    # Here the peak starts at 0 (see an.max_drawdown_from_zero); same gross-realized basis.
+    daily_for_dd = an.period_breakdown(trades, "daily", legs)
+    if len(daily_for_dd) >= an.MIN_DAYS_FOR_DAILY:
+        metrics["max_drawdown"] = an.max_drawdown_from_zero(daily_for_dd)
+        metrics["max_drawdown_note"] = (
+            "equity peak starts at 0 (a first-day loss counts); gross realized by close date"
+        )
 
     warnings = []
     if unavailable:
@@ -1122,6 +1217,7 @@ def _summary_parts(
         warnings.append("unrealized P&L not requested.")
     sync_health, sync_warnings = _sync_health(_now(), None if period == "all" else s)
     warnings.extend(sync_warnings)
+    scope_start = floor.isoformat() if period == "all" else s
 
     summary = {
         "period": {"period": period, "start": s, "end": e, "reliable_since": floor.isoformat()},
@@ -1142,6 +1238,58 @@ def _summary_parts(
         "per_identity": per_identity,
         "sync_health": sync_health,
         "warnings": warnings,
+        # read-only ledger counts for the page's empty state (see execution_counts). "all"
+        # resolves to the first closed trade (today when there is none), so its counts start
+        # at the reliable_since floor instead: older unresolved fills still count.
+        **execution_counts(snap["fills"], filters, scope_start, e),
+        # read-time source labels of every ledger fill of the period (display only)
+        "source_labels": source_label_counts(snap["fills"], filters, scope_start, e),
+        # sample-size context of the ratios (the existing edge-check rule; see sample_context)
+        "sample": sample_context(len(trades), len({t["trade_date"] for t in trades})),
+        # four-state count of the candidate executions of the period (see data_quality)
+        "data_quality": _safe_block(
+            "data_quality",
+            lambda: data_quality(
+                snap,
+                filters,
+                scope_start,
+                e,
+                legs,
+                trades,
+                pos_view,
+                with_quotes,
+                sync_health,
+                sync_warnings,
+            ),
+            warnings,
+        ),
+        # unresolved fills replayed in memory; in NO total (see provisional_block)
+        "provisional": _safe_block(
+            "provisional",
+            lambda: provisional_block(
+                snap["fills"],
+                filters,
+                {
+                    (p["broker"], p["account"], p["exchange"], p["symbol"], p["product"])
+                    for p in pos_view
+                },
+            ),
+            warnings,
+        ),
+        # the current session, from the same build rows (ignores the period; see today_block)
+        "today": _safe_block(
+            "today",
+            lambda: today_block(
+                all_trades,
+                snap.get("flat_positions") or [],
+                pos_view,
+                snap["fills"],
+                filters,
+                today,
+                with_quotes,
+            ),
+            warnings,
+        ),
     }
     return {
         "summary": summary,
@@ -1150,6 +1298,645 @@ def _summary_parts(
         "positions": pos_view,
         "orphans": orphans,
         "today": today,
+    }
+
+
+# ---------------------------------------------------------------- today (current session)
+
+TODAY_METRICS = (
+    "trades_count",
+    "winning_trades",
+    "losing_trades",
+    "win_rate",
+    "gross_profit",
+    "gross_loss",
+    "profit_factor",
+    "expectancy",
+    "avg_win",
+    "avg_loss",
+)
+
+
+def _ident_seq(row: dict) -> tuple:
+    return (
+        row["broker"],
+        row["account"],
+        row["exchange"],
+        row["symbol"],
+        row["product"],
+        int(row["position_seq"]),
+    )
+
+
+def _last_attribution_run() -> tuple[datetime, datetime | None] | None:
+    """(started_at, finished_at) of the newest ok/partial ledger sync run (any broker /
+    account), or None.
+
+    A successful sync re-attributes EVERY unresolved fill of every broker and account with
+    ``now`` = its run start (ledger_svc.sync_once) and records the run after that, so this
+    run's start is when the stored attribution states were last evaluated, for every fill
+    inserted before it finished. Read only; None when the runs cannot be read."""
+    try:
+        runs = _load_sync_runs()
+    except Exception as e:
+        logger.warning(
+            "Could not read ledger sync runs for pending attribution: %s", type(e).__name__
+        )
+        return None
+    ok = [r for r in runs if r[4] in SYNC_OK_STATUSES and r[2] is not None]
+    if not ok:
+        return None
+    last = max(ok, key=lambda r: r[2])
+    return last[2], last[3]
+
+
+def _session_of(value) -> str | None:
+    """Session date (ISO) of a datetime or a 'YYYY-MM-DD HH:MM:SS' string; None otherwise."""
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return session_date(value).isoformat() if isinstance(value, datetime) else None
+
+
+def pending_attribution(
+    fills: list[dict],
+    filters: dict,
+    now: datetime,
+    day: str,
+    open_keys: set,
+    last_run: tuple[datetime, datetime | None] | None,
+) -> dict:
+    """Read-only view of the unresolved fills (never counted in P&L), split by WHY they may
+    still be unresolved. Changes no attribution.
+
+    ``grace``: unresolved fills that were inside the manual grace window
+    (DISCRETIONARY_LEDGER_MANUAL_GRACE_MIN, G) when the attribution was last evaluated
+    (run start - fill_time < G, where ``last_run`` is the (start, finish) of the newest
+    successful sync; or the fill was inserted after that run finished, so it was never
+    evaluated). The grace
+    window lets a strategy tag written just after the broker returned the order id still
+    arrive. ``attributable_from`` = fill_time + G is the EARLIEST time the fill can be
+    classified; it is classified at the first successful sync that STARTS at or after it (and
+    only then if no tag / engine order appears and the coverage rule holds, so it may still
+    become strategy_* or stay unresolved). ``due`` is True when that time has passed and the
+    fill only waits for the next sync. ``affects_open_position``: the fill's identity has an
+    open discretionary position (its quantity may be about to change).
+
+    ``other``: unresolved fills that were already past the grace window at the last
+    evaluation, so something else holds them (no coverage, a tag of unknown mode, no usable
+    order id, signal_engine trades.db unreadable). ``other_today`` counts those of session
+    ``day``; ``other_total`` all of them (the unresolved list is unbounded by period).
+    """
+    from datetime import timedelta
+
+    grace_min = ledger_svc.manual_grace_minutes()
+    grace = timedelta(minutes=grace_min)
+    held: list[dict] = []
+    other_today = other_total = 0
+    for f in fills:
+        if f["attribution_state"] != ledger.STATE_UNRESOLVED:
+            continue
+        if any(f.get(k) != v for k, v in filters.items()):
+            continue
+        when = f.get("fill_time")
+        if not isinstance(when, datetime):
+            other_total += 1
+            continue
+        evaluated = None
+        if last_run is not None:
+            started, finished = last_run
+            synced = f.get("synced_at")
+            if finished is None or not isinstance(synced, datetime) or finished >= synced:
+                evaluated = started
+        in_grace = grace_min > 0 and (evaluated is None or evaluated - when < grace)
+        if not in_grace:
+            other_total += 1
+            if session_date(when).isoformat() == day:
+                other_today += 1
+            continue
+        attributable = when + grace
+        key = (f["broker"], f["account"], f["exchange"], f["symbol"], f["product"])
+        held.append(
+            {
+                "id": f["id"],
+                "broker": f["broker"],
+                "account": f["account"],
+                "symbol": f["symbol"],
+                "exchange": f["exchange"],
+                "product": f["product"],
+                "side": f["side"],
+                "qty": f["qty"],
+                "price": f["price"],
+                "fill_time": _fill_time(when),
+                "attributable_from": _fill_time(attributable),
+                "due": now >= attributable,
+                "affects_open_position": key in open_keys,
+            }
+        )
+    held.sort(key=lambda r: (r["attributable_from"], r["id"]))
+    return {
+        "grace_minutes": grace_min,
+        "last_evaluated_at": _fill_time(last_run[0]) if last_run else None,
+        "grace_count": len(held),
+        "earliest_attributable_at": held[0]["attributable_from"] if held else None,
+        "grace_fills": held,
+        "other_today": other_today,
+        "other_total": other_total,
+    }
+
+
+def today_block(
+    all_trades: list[dict],
+    flat_positions: list[dict],
+    pos_view: list[dict],
+    fills: list[dict],
+    filters: dict,
+    today: date,
+    with_quotes: bool,
+) -> dict:
+    """The current trading session, from the SAME build rows as the rest of the summary.
+
+    Read only: no second accounting path. ``all_trades`` are the closing legs of the build
+    (already filtered by broker / account / symbol), ``flat_positions`` its FLAT positions,
+    ``pos_view`` the priced OPEN positions. The page period is ignored.
+
+    Session date: ``session_date(now)`` (naive IST, the previous calendar day before
+    SESSION_EXPIRY_TIME, default 03:00), the same "today" as the period resolver and the
+    daily table. It is not calendar-aware: on a weekend or holiday it is that date and the
+    block shows no closes.
+
+    * realized (gross, charges, net): the closing legs whose ``trade_date`` is the session,
+      i.e. every exit fill of the session, partial exits included, on the day of the exit.
+      It therefore equals the daily row of the session (``by_period.daily``).
+    * completed positions: positions that went flat with their FINAL close in the session
+      (a position opened on an earlier day and closed today counts today; its entry date is
+      shown). Ratios / counts come from compute_metrics on those completed positions only
+      (``leg_and_trade_metrics``); a partial exit adds money, never a completed trade.
+    * open positions: every position open now (whatever day it opened). Partially closed:
+      an open position with at least one closing leg (any day).
+    * unrealized: the open positions marked to the price, only with quotes (else
+      ``not_requested``); never part of realized or net.
+    * pending attribution: see ``pending_attribution``; excluded from every figure.
+    """
+    day = today.isoformat()
+    legs_today = [t for t in all_trades if t["trade_date"] == day]
+    completed = [
+        t for t in an.group_completed(all_trades, flat_positions) if t["trade_date"] == day
+    ]
+    metrics = leg_and_trade_metrics(legs_today, completed, day, day)
+    gross = sum(float(t["realized_pnl"]) for t in legs_today)
+    charges = sum(float(t["charges"]) for t in legs_today if t["charges"] is not None)
+    unavailable = sum(1 for t in legs_today if t["charges"] is None)
+
+    legs_by_pos: dict[tuple, list[dict]] = {}
+    for t in all_trades:
+        legs_by_pos.setdefault(_ident_seq(t), []).append(t)
+
+    closed_rows = []
+    for t in sorted(completed, key=lambda t: (t["closed_at"], t["id"]), reverse=True):
+        legs = legs_by_pos.get(_ident_seq(t), [])
+        closed_rows.append(
+            {
+                "id": t["id"],
+                "build_id": t.get("build_id"),
+                "broker": t["broker"],
+                "account": t["account"],
+                "symbol": t["symbol"],
+                "exchange": t["exchange"],
+                "product": t["product"],
+                "direction": t["direction"],
+                "total_quantity": _round(t["closed_quantity"]),
+                "entry_price": _round(t["entry_price"]),
+                "exit_price": _round(t["exit_price"]),
+                "opened_at": t["opened_at"],
+                "opened_session": _session_of(t["opened_at"]),
+                "closed_at": t["closed_at"],
+                "gross_pnl": _round(t["realized_pnl"]),
+                "realized_today": _round(
+                    sum(float(x["realized_pnl"]) for x in legs if x["trade_date"] == day)
+                ),
+                "charges": _round(t["charges"]),
+                "charges_status": t["charges_status"],
+                "net_pnl": _round(t["net_pnl"]),
+                "legs": t["legs"],
+                "status": "Closed",
+            }
+        )
+
+    open_rows = []
+    partial = 0
+    unrealized = 0.0
+    unpriced = 0
+    statuses: dict[str, int] = {}
+    for p in pos_view:
+        legs = legs_by_pos.get(_ident_seq(p), [])
+        closed_qty = sum(float(x["closed_quantity"]) for x in legs)
+        is_partial = bool(legs)
+        partial += int(is_partial)
+        statuses[p["price_status"]] = statuses.get(p["price_status"], 0) + 1
+        if p["unrealized"] is None:
+            unpriced += 1
+        else:
+            unrealized += p["unrealized"]
+        open_rows.append(
+            {
+                "id": p.get("id"),
+                "broker": p["broker"],
+                "account": p["account"],
+                "symbol": p["symbol"],
+                "exchange": p["exchange"],
+                "product": p["product"],
+                "direction": p["direction"],
+                "open_qty": _round(p["open_qty"]),
+                "closed_qty": _round(closed_qty),
+                "total_quantity": _round(float(p["open_qty"]) + closed_qty),
+                "avg_entry": _round(p["avg_entry"]),
+                "opened_at": p["opened_at"],
+                "opened_session": p.get("opened_session"),
+                "realized_so_far": p.get("realized_so_far"),
+                "realized_today": _round(
+                    sum(float(x["realized_pnl"]) for x in legs if x["trade_date"] == day)
+                ),
+                "exit_legs": len(legs),
+                "ltp": p.get("ltp"),
+                "price_status": p["price_status"],
+                "unrealized": p["unrealized"],
+                "status": "Partially closed" if is_partial else "Open",
+            }
+        )
+    open_rows.sort(key=lambda r: (str(r["opened_at"]), r["symbol"]), reverse=True)
+    open_keys = {
+        (p["broker"], p["account"], p["exchange"], p["symbol"], p["product"]) for p in pos_view
+    }
+    pending = pending_attribution(fills, filters, _now(), day, open_keys, _last_attribution_run())
+    priced = len(pos_view) - unpriced
+    return {
+        "session_date": day,
+        "session_definition": (
+            "session date of the current IST time (before SESSION_EXPIRY_TIME it is the "
+            "previous day); realized counts every exit fill of the session, partial exits "
+            "included; completed positions are those whose final close is in the session"
+        ),
+        "realized_gross": _round(gross),
+        "charges": _round(charges),
+        "charges_unavailable_legs": unavailable,
+        "charges_complete": unavailable == 0,
+        "net": _round(gross - charges),
+        "realized_net_of_charges": _round(gross - charges),
+        "exit_legs": len(legs_today),
+        "unrealized": _round(unrealized) if (with_quotes and priced) else None,
+        "unrealized_unavailable_positions": unpriced if with_quotes else 0,
+        "price_statuses": statuses,
+        "quotes_requested": bool(with_quotes),
+        "completed_positions": len(completed),
+        "open_positions": len(pos_view),
+        "partially_closed_positions": partial,
+        "metrics": {name: metrics.get(name) for name in TODAY_METRICS},
+        "closed_positions": closed_rows,
+        "open_position_rows": open_rows,
+        "pending_attribution": pending,
+    }
+
+
+# ---------------------------------------------------------------- sample size / data quality
+
+SAMPLE_MIN_TRADES = metrics_svc.EDGE_MIN_TRADES
+SAMPLE_MIN_DAYS = metrics_svc.EDGE_MIN_DAYS
+
+
+def sample_context(trades: int, days: int) -> dict:
+    """Sample-size context of a set of completed trades, by the EXISTING edge-check rule
+    (``performance_stats.edge_stats``: at least EDGE_MIN_TRADES trades over EDGE_MIN_DAYS
+    trading days). ``days`` is the number of distinct session dates of the trades' final
+    closes. Nothing is withheld by it here: the page shows the ratios with this context, and
+    hides a per-row profit factor when ``sufficient`` is False."""
+    return {
+        "completed_trades": int(trades),
+        "trading_days": int(days),
+        "min_trades": SAMPLE_MIN_TRADES,
+        "min_days": SAMPLE_MIN_DAYS,
+        "sufficient": trades >= SAMPLE_MIN_TRADES and days >= SAMPLE_MIN_DAYS,
+        "rule": (
+            f"at least {SAMPLE_MIN_TRADES} completed trades over {SAMPLE_MIN_DAYS} trading days "
+            "(the edge-check sample rule)"
+        ),
+    }
+
+
+def _with_sample(rows: list[dict]) -> list[dict]:
+    for row in rows:
+        row["sample_ok"] = sample_context(row["trades"], row.get("trading_days", 0))["sufficient"]
+    return rows
+
+
+STATE_COLLECTED = "collected"
+
+
+def data_quality(
+    snap: dict,
+    filters: dict,
+    start: str,
+    end: str,
+    legs: list[dict],
+    trades: list[dict],
+    pos_view: list[dict],
+    with_quotes: bool,
+    sync_health: dict,
+    sync_warnings: list[str],
+) -> dict:
+    """Read-only data-quality panel for the period and filters. Changes no figure.
+
+    Scope: the discretionary CANDIDATE fills of ``execution_counts`` (manual, ui_manual or
+    unresolved; session date of fill_time in [start, end]; broker / account / symbol
+    filters). Each is in exactly ONE state, by what it is NOW:
+
+    * ``awaiting_attribution`` (2): unresolved; split into ``awaiting_grace`` (held by the
+      manual grace window, ``pending_attribution``) and ``awaiting_other``.
+    * ``attributed_open`` (3): manual with at least one link to a position still OPEN (its
+      open remainder, or a leg of a partially closed position). A reversing fill that closed
+      one position and opened the next counts here.
+    * ``included`` (4): manual, every link belongs to a completed trade (a FLAT position).
+    * ``not_placed`` (5): manual but refused by the engine (orphan / invalid, no link).
+
+    ``collected`` (1) == 2 + 3 + 4 + 5 always (``reconciles``). Also: closing legs / completed
+    trades of the period without a charge estimate, the open-position price states (only when
+    quotes were requested), and the sync status (``sync_health`` plus its problem lines). No
+    reconciliation figure is shown: the summary has none.
+    """
+    scope = []
+    for f in snap["fills"]:
+        state = f["attribution_state"]
+        if state not in DISCRETIONARY_STATES and state != ledger.STATE_UNRESOLVED:
+            continue
+        if any(f.get(k) != v for k, v in filters.items()) or f.get("fill_time") is None:
+            continue
+        if start <= session_date(f["fill_time"]).isoformat() <= end:
+            scope.append(f)
+    unresolved = [f for f in scope if f["attribution_state"] == ledger.STATE_UNRESOLVED]
+    pending = pending_attribution(unresolved, {}, _now(), end, set(), _last_attribution_run())
+
+    leg_pos = {t["id"]: _ident_seq(t) for t in snap.get("trades") or []}
+    flat = {_ident_seq(p) for p in snap.get("flat_positions") or []}
+    by_fill: dict[int, list[dict]] = {}
+    for link in snap.get("links") or []:
+        by_fill.setdefault(link["fill_ref"], []).append(link)
+    attributed_open = included = not_placed = 0
+    for f in scope:
+        if f["attribution_state"] == ledger.STATE_UNRESOLVED:
+            continue
+        mine = by_fill.get(f["id"], [])
+        if not mine:
+            not_placed += 1
+        elif any(
+            lk.get("position_id") is not None or leg_pos.get(lk.get("trade_id")) not in flat
+            for lk in mine
+        ):
+            attributed_open += 1
+        else:
+            included += 1
+    collected = len(scope)
+
+    statuses: dict[str, int] = {}
+    for p in pos_view:
+        statuses[p["price_status"]] = statuses.get(p["price_status"], 0) + 1
+    prices = {
+        "requested": bool(with_quotes),
+        "open_positions": len(pos_view),
+        "statuses": statuses if with_quotes else {},
+        "missing": sum(1 for p in pos_view if p["unrealized"] is None) if with_quotes else 0,
+        "stale": (
+            sum(1 for p in pos_view if p["price_status"] in ("stale", "last_close", "cached"))
+            if with_quotes
+            else 0
+        ),
+    }
+    return {
+        "scope": (
+            "manual and unresolved ledger fills whose session date is in the period, with the "
+            "filters; each in one state by what it is now"
+        ),
+        STATE_COLLECTED: collected,
+        "awaiting_attribution": len(unresolved),
+        "awaiting_grace": pending["grace_count"],
+        "awaiting_other": pending["other_total"],
+        "grace_minutes": pending["grace_minutes"],
+        "earliest_attributable_at": pending["earliest_attributable_at"],
+        "attributed_open": attributed_open,
+        "included": included,
+        "not_placed": not_placed,
+        "reconciles": collected == len(unresolved) + attributed_open + included + not_placed,
+        "charges_incomplete_legs": sum(1 for t in legs if t["charges"] is None),
+        "charges_incomplete_trades": sum(1 for t in trades if t["charges"] is None),
+        "prices": prices,
+        "sync": {
+            "last_successful_sync": (sync_health or {}).get("last_successful_sync"),
+            "days_without_sync": list((sync_health or {}).get("days_without_sync") or []),
+            "problems": [w for w in sync_warnings if not w.startswith("last successful sync:")],
+        },
+    }
+
+
+# ---------------------------------------------------------------- provisional (unresolved)
+
+
+def _iso_time(value):
+    return value.strftime("%Y-%m-%d %H:%M:%S") if isinstance(value, datetime) else value
+
+
+def _evidence_counts(fills: list[dict]) -> dict:
+    """{evidence label: fills} of ``fills`` (no evidence -> "no source evidence")."""
+    out: dict[str, int] = {}
+    for f in fills:
+        label = _source_fields(f)["source_evidence"] or "no source evidence"
+        out[label] = out.get(label, 0) + 1
+    return dict(sorted(out.items()))
+
+
+def provisional_block(
+    fills: list[dict], filters: dict, book_open_idents: set | frozenset | None = None
+) -> dict:
+    """What the UNRESOLVED fills would show if they were yours. Read only and in memory.
+
+    The unresolved ledger fills matching the broker / account / symbol filters (all periods:
+    an opening may predate the page period, and the unresolved list is unbounded too) go
+    through the SAME engine as the book: ``reconstruct`` (per broker / account / exchange /
+    symbol / product identity, accounts never merge), ``allocate_charges`` (estimated, per
+    order) and ``group_completed`` / ``summary_stats``. Nothing is written to the book or the
+    ledger, no attribution changes, and nothing here enters any total, metric, breakdown,
+    daily row, equity curve or the today block. Ids are local to this block (no build id):
+    the fills drill-down does not take them; each trade carries its fills inline instead.
+
+    ``opening_unknown`` marks a trade or open position of an identity where the engine had
+    to refuse a fill (an exit with no known opening); ``orphans`` lists those fills.
+    ``book_open_idents`` is the set of (broker, account, exchange, symbol, product) with an
+    open position in the BOOK; an orphan of such an identity gets ``book_position_open``
+    True (its opening is probably that book position). Display only, no figure changes.
+    """
+    book_open = set(book_open_idents or ())
+    unresolved = [
+        f
+        for f in fills
+        if f["attribution_state"] == ledger.STATE_UNRESOLVED
+        and not any(f.get(k) != v for k, v in filters.items())
+        and isinstance(f.get("fill_time"), datetime)  # the engine sorts by fill_time
+    ]
+    by_id = {f["id"]: f for f in unresolved}
+    result = reconstruct(unresolved)
+    allocate_charges(result, by_id)
+    legs = []
+    for i, t in enumerate(result["trades"]):
+        leg = dict(t)
+        leg.update(
+            id=i + 1,
+            build_id=None,
+            opened_at=_iso_time(t["opened_at"]),
+            closed_at=_iso_time(t["closed_at"]),
+        )
+        legs.append(leg)
+    positions = []
+    for i, p in enumerate(result["positions"]):
+        pos = dict(p)
+        pos.update(id=i + 1, build_id=None, opened_at=_iso_time(p["opened_at"]))
+        positions.append(pos)
+    pos_of = {_ident_seq(p): p for p in positions}
+    links_by_trade: dict[int, list[dict]] = {}
+    for link in result["links"]:
+        if "trade_idx" in link:
+            links_by_trade.setdefault(link["trade_idx"], []).append(link)
+
+    completed = an.group_completed(legs, positions)
+    rows = []
+    for t in sorted(completed, key=lambda t: (t["closed_at"], t["id"]), reverse=True):
+        merged: dict[tuple, dict] = {}
+        for leg_id in t["leg_ids"]:
+            for link in links_by_trade.get(leg_id - 1, []):
+                key = (link["fill_ref"], link["role"])
+                row = merged.setdefault(
+                    key,
+                    {
+                        "fill_ref": link["fill_ref"],
+                        "role": link["role"],
+                        "qty_used": 0.0,
+                        "charge_allocated": 0.0,
+                    },
+                )
+                row["qty_used"] += link["qty_used"]
+                if row["charge_allocated"] is None or link.get("charge_allocated") is None:
+                    row["charge_allocated"] = None
+                else:
+                    row["charge_allocated"] += link["charge_allocated"]
+        trade_fills = []
+        for row in merged.values():
+            f = by_id[row["fill_ref"]]
+            trade_fills.append(
+                {
+                    "fill_ref": row["fill_ref"],
+                    "role": row["role"],
+                    "side": f["side"],
+                    "qty_used": _round(row["qty_used"]),
+                    "price": f["price"],
+                    "fill_time": _iso_time(f["fill_time"]),
+                    # raw, like get_trade_fills: the page rounds once
+                    "charge_allocated": row["charge_allocated"],
+                    **_source_fields(f),
+                }
+            )
+        trade_fills.sort(
+            key=lambda x: (_ROLE_ORDER.get(x["role"], 9), x["fill_time"] or "", x["fill_ref"])
+        )
+        pos = pos_of.get(_ident_seq(t)) or {}
+        rows.append(
+            {
+                "id": t["id"],
+                "provisional": True,
+                "broker": t["broker"],
+                "account": t["account"],
+                "symbol": t["symbol"],
+                "exchange": t["exchange"],
+                "product": t["product"],
+                "direction": t["direction"],
+                "closed_quantity": _round(t["closed_quantity"]),
+                "entry_price": _round(t["entry_price"]),
+                "exit_price": _round(t["exit_price"]),
+                "opened_at": t["opened_at"],
+                "closed_at": t["closed_at"],
+                "trade_date": t["trade_date"],
+                "overnight": t["overnight"],
+                "hold_minutes": t["hold_minutes"],
+                "realized_pnl": _round(t["realized_pnl"]),
+                "charges": _round(t["charges"]),
+                "charges_status": t["charges_status"],
+                "net_pnl": _round(t["net_pnl"]),
+                "legs": t["legs"],
+                "opening_unknown": bool(pos.get("opening_unknown")),
+                "fills": trade_fills,
+            }
+        )
+    open_rows = [
+        {
+            "broker": p["broker"],
+            "account": p["account"],
+            "symbol": p["symbol"],
+            "exchange": p["exchange"],
+            "product": p["product"],
+            "direction": p["direction"],
+            "open_qty": _round(p["open_qty"]),
+            "avg_entry": _round(p["avg_entry"]),
+            "opened_at": p["opened_at"],
+            "realized_so_far": _round(p["realized_gross"]),
+            "opening_unknown": bool(p["opening_unknown"]),
+        }
+        for p in positions
+        if p["status"] == "OPEN"
+    ]
+    orphans = [
+        {
+            **{k: v for k, v in o.items() if k != "fill_time"},
+            "fill_time": _iso_time(o["fill_time"]),
+            "book_position_open": (
+                o["broker"],
+                o["account"],
+                o["exchange"],
+                o["symbol"],
+                o["product"],
+            )
+            in book_open,
+        }
+        for o in result["orphans"]
+    ]
+    stats = an.summary_stats(completed, legs)
+    charges_missing = sum(1 for t in completed if t["charges"] is None)
+    return {
+        "definition": (
+            "unresolved fills replayed with the same engine as if they were manual; estimated "
+            "charges; excluded from every total until classified"
+        ),
+        "fills": len(unresolved),
+        # every fill here is unresolved: source UNCLASSIFIED (see _source_fields)
+        "source_label": ledger_svc.UNCLASSIFIED,
+        "source_evidence": _evidence_counts(unresolved),
+        "trades": rows,
+        "open_positions": open_rows,
+        "orphans": orphans,
+        "metrics": {
+            "trades": stats["trades"],
+            "wins": stats["wins"],
+            "losses": stats["losses"],
+            "win_rate": stats["win_rate"],
+            "profit_factor": stats["profit_factor"],
+            "expectancy": stats["expectancy"],
+            "avg_win": stats["avg_win"],
+            "avg_loss": stats["avg_loss"],
+            "realized_gross": stats["realized_gross"],
+            "charges": stats["charges"],
+            "net_of_charges": stats["net_of_charges"],
+            "charges_unavailable_trades": stats["charges_unavailable_trades"],
+            "net_charges_complete": stats["net_charges_complete"],
+            "charges_missing_completed": charges_missing,
+        },
+        "sample": sample_context(len(completed), len({t["trade_date"] for t in completed})),
     }
 
 
@@ -1177,6 +1964,46 @@ LABELS = {
         "exits are legs of it. Open positions are not trades."
     ),
     "ratios": "Win rate, profit factor and expectancy are computed per set of completed trades, never summed.",
+    "today": (
+        "The current session (session date of now, IST; before SESSION_EXPIRY_TIME the previous "
+        "day). Realized counts every exit of the session, partial exits included; completed "
+        "positions are those whose final close is in the session; open positions are open now. "
+        "Unresolved fills, including those inside the manual grace window, are excluded."
+    ),
+    "sample": (
+        "Ratios come with the number of completed trades and trading days behind them; below "
+        "the edge-check rule (30 completed trades over 10 trading days) they are a low sample. "
+        "A breakdown row shows its profit factor only when it meets that rule."
+    ),
+    "consistency": (
+        "Largest win / loss, streaks and daily figures are gross realized (before charges). "
+        "Streaks run over completed trades in close order; a break-even trade ends a streak. "
+        "Average daily P&L and max drawdown need at least 2 trading days."
+    ),
+    "breakdowns": (
+        "Time of day and weekday use the ENTRY time (IST) of the position; holding time the "
+        "trade's own hold. Buckets: 09:15-10:00, 10:00-11:30, 11:30-13:30, 13:30-15:00, "
+        "15:00-15:30 (start included, end excluded), other outside them."
+    ),
+    "data_quality": (
+        "Candidate executions of the period in one state each: awaiting attribution, "
+        "attributed but in an open position, included in a completed trade, or not placed. "
+        "collected = the sum of the four."
+    ),
+    "provisional": (
+        "Unresolved executions replayed as if they were manual, with estimated charges. They "
+        "are not in any total, metric, breakdown, chart or the today block."
+    ),
+    "source_labels": (
+        "Source identification of every ledger fill of the period: SIGNAL_LIVE (an OpenAlgo "
+        "strategy order: order tag, remarks tag or engine order), MANUAL (manual or OpenAlgo UI) "
+        "or UNCLASSIFIED (unresolved, excluded from P&L). Display only; accounting ignores it."
+    ),
+    "executions": (
+        "executions_collected counts the ledger fills of the period and filters that are manual "
+        "or unresolved (strategy fills excluded); executions_unresolved is the unresolved part, "
+        "awaiting attribution and excluded from P&L."
+    ),
 }
 
 
@@ -1244,6 +2071,7 @@ def get_trade_fills(trade_id: int, build_id: str | None = None) -> dict | None:
                 "product": f["product"],
                 "side": f["side"],
                 "attribution_state": f["attribution_state"],
+                **_source_fields(f),
             }
         )
     fills.sort(key=lambda x: (_ROLE_ORDER.get(x["role"], 9), x["fill_time"] or "", x["fill_ref"]))
@@ -1276,7 +2104,7 @@ def get_performance(
     Raises ValueError for a bad period or custom range.
     """
     filters = _clean_filters(broker, account, symbol)
-    snap = _snapshot(filters, trades=True, positions=True, orphans=True)
+    snap = _snapshot(filters, trades=True, positions=True, orphans=True, links=True)
     parts = _summary_parts(snap, period, start, end, filters, with_quotes)
     out = dict(parts["summary"])
     trades, legs = parts["trades"], parts["legs"]  # completed trades / closing legs
@@ -1286,6 +2114,14 @@ def get_performance(
     out["by_product"] = an.group_breakdown(trades, "product", legs)
     out["by_holding"] = an.holding_breakdown(trades, legs)
     out["hold"] = an.hold_summary(trades)
+    # "How you trade": the same row builder over entry time of day, entry weekday and
+    # holding time; sample_ok says whether the row's profit factor may be shown
+    out["breakdowns"] = {
+        name: _with_sample(rows) for name, rows in an.trading_breakdowns(trades, legs).items()
+    }
+    out["consistency"] = an.consistency(
+        trades, out["by_period"]["daily"], out["hold"], out["metrics"].get("max_drawdown")
+    )
 
     newest = sorted(trades, key=lambda t: (t["closed_at"], t["id"]), reverse=True)
     out["trades"] = newest[:TABLE_LIMIT]

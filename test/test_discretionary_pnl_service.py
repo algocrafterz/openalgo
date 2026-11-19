@@ -1744,3 +1744,122 @@ def test_quotes_off_default_makes_no_broker_call_with_completed_trades(env):
     assert env.quote_calls == [] and env.positionbook_calls == 0
     assert perf["positions"][0]["unrealized"] is None
     assert perf["positions"][0]["realized_so_far"] == 200.0
+
+
+# ---------------------------------------------------------------- execution counts (empty state)
+# executions_collected = manual / ui_manual / unresolved fills of the period and filters (by
+# session date of the fill); executions_unresolved = the unresolved part. Strategy fills are
+# not counted. Informational only: no P&L, metric or attribution changes.
+
+
+def _exec_counts(out):
+    return out["executions_collected"], out["executions_unresolved"]
+
+
+def test_execution_counts_all_unresolved(env):
+    # the TCS shape: five fills, all unresolved, no trade and no position
+    for side, qty, mm in (("BUY", 4, 46), ("BUY", 21, 46), ("BUY", 20, 67), ("SELL", 30, 76)):
+        env.fill(
+            side, qty, 100, d(17, 9, mm) if mm < 60 else d(17, 10, mm - 60), state="unresolved"
+        )
+    env.fill("SELL", 15, 100, d(17, 10, 16), state="unresolved")
+    for period in ("1d", "7d", "30d", "all"):
+        out = pnl.get_performance(period=period)
+        assert _exec_counts(out) == (5, 5), period
+        assert out["trades_total"] == 0 and out["positions_total"] == 0
+        assert out["realized_gross"] == 0.0 and out["metrics"]["trades_count"] == 0
+    out = pnl.get_performance(period="custom", start="2026-11-17", end="2026-11-17")
+    assert _exec_counts(out) == (5, 5)
+    assert "5 unresolved fill(s) are excluded from P&L until attributed." in out["warnings"]
+    assert env.quote_calls == []
+
+
+def test_execution_counts_mixed_excludes_strategy_fills(env):
+    env.fill("BUY", 10, 100, d(17, 9, 20))
+    env.fill("SELL", 10, 110, d(17, 9, 30), state="ui_manual")
+    env.fill("BUY", 3, 50, d(17, 10, 5), symbol="UNRES", state="unresolved")
+    env.fill("BUY", 2, 60, d(17, 10, 6), symbol="STRAT", state="strategy_tag")
+    env.fill("BUY", 2, 60, d(17, 10, 7), symbol="ENG", state="strategy_engine")
+    out = pnl.get_summary(period="1d", with_quotes=False)
+    assert _exec_counts(out) == (3, 1)
+    assert out["realized_gross"] == pytest.approx(100.0)
+
+
+def test_execution_counts_none(env):
+    out = pnl.get_performance(period="7d")
+    assert _exec_counts(out) == (0, 0)
+    env.fill("BUY", 2, 60, d(17, 10, 6), symbol="STRAT", state="strategy_tag")
+    assert _exec_counts(pnl.get_performance(period="7d")) == (0, 0)
+
+
+def test_execution_counts_respect_filters(env):
+    env.fill("BUY", 1, 10, d(17, 9, 20), symbol="TCS", state="unresolved")
+    env.fill("BUY", 1, 10, d(17, 9, 21), symbol="TCS", account="B", state="unresolved")
+    env.fill("BUY", 1, 10, d(17, 9, 22), symbol="INFY", broker="zerodha", account="Z")
+    assert _exec_counts(pnl.get_performance(period="7d")) == (3, 2)
+    assert _exec_counts(pnl.get_performance(period="7d", symbol="TCS")) == (2, 2)
+    assert _exec_counts(pnl.get_performance(period="7d", account="B")) == (1, 1)
+    assert _exec_counts(pnl.get_performance(period="7d", broker="zerodha")) == (1, 0)
+    assert _exec_counts(pnl.get_performance(period="7d", symbol="NOPE")) == (0, 0)
+
+
+def test_execution_counts_respect_the_period(env):
+    env.fill("BUY", 1, 10, d(10, 9, 20), symbol="OLD", state="unresolved")
+    env.fill("BUY", 1, 10, d(17, 9, 20), symbol="NEW", state="unresolved")
+    # an early-morning fill before SESSION_EXPIRY_TIME belongs to the previous session
+    env.fill("BUY", 1, 10, datetime(2026, 11, 17, 2, 0), symbol="NIGHT", state="unresolved")
+    assert _exec_counts(pnl.get_performance(period="1d")) == (1, 1)  # 17th only
+    assert _exec_counts(pnl.get_performance(period="7d")) == (2, 2)  # 11th..17th
+    assert _exec_counts(pnl.get_performance(period="30d")) == (3, 3)
+    assert _exec_counts(
+        pnl.get_performance(period="custom", start="2026-11-10", end="2026-11-10")
+    ) == (1, 1)
+    assert _exec_counts(
+        pnl.get_performance(period="custom", start="2026-11-16", end="2026-11-16")
+    ) == (1, 1)
+    # "all" with no closed trade resolves to today; the counts still start at reliable_since
+    out = pnl.get_performance(period="all")
+    assert out["period"]["start"] == "2026-11-17" and _exec_counts(out) == (3, 3)
+    # the unresolved list is not bounded by the period
+    assert len(pnl.get_unresolved()) == 3
+
+
+def _money_view(out):
+    """Every P&L / metric / table field, without the build id (a new fill forces a rebuild)
+    and the informational unresolved views (execution counts, today's pending_attribution, the
+    data-quality counts and the provisional block of the unresolved fills)."""
+    skip = {
+        "build_id",
+        "warnings",
+        "executions_collected",
+        "executions_unresolved",
+        "source_labels",  # read-time source label counts: informational, no figure
+        "data_quality",
+        "provisional",
+    }
+
+    def strip(v):
+        if isinstance(v, dict):
+            return {
+                k: strip(x) for k, x in v.items() if k not in ("build_id", "pending_attribution")
+            }
+        if isinstance(v, list):
+            return [strip(x) for x in v]
+        return v
+
+    return {k: strip(v) for k, v in out.items() if k not in skip}
+
+
+def test_execution_counts_change_no_figure(env):
+    env.fill("BUY", 10, 100, d(17, 9, 20))
+    env.fill("SELL", 10, 110, d(17, 9, 30))
+    env.fill("BUY", 5, 200, d(17, 9, 40), symbol="ITC")
+    before = pnl.get_performance(period="7d")
+    env.fill("BUY", 3, 50, d(17, 10, 5), symbol="UNRES", state="unresolved")
+    env.fill("BUY", 2, 60, d(17, 10, 6), symbol="STRAT", state="strategy_tag")
+    after = pnl.get_performance(period="7d")
+    assert before["build_id"] != after["build_id"]
+    assert _money_view(before) == _money_view(after)
+    assert _exec_counts(before) == (3, 0) and _exec_counts(after) == (4, 1)
+    pending = after["today"]["pending_attribution"]
+    assert pending["grace_count"] + pending["other_total"] == 1

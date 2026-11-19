@@ -124,6 +124,52 @@ sync still counts as covered; its fills are simply missing if they were never fe
 summary lists such weekdays as `days_without_sync` and warns. The same-day rule, in contrast,
 requires continuity (see above).
 
+**What the Performance page shows meanwhile.** Unresolved fills are excluded from every P&L
+figure and listed under "Unresolved fills". When the selected period and filters hold
+executions but no completed trade and no open position, the page says "No attributable trades
+available for performance analysis yet. N executions collected; N awaiting attribution. Their
+P&L is excluded until classification is resolved." and opens the Unresolved fills list. The
+counts come from the summary fields `executions_collected` (ledger fills of the period and
+filters whose state is manual, ui_manual or unresolved, by session date of the fill; strategy
+fills are not counted; for the period "all" from the reliable-since date) and `executions_unresolved` (the unresolved part of that set). They are
+read-only and change no figure. With no such execution the page keeps "No discretionary
+trades yet". The Unresolved fills list itself is not limited to the period: it lists every
+unresolved fill matching the filters.
+
+**Today's Performance (current session).** The summary's `today` block and the page section of
+the same name show the current trading session whatever period is selected (broker / account /
+symbol filters apply). The session date is `session_date(now)`: the IST date, or the previous
+day before `SESSION_EXPIRY_TIME` (default 03:00), the same date the daily table uses; it is not
+calendar-aware, so on a weekend or holiday the block is empty. Everything is read from the same
+rebuilt book (no second accounting path):
+
+* *Realised* (gross, estimated charges, net) sums every exit fill of the session, partial exits
+  included, on the day of the exit; it equals the daily row of the session. Net is marked
+  incomplete when an exit has no charge estimate.
+* *Completed positions* are positions that went from flat to flat with their final exit in the
+  session (a position opened earlier and closed today counts today; its entry date is shown).
+  Win rate, profit factor, average win / loss, expectancy and the trade count use completed
+  positions only; a partial exit adds realised P&L but never a completed trade.
+* *Open positions* are open now (whatever day they opened); *partially closed* are open
+  positions with at least one exit. *Unrealised* needs "Fetch live prices" (not requested by
+  default).
+* *Pending attribution* lists unresolved fills that were inside the manual grace window when the
+  attribution was last evaluated (the newest successful sync start minus the fill time is under
+  `DISCRETIONARY_LEDGER_MANUAL_GRACE_MIN`, or the fill arrived after that sync). Each carries
+  `attributable_from` = fill time + grace: the earliest time a sync can classify it, at the
+  first successful sync that starts after it, and only if no tag or engine order appears and
+  coverage holds. Other unresolved fills of the session are counted separately. None of them is
+  in any figure, and this view changes no attribution.
+
+When a position becomes reportable: once every fill of it is classified manual / ui_manual.
+A fill positively matched to a strategy tag or a signal_engine order is classified at once and
+never enters discretionary P&L; a UI-placed order tag is classified ui_manual at once and counts
+at once. A fill without such a match is manual only after the grace window, at the next
+successful sync. Fills already classified are never delayed by anything else: the book is
+rebuilt on the next read after any ledger change (the fingerprint covers every fill and its
+state), and the page polls the summary, so the position, its realised P&L and the completed
+count update on the first poll after the sync that classified its last fill.
+
 ## Known misclassification
 
 These are documented, not fixed. Each makes an automated order count as discretionary:
@@ -199,6 +245,23 @@ A ledger account label is always a broker account id, never the OpenAlgo user na
 - **Expired derivatives are unsupported.** There is no settlement close and no expiry
   handling: an open derivative position is never settled at expiry and stays open. Do not rely
   on derivative P&L here.
+
+## Provisional figures and data-quality states (page only)
+
+Neither changes attribution, the grace window or any figure.
+
+* `summary.provisional`: the unresolved fills (broker / account / symbol filters, all
+  periods) replayed in memory with the same engine as the book (`reconstruct`,
+  `allocate_charges`, `group_completed`), per broker / account / exchange / symbol / product.
+  Nothing is written; ids are local and carry no build id, so the fills drill-down does not
+  take them (each trade lists its fills inline). Charges are estimates. These trades are in
+  no total, metric, breakdown, daily row, equity curve or the today block. Only unresolved
+  fills are replayed: an unresolved exit of a position whose opening is already manual shows
+  as its own provisional position until it is classified.
+* `summary.data_quality`: the manual + unresolved fills of the period and filters, each in
+  one state by what it is now: awaiting attribution (grace-held or other), attributed with a
+  link to a still-open position (a reversing fill counts here), included (every link in a
+  completed trade), or not placed (refused by the engine). collected = the sum of the four.
 
 ## Source identification by order tags and broker order evidence (all OFF by default)
 
