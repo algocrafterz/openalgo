@@ -99,6 +99,17 @@ was in place and the ledger was collecting.
   later fills wait for the end-of-day sync. The event payload is never written to the ledger,
   and the grace, G and classify are unchanged: a fill synced seconds after it happened stays
   unresolved until the grace has passed, as before.
+- **Event-sync kill switch.** Normal operation: the event sync is ON whenever the ledger runs.
+  `DISCRETIONARY_LEDGER_EVENT_SYNC_ENABLED` (default true; absent or empty is on, any value
+  other than 1/true/yes/on is off) and a kill file (`DISCRETIONARY_LEDGER_EVENT_SYNC_KILL_FILE`,
+  default `tmp/DISCRETIONARY_EVENT_SYNC_OFF` under the repo root, gitignored) are both read on
+  every event; either one turns the event sync off. Emergency:
+  `touch tmp/DISCRETIONARY_EVENT_SYNC_OFF` takes effect on the very next event with no restart
+  (`rm` it to turn the sync back on; the file must be on the host or container the app runs
+  in). Setting the env variable to false in `.env` needs an application restart, because
+  `.env` is read only at process start. While off, an armed debounce timer is cancelled and no
+  event writes or triggers anything; a sync already running completes. Periodic, boot,
+  end-of-day and manual syncs keep running unchanged.
 
 ## Safe production repair procedure
 

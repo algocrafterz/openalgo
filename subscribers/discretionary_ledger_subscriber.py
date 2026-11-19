@@ -34,11 +34,27 @@ triggers is idempotent; if the bus sheds it under overload (counted by the bus),
 and end-of-day syncs still collect the fill. The critical lane stays reserved for the strategy
 book, whose fills must not be lost.
 
+Independent kill switch (the event sync only; periodic, boot and end-of-day syncs are never
+affected). The event sync is ON by default whenever the ledger runs. It is OFF when either
+  - DISCRETIONARY_LEDGER_EVENT_SYNC_ENABLED is set to anything but a truthy value
+    (1/true/yes/on, same parsing as DISCRETIONARY_LEDGER_ENABLED); absent or empty means ON; or
+  - the kill file exists (DISCRETIONARY_LEDGER_EVENT_SYNC_KILL_FILE, default
+    <repo>/tmp/DISCRETIONARY_EVENT_SYNC_OFF; tmp/ is gitignored).
+Both are read on EVERY event, nothing is cached or bound at registration. The kill file takes
+effect on the very next event without a restart (create it = off, delete it = on; it must be on
+the same host or container as the app). An edit of .env is only read at process start, so the
+env variable needs an application restart; only a process that changes os.environ itself
+(tests) sees it live. While off, a relevant event is counted (events_ignored, ignored_disabled),
+an armed debounce timer is cancelled, and a timer that still fires queues nothing. A sync that
+is already queued or running is not interrupted. The ledger flag still wins: with
+DISCRETIONARY_LEDGER_ENABLED false nothing runs at all.
+
 Failures are logged (no unicode) and never raise into the event bus or the order path.
 """
 
 import os
 import threading
+from pathlib import Path
 
 from utils.env_config import env_float
 from utils.logging import get_logger
@@ -49,6 +65,9 @@ DEBOUNCE_DEFAULT_SEC = 8.0
 DEBOUNCE_MIN_SEC = 1.0
 MAX_BUSY_RETRIES = 15
 _TRUE = ("1", "true", "yes", "on")
+KILL_FILE_DEFAULT = str(
+    Path(__file__).resolve().parent.parent / "tmp" / "DISCRETIONARY_EVENT_SYNC_OFF"
+)
 
 _lock = threading.Lock()
 _timer: threading.Timer | None = None
@@ -58,6 +77,7 @@ _busy_retries = 0
 _stats = {
     "events_seen": 0,  # relevant events (live, filled, flag on, scheduler running)
     "events_ignored": 0,  # paper/analyze, unfilled, flag off or scheduler not running
+    "ignored_disabled": 0,  # relevant events dropped by the event-sync kill switch
     "syncs_triggered": 0,  # event syncs queued
     "coalesced": 0,  # events folded into an armed timer or a running sync
     "trailing": 0,  # trailing re-checks armed after a sync
@@ -81,6 +101,23 @@ def _ledger_enabled() -> bool:
     return os.getenv("DISCRETIONARY_LEDGER_ENABLED", "false").strip().lower() in _TRUE
 
 
+def _kill_file() -> str:
+    return os.getenv("DISCRETIONARY_LEDGER_EVENT_SYNC_KILL_FILE", "").strip() or KILL_FILE_DEFAULT
+
+
+def _event_sync_off_reason() -> str | None:
+    """None when the event sync is on, else "env" or "kill_file". Read on every call."""
+    raw = os.getenv("DISCRETIONARY_LEDGER_EVENT_SYNC_ENABLED", "").strip().lower()
+    if raw and raw not in _TRUE:
+        return "env"
+    try:
+        if os.path.exists(_kill_file()):
+            return "kill_file"
+    except Exception:
+        pass  # an unreadable path never turns the sync off by accident or raises
+    return None
+
+
 def _scheduler():
     # Imported lazily: importing this module (app start with the ledger off) must not import
     # the ledger service or its database module.
@@ -95,6 +132,9 @@ def get_stats() -> dict:
         out: dict = dict(_stats)
         out.update(timer_armed=_timer is not None, sync_running=_running, dirty=_dirty)
     out["debounce_sec"] = _debounce_seconds()
+    reason = _event_sync_off_reason()
+    out.update(event_sync_enabled=reason is None, event_sync_off_reason=reason)
+    out["event_sync_kill_file"] = _kill_file()
     return out
 
 
@@ -130,9 +170,25 @@ def on_order_update(event) -> None:
             with _lock:
                 _stats["events_ignored"] += 1
             return
+        if _event_sync_off_reason() is not None:
+            _disabled_event()
+            return
         _note_event()
     except Exception as e:
         _count_error("event", e)
+
+
+def _disabled_event() -> None:
+    """Kill switch is on: count the event, cancel an armed timer, queue nothing."""
+    global _timer, _dirty, _busy_retries
+    with _lock:
+        _stats["events_ignored"] += 1
+        _stats["ignored_disabled"] += 1
+        if _timer is not None:
+            _timer.cancel()
+            _timer = None
+        _dirty = False
+        _busy_retries = 0
 
 
 def _note_event() -> None:
@@ -166,6 +222,11 @@ def _fire() -> None:
         sched = _scheduler()
         with _lock:
             _timer = None
+            if _event_sync_off_reason() is not None:
+                _stats["ignored_disabled"] += 1
+                _dirty = False
+                _busy_retries = 0
+                return
             if not sched.event_sync_allowed(sched.now()):
                 _stats["outside_window"] += 1
                 _dirty = False

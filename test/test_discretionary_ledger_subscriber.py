@@ -46,13 +46,15 @@ class FakeTimer:
 
 
 @pytest.fixture(autouse=True)
-def clean(monkeypatch):
+def clean(monkeypatch, tmp_path):
     sch.stop_scheduler()
     sch._reset_state_for_tests()
     sub._reset_state_for_tests()
     FakeTimer.created = []
     monkeypatch.setenv("DISCRETIONARY_LEDGER_ENABLED", "true")
     monkeypatch.delenv("DISCRETIONARY_LEDGER_EVENT_DEBOUNCE_SEC", raising=False)
+    monkeypatch.delenv("DISCRETIONARY_LEDGER_EVENT_SYNC_ENABLED", raising=False)
+    monkeypatch.setenv("DISCRETIONARY_LEDGER_EVENT_SYNC_KILL_FILE", str(tmp_path / "kill"))
     monkeypatch.setattr(sch, "is_running", lambda: True)
     sch._now_fn = lambda: MARKET
     yield
@@ -297,6 +299,161 @@ def test_tcs_acceptance_sequence_replayed_with_real_timers(monkeypatch):
     assert len(sync_starts) == 2
     assert sync_starts[-1] > events[-1]
     assert sync_starts[0] - events[0] >= 0.2  # the debounce window held
+
+
+# ---------------------------------------------------------------- event-sync kill switch
+
+
+def _one_burst_syncs(fake_timer, n=3):
+    calls = []
+    sch._sync_fn = lambda: calls.append(1) or [{"status": "ok"}]
+    for _ in range(n):
+        sub.on_order_update(ev())
+    for t in list(fake_timer.created):
+        if t.started and not t.cancelled:
+            t.fire()
+    wait_for(idle)
+    return calls
+
+
+@pytest.mark.parametrize("val", [None, "", "  ", "true", "1", "YES", "on"])
+def test_event_sync_is_on_by_default_and_when_explicitly_truthy(fake_timer, monkeypatch, val):
+    if val is not None:
+        monkeypatch.setenv("DISCRETIONARY_LEDGER_EVENT_SYNC_ENABLED", val)
+    assert _one_burst_syncs(fake_timer) == [1]
+    st = sub.get_stats()
+    assert st["event_sync_enabled"] is True and st["event_sync_off_reason"] is None
+    assert st["ignored_disabled"] == 0
+
+
+@pytest.mark.parametrize("val", ["false", "0", "no", "off", "junk"])
+def test_env_false_or_invalid_disables_event_sync(fake_timer, monkeypatch, val):
+    monkeypatch.setenv("DISCRETIONARY_LEDGER_EVENT_SYNC_ENABLED", val)
+    assert _one_burst_syncs(fake_timer) == []
+    assert fake_timer.created == []
+    st = sub.get_stats()
+    assert st["event_sync_enabled"] is False and st["event_sync_off_reason"] == "env"
+    assert (st["ignored_disabled"], st["events_ignored"], st["events_seen"]) == (3, 3, 0)
+    assert st["syncs_triggered"] == 0
+
+
+def test_env_flip_at_runtime_applies_to_the_next_event(fake_timer, monkeypatch):
+    monkeypatch.setenv("DISCRETIONARY_LEDGER_EVENT_SYNC_ENABLED", "false")
+    sub.on_order_update(ev())
+    assert fake_timer.created == []
+    monkeypatch.setenv("DISCRETIONARY_LEDGER_EVENT_SYNC_ENABLED", "true")
+    sub.on_order_update(ev())
+    assert len(fake_timer.created) == 1
+
+
+def test_kill_file_off_on_next_event_and_back_on_without_reregistering(fake_timer, tmp_path):
+    kill = tmp_path / "kill"
+    kill.write_text("")
+    sub.on_order_update(ev())
+    assert fake_timer.created == []
+    st = sub.get_stats()
+    assert st["event_sync_off_reason"] == "kill_file" and st["ignored_disabled"] == 1
+    kill.unlink()
+    sub.on_order_update(ev())
+    assert len(fake_timer.created) == 1
+    assert sub.get_stats()["event_sync_enabled"] is True
+
+
+def test_armed_timer_is_cancelled_when_switched_off_mid_window(fake_timer, tmp_path):
+    calls = []
+    sch._sync_fn = lambda: calls.append(1) or [{"status": "ok"}]
+    sub.on_order_update(ev())
+    t = fake_timer.created[0]
+    (tmp_path / "kill").write_text("")
+    sub.on_order_update(ev())
+    assert t.cancelled and sub.get_stats()["timer_armed"] is False
+    assert calls == []
+
+
+def test_timer_that_still_fires_after_switch_off_queues_nothing(fake_timer, tmp_path):
+    calls = []
+    sch._sync_fn = lambda: calls.append(1) or [{"status": "ok"}]
+    sub.on_order_update(ev())
+    (tmp_path / "kill").write_text("")
+    fake_timer.created[0].fire()  # no further event arrived to cancel it
+    time.sleep(0.2)
+    assert calls == [] and sub.get_stats()["syncs_triggered"] == 0
+    assert sub.get_stats()["sync_running"] is False
+
+
+def test_switch_off_does_not_interrupt_a_running_sync(fake_timer, tmp_path):
+    gate, started = threading.Event(), threading.Event()
+
+    def slow():
+        started.set()
+        gate.wait(5)
+        return [{"status": "ok"}]
+
+    sch._sync_fn = slow
+    sub.on_order_update(ev())
+    fake_timer.created[0].fire()
+    assert started.wait(5)
+    (tmp_path / "kill").write_text("")
+    sub.on_order_update(ev())  # ignored, no trailing re-check
+    gate.set()
+    assert wait_for(idle)
+    assert sub.get_stats()["syncs_triggered"] == 1 and len(fake_timer.created) == 1
+
+
+def test_oserror_on_kill_file_check_does_not_raise_and_keeps_sync_on(fake_timer, monkeypatch):
+    def boom(_p):
+        raise OSError("denied")
+
+    monkeypatch.setattr(sub.os.path, "exists", boom)
+    assert _one_burst_syncs(fake_timer) == [1]
+    assert sub.get_stats()["event_sync_enabled"] is True
+
+
+def test_kill_switch_leaves_periodic_boot_eod_and_manual_syncs_alone(
+    fake_timer, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("DISCRETIONARY_LEDGER_EVENT_SYNC_ENABLED", "false")
+    (tmp_path / "kill").write_text("")
+    calls = []
+    sch._sync_fn = lambda: calls.append(1) or [{"status": "ok"}]
+    for reason in ("periodic", "boot", "eod", "manual"):
+        assert sch.trigger_sync(reason) and wait_for(lambda: not sch._inflight)
+    assert len(calls) == 4
+
+
+def test_ledger_flag_off_wins_over_the_event_sync_switch(fake_timer, monkeypatch):
+    monkeypatch.setenv("DISCRETIONARY_LEDGER_ENABLED", "false")
+    monkeypatch.setenv("DISCRETIONARY_LEDGER_EVENT_SYNC_ENABLED", "true")
+    assert _one_burst_syncs(fake_timer) == []
+    assert fake_timer.created == [] and sub.get_stats()["ignored_disabled"] == 0
+
+
+def test_import_with_everything_off_starts_no_thread(monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("DISCRETIONARY_LEDGER_ENABLED", "false")
+    before = threading.active_count()
+    importlib.reload(sub)
+    assert threading.active_count() == before
+
+
+def test_api_load_unchanged_when_on_and_zero_with_kill_file(fake_timer, tmp_path):
+    """Burst of 30 events: ON is one TradeBook read per window (as before); kill file is zero."""
+    reads = []
+    sch._sync_fn = lambda: reads.append("tradebook") or [{"status": "ok"}]
+    for _ in range(30):
+        sub.on_order_update(ev())
+    assert len(fake_timer.created) == 1
+    fake_timer.created[0].fire()
+    assert wait_for(idle) and reads == ["tradebook"]
+    reads.clear()
+    FakeTimer.created = []
+    sub._reset_state_for_tests()
+    sub._timer_factory = FakeTimer
+    (tmp_path / "kill").write_text("")
+    for _ in range(30):
+        sub.on_order_update(ev())
+    assert fake_timer.created == [] and reads == []
 
 
 # ---------------------------------------------------------------- scheduler: periodic timer
