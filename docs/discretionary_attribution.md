@@ -87,6 +87,18 @@ was in place and the ledger was collecting.
   T = 09:00), so a run finished before T exists only after a boot before T (boot catch-up;
   a boot in the 05:00 to 06:00 skip window records `skipped_window`, which is not a
   heartbeat). Do not relax G or the 15-minute lead to compensate.
+- **Order-event syncs.** A live fill seen by the 5 s OrderBook poller (`order.update`, mode
+  live, filled quantity above 0) queues one sync `DISCRETIONARY_LEDGER_EVENT_DEBOUNCE_SEC`
+  (default 8) seconds later (`subscribers/discretionary_ledger_subscriber.py`; events inside
+  the window are coalesced; events during that sync cause one trailing re-check a window
+  later). It is the same `sync_all` path, so it records the same `ledger_sync_runs` rows and is
+  a same-day heartbeat. A successful one (every account ok or partial) restarts the periodic
+  timer, so the next periodic sync is a full interval later: the largest gap between
+  successful starts is unchanged (interval plus drift) and G still tolerates zero missed syncs.
+  Event syncs run only in the periodic window (weekdays 09:15 to 15:30, never 05:00 to 06:00);
+  later fills wait for the end-of-day sync. The event payload is never written to the ledger,
+  and the grace, G and classify are unchanged: a fill synced seconds after it happened stays
+  unresolved until the grace has passed, as before.
 
 ## Safe production repair procedure
 

@@ -8,7 +8,13 @@ a trigger that arrives while one runs is dropped. Nothing here runs on a request
 and a failure only logs - it never reaches Live/Paper or the order path.
 
 Triggers: boot catch-up (once, at start), periodic during market hours, one end-of-day
-sync, and a manual trigger function (no HTTP route in Stage 1).
+sync, a manual trigger function (no HTTP route in Stage 1), and order events: the
+discretionary ledger subscriber (subscribers/discretionary_ledger_subscriber.py) calls
+trigger_sync("order_event") a debounce window after a live fill is seen. A successful
+order-event sync (every account ok or partial) moves the periodic timer: the next periodic
+sync is a full interval after it. It records ledger_sync_runs rows exactly like a periodic
+sync (same sync_all path), so it is a same-day heartbeat too. Order-event syncs run only in
+the periodic window (see event_sync_allowed).
 
 UNSUPPORTED FOR NOW (user decision): MCX evening collection, and any collection outside
 NSE/BSE equity hours. Nothing here syncs for the MCX evening session (17:00 to 23:55) and
@@ -56,6 +62,8 @@ EOD_TIME = (16, 15)  # default; DISCRETIONARY_LEDGER_EOD_TIME overrides
 TICK_SECONDS = 60
 SKIP_WINDOW = ((5, 0), (6, 0))  # naive IST, start inclusive, end exclusive; mirrors the broker
 OK_STATUSES = frozenset({"ok", "partial"})
+# trigger_sync reason used by subscribers/discretionary_ledger_subscriber
+EVENT_REASON = "order_event"
 
 _lock = threading.Lock()
 _inflight = False
@@ -127,9 +135,11 @@ def _reset_state_for_tests() -> None:
         _now_fn = svc.now_ist
 
 
-def _worker(reason: str) -> None:
-    global _inflight, _last_eod_date
+def _worker(reason: str, on_done: Callable[[bool], None] | None = None) -> None:
+    global _inflight, _last_eod_date, _last_periodic
+    ok = False
     try:
+        started = _now_fn()
         ok = cycle_succeeded(_sync_fn())
         if reason == "eod":
             if ok:
@@ -137,7 +147,16 @@ def _worker(reason: str) -> None:
                     _last_eod_date = _eod_attempt_date
             else:
                 logger.warning("Discretionary ledger end-of-day sync incomplete; will retry")
+        elif reason == EVENT_REASON and ok:
+            # An event-triggered sync runs the same sync_all -> sync_once path as a periodic
+            # one, so it records the same ledger_sync_runs rows (started_at, status) and is a
+            # same-day heartbeat too: the next periodic sync waits a full interval after it.
+            # A failed event sync leaves the periodic timing as it was.
+            with _lock:
+                if _last_periodic is None or started > _last_periodic:
+                    _last_periodic = started
     except Exception as e:  # never propagate
+        ok = False
         logger.error("Discretionary ledger sync (%s) failed: %s", reason, type(e).__name__)
     finally:
         try:
@@ -148,23 +167,57 @@ def _worker(reason: str) -> None:
             pass
         with _lock:
             _inflight = False
+        if on_done is not None:
+            try:
+                on_done(ok)
+            except Exception as e:  # a callback failure never reaches the worker
+                logger.error("Discretionary ledger sync callback failed: %s", type(e).__name__)
 
 
-def trigger_sync(reason: str = "manual") -> bool:
-    """Queue one sync unless one is already in flight. Returns True if queued."""
+def trigger_sync(reason: str = "manual", on_done: Callable[[bool], None] | None = None) -> bool:
+    """Queue one sync unless one is already in flight. Returns True if queued.
+
+    ``on_done(ok)`` (optional) is called on the worker thread after the sync finished and the
+    in-flight flag is released; ``ok`` is True when every account ended ok or partial. It is
+    not called for a dropped trigger (False returned).
+    """
     global _inflight, _future
     with _lock:
         if _inflight:
             return False
         _inflight = True
     try:
-        _future = _get_executor().submit(_worker, reason)
+        _future = _get_executor().submit(_worker, reason, on_done)
     except Exception as e:  # executor shut down etc.
         with _lock:
             _inflight = False
         logger.error("Discretionary ledger could not queue sync: %s", type(e).__name__)
         return False
     return True
+
+
+def is_running() -> bool:
+    """True while the ticker thread is alive (start_scheduler ran and stop_scheduler did not)."""
+    with _lock:
+        return _ticker is not None and _ticker.is_alive()
+
+
+def event_sync_allowed(now: datetime) -> bool:
+    """Whether an order-event sync may run at ``now``: the periodic window only.
+
+    Weekdays, MARKET_OPEN to MARKET_CLOSE inclusive (same test as the periodic sync), never
+    inside the 05:00 to 06:00 skip window. Fills after 15:30 are left to the end-of-day sync,
+    as for the periodic sync, so an event sync is never less conservative than a periodic one.
+    sync_once still applies the broker's own skip window on top.
+    """
+    if now.weekday() >= 5 or svc.in_skip_window(now, SKIP_WINDOW):
+        return False
+    return MARKET_OPEN <= (now.hour, now.minute) <= MARKET_CLOSE
+
+
+def now() -> datetime:
+    """The scheduler's clock (naive IST; replaced in tests)."""
+    return _now_fn()
 
 
 def due_reason(

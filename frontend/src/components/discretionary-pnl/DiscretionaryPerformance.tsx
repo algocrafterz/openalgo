@@ -59,6 +59,7 @@ import { ProvisionalPanel } from './ProvisionalPanel'
 import { TodayPerformance } from './TodayPerformance'
 import { type SelectedTrade, TradeFillsDialog } from './TradeFillsDialog'
 import { UnresolvedSection } from './UnresolvedSection'
+import { useLedgerFillRefresh } from './useLedgerFillRefresh'
 
 const ALL = 'all'
 
@@ -168,6 +169,9 @@ export function DiscretionaryPerformance({
     queryClient.invalidateQueries({ queryKey: ['discretionary-pnl'] })
   }, [queryClient])
   useOrderEventRefresh(refresh, { events: ['order_event', 'analyzer_update'] })
+  // A fill made at the broker reaches the ledger through a debounced server sync, so the
+  // order_update socket event refetches twice, later (see LEDGER_FILL_REFRESH_MS).
+  useLedgerFillRefresh(refresh)
 
   // Keep every broker/account seen, so picking one does not remove the others from the list.
   const choices = useMemo(() => filterChoices(summary), [summary])

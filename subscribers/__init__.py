@@ -5,6 +5,7 @@ Call register_all() once during app initialization.
 """
 
 from subscribers import (
+    discretionary_ledger_subscriber,
     log_subscriber,
     socketio_subscriber,
     telegram_subscriber,
@@ -75,6 +76,14 @@ def register_all():
     # or analyzer_logs to record, and it would be noise on Telegram.
     bus.subscribe("order.update", socketio_subscriber.on_order_update, "socketio:order_update")
     bus.subscribe("order.update", wsproxy_subscriber.on_order_update, "wsproxy:order_update")
+    # Discretionary ledger: a live fill queues one debounced ledger sync (trigger only; the
+    # handler checks DISCRETIONARY_LEDGER_ENABLED per event and does nothing when it is off).
+    # Default lane: in-memory bookkeeping only, and the periodic sync covers a shed event.
+    bus.subscribe(
+        "order.update",
+        discretionary_ledger_subscriber.on_order_update,
+        "discretionary_ledger:order_update",
+    )
 
     # --- position.closed ---
     bus.subscribe("position.closed", log_subscriber.on_position_closed, "log:position_closed")

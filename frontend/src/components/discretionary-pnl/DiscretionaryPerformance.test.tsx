@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DiscretionaryApiError } from '@/api/discretionaryPnl'
 import {
   breakdownRow,
@@ -33,6 +33,28 @@ vi.mock('@/api/discretionaryPnl', async (importOriginal) => {
   }
 })
 vi.mock('@/hooks/useOrderEventRefresh', () => ({ useOrderEventRefresh: vi.fn() }))
+// The app-wide socket, faked: tests emit order_update on it.
+const sock = vi.hoisted(() => {
+  const handlers = new Map<string, Set<(p: unknown) => void>>()
+  return {
+    handlers,
+    socket: {
+      on: (e: string, h: (p: unknown) => void) => {
+        if (!handlers.has(e)) handlers.set(e, new Set())
+        handlers.get(e)?.add(h)
+      },
+      off: (e: string, h: (p: unknown) => void) => {
+        handlers.get(e)?.delete(h)
+      },
+    },
+    emit: (e: string, p: unknown) => {
+      for (const h of [...(handlers.get(e) ?? [])]) h(p)
+    },
+  }
+})
+vi.mock('@/components/socket/SocketProvider', () => ({
+  useSocketContext: () => ({ socket: sock.socket, playAlertSound: () => {} }),
+}))
 vi.mock('@/components/strategy-pnl/EquityDrawdownChart', () => ({
   EquityDrawdownChart: ({ equityCurve }: { equityCurve: unknown[] }) => (
     <div data-testid="equity-chart">{equityCurve.length} points</div>
@@ -40,6 +62,7 @@ vi.mock('@/components/strategy-pnl/EquityDrawdownChart', () => ({
 }))
 
 const { DiscretionaryPerformance } = await import('./DiscretionaryPerformance')
+const { useOrderEventRefresh } = await import('@/hooks/useOrderEventRefresh')
 
 const money = (v: number) => `Rs ${v.toFixed(2)}`
 
@@ -1026,5 +1049,88 @@ describe('dashboard additions', () => {
     await screen.findByTestId('provisional-panel')
     expect(cardValue('Gross realized')).toBe('Rs 60.00')
     expect(cardValue('Completed trades')).toBe('2')
+  })
+})
+
+describe('refresh after a broker fill (order_update socket event)', () => {
+  const liveFill = { mode: 'live', filled_quantity: 10, symbol: 'TCS' }
+
+  async function rendered() {
+    const view = renderIt()
+    await waitFor(() => expect(summaryFn).toHaveBeenCalled())
+    vi.useFakeTimers()
+    const spy = vi.spyOn(lastClient, 'invalidateQueries')
+    const keys = () =>
+      spy.mock.calls.map((c) => JSON.stringify((c[0] as { queryKey: unknown }).queryKey))
+    return { view, keys }
+  }
+
+  function advance(ms: number) {
+    act(() => {
+      vi.advanceTimersByTime(ms)
+    })
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('invalidates the discretionary queries 10 s and 25 s after a live fill, not before', async () => {
+    const { keys } = await rendered()
+    act(() => sock.emit('order_update', liveFill))
+    advance(9_999)
+    expect(keys()).toEqual([])
+    advance(1)
+    expect(keys()).toEqual([JSON.stringify(['discretionary-pnl'])])
+    advance(15_000)
+    expect(keys()).toEqual([
+      JSON.stringify(['discretionary-pnl']),
+      JSON.stringify(['discretionary-pnl']),
+    ])
+    advance(60_000)
+    expect(keys().length).toBe(2)
+  })
+
+  it('coalesces a burst of partial fills into one pair of refetches after the last event', async () => {
+    const { keys } = await rendered()
+    for (let i = 1; i <= 5; i++) {
+      act(() => sock.emit('order_update', { ...liveFill, filled_quantity: i * 5 }))
+      advance(1_000)
+    }
+    // last event at t=4 s: refetches at 14 s and 29 s
+    advance(8_999)
+    expect(keys()).toEqual([])
+    advance(1)
+    expect(keys().length).toBe(1)
+    advance(15_000)
+    expect(keys().length).toBe(2)
+  })
+
+  it('ignores analyze/paper updates and unfilled orders', async () => {
+    const { keys } = await rendered()
+    act(() => {
+      sock.emit('order_update', { mode: 'analyze', filled_quantity: 10 })
+      sock.emit('order_update', { mode: 'live', filled_quantity: 0 })
+      sock.emit('order_update', { mode: 'live' })
+      sock.emit('order_update', null)
+    })
+    advance(60_000)
+    expect(keys()).toEqual([])
+  })
+
+  it('clears its timers and its listener on unmount', async () => {
+    const { view, keys } = await rendered()
+    act(() => sock.emit('order_update', liveFill))
+    view.unmount()
+    expect(sock.handlers.get('order_update')?.size ?? 0).toBe(0)
+    advance(60_000)
+    expect(keys()).toEqual([])
+  })
+
+  it('keeps the existing order-event refresh unchanged, so one fill is not refetched twice', async () => {
+    await rendered()
+    const events = vi.mocked(useOrderEventRefresh).mock.calls.at(-1)?.[1]?.events
+    expect(events).toEqual(['order_event', 'analyzer_update'])
+    expect(sock.handlers.get('order_update')?.size).toBe(1)
   })
 })
