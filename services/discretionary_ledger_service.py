@@ -102,6 +102,43 @@ Coverage rule: implications (see docs/discretionary_attribution.md for the long 
 * Expired derivatives are unsupported: there is no settlement close, an expired position
   stays open.
 
+Source identification from broker order evidence (all OFF by default)
+---------------------------------------------------------------------
+Read-time source labels (see source_label): strategy_tag / strategy_engine -> SIGNAL_LIVE,
+manual / ui_manual -> MANUAL, unresolved -> UNCLASSIFIED. Position accounting does not read
+them. With DISCRETIONARY_SOURCE_FROM_ORDERBOOK on, each sync reads the broker OrderBook ONCE
+(reader.get_order_book, the broker's own rate limiter) and stores per order id, on every fill
+of that order (``source_evidence``, partial fills share it), the remark kind and tag (see
+utils/order_source_tag.py) and the broker's order-source field. An OrderBook failure never
+fails the sync: it only leaves the fills without that evidence. classify then adds, before
+the legacy rules:
+  * a registered live tag whose strategy code differs from the remark tag -> unresolved;
+  * a valid v1 remark tag of mode L -> strategy_tag at once (no grace, no coverage needed),
+    strategy = the registered name with that code, else "tag:<code>" (also when two registered
+    names share the code: never a guessed name); but a tag on an order whose order source is an
+    allow-listed human channel is an evidence conflict -> unresolved;
+  * a remark with the OpenAlgo marker but another version, a broken body, a non-live mode or
+    a tag embedded in other text -> unresolved, never manual;
+  * a broker/RMS/system marker on the order (utils.order_source_tag.system_marker: remark
+    pattern classes such as square-off / RMS exit / MTM / GTT, a bracket/cover child leg, a
+    broker algo, another source user) -> unresolved for good, never manual;
+  * order source "API" on a complete OrderBook read, no tag, no registered/engine record ->
+    unresolved for good (automated, strategy unknown), never manual by the grace;
+  * order source present and NOT in the human allow-list (DISCRETIONARY_MANUAL_ORDERSOURCES,
+    default WEB,MOB, case-insensitive) on a complete read -> unresolved for good;
+  * order source in the allow-list on a complete read, no tag, no marker, no
+    registered/engine record, covered (date or same-day rule, unchanged; completeness
+    evidence, not a timer) -> manual at once, only with DISCRETIONARY_ORDERSOURCE_MANUAL AND
+    DISCRETIONARY_ORDERSOURCE_API_VERIFIED both on (the value an API order shows is confirmed
+    by one real order first);
+  * anything else (setting off, OrderBook unread, order not in it, order source blank,
+    allow-listed but gate off) -> the legacy rules below, grace included.
+States only move up (unresolved -> manual -> strategy_*/ui_manual, db.can_change_state):
+turning a setting on later never downgrades a stored manual or strategy row; it only decides
+rows that are still unresolved (and may upgrade manual ones).
+DISCRETIONARY_ENGINE_LIVE_ONLY (off): an engine order id matches only a trades.db row with
+trade_mode live; analyze rows never match; rows of NULL/unknown mode keep the fill unresolved.
+
 Broker contract (brokers are discovered by name, no registry here)
 ------------------------------------------------------------------
 A broker takes part by adding to ITS OWN module ``broker.<name>.mapping.order_data``:
@@ -168,6 +205,7 @@ upgrade/repair_discretionary_accounts.py), which never touches ledger_fills.
 """
 
 import importlib
+import json
 import math
 import os
 import re
@@ -221,10 +259,49 @@ class FillBatch(list):
     def __init__(self, *args):
         super().__init__(*args)
         self.reported_accounts: set[str] = set()  # accounts the broker itself reported
+        self.tradebook_sources: dict = {}  # {order_id: source fields} when the TradeBook has them
 
 
 def manual_grace_minutes() -> int:
     return env_int("DISCRETIONARY_LEDGER_MANUAL_GRACE_MIN", 30, minimum=0)
+
+
+def _flag(name: str) -> bool:
+    from utils.order_source_tag import flag
+
+    return flag(name)
+
+
+def source_from_orderbook() -> bool:
+    """Read the OrderBook once per sync and use remark / order-source evidence (default off)."""
+    return _flag("DISCRETIONARY_SOURCE_FROM_ORDERBOOK")
+
+
+def ordersource_manual_enabled() -> bool:
+    """Non-API order source may prove manual: the gate AND the one-time verification flag."""
+    return _flag("DISCRETIONARY_ORDERSOURCE_MANUAL") and _flag(
+        "DISCRETIONARY_ORDERSOURCE_API_VERIFIED"
+    )
+
+
+def engine_live_only() -> bool:
+    """Engine order ids match only live trades.db rows (default off; changes attribution)."""
+    return _flag("DISCRETIONARY_ENGINE_LIVE_ONLY")
+
+
+# Read-time source labels; accounting never reads them.
+SIGNAL_LIVE = "SIGNAL_LIVE"
+MANUAL = "MANUAL"
+UNCLASSIFIED = "UNCLASSIFIED"
+
+
+def source_label(state: str | None) -> str:
+    """SIGNAL_LIVE / MANUAL / UNCLASSIFIED for an attribution state (unknown -> UNCLASSIFIED)."""
+    if state in (ledger.STATE_STRATEGY_TAG, ledger.STATE_STRATEGY_ENGINE):
+        return SIGNAL_LIVE
+    if state in (ledger.STATE_MANUAL, ledger.STATE_UI_MANUAL):
+        return MANUAL
+    return UNCLASSIFIED
 
 
 # Same-day coverage: fills can occur this long before the listed session start
@@ -371,9 +448,12 @@ def _import_broker_module(path: str):
 def load_broker_reader(broker: str):
     """Discover a broker's per-fill reader by name (same pattern as tradebook_service).
 
-    Returns a namespace (get_trade_book, map_trade_fills, skip_window) or None when the
-    broker has no ``map_trade_fills`` in broker.<name>.mapping.order_data. Read-only: only
-    the broker's TradeBook fetch and mapper are looked up.
+    Returns a namespace (get_trade_book, map_trade_fills, skip_window, get_order_book,
+    map_order_sources) or None when the broker has no ``map_trade_fills`` in
+    broker.<name>.mapping.order_data. The last two are optional (None when absent):
+    ``map_order_sources(raw) -> {order_id: {"remarks", "ordersource", ...}}`` beside
+    map_trade_fills and the broker's ``get_order_book(auth)``; they are only CALLED with
+    DISCRETIONARY_SOURCE_FROM_ORDERBOOK on. Read-only: only fetches and mappers are looked up.
     """
     if not _BROKER_NAME.fullmatch(broker or ""):
         return None
@@ -389,10 +469,14 @@ def load_broker_reader(broker: str):
     get_trade_book = getattr(api, "get_trade_book", None)
     if not callable(get_trade_book):
         return None
+    map_sources = getattr(mapping, "map_order_sources", None)
+    get_order_book = getattr(api, "get_order_book", None)
     return SimpleNamespace(
         get_trade_book=get_trade_book,
         map_trade_fills=map_fills,
         skip_window=getattr(mapping, "SYNC_SKIP_WINDOW", None),
+        map_order_sources=map_sources if callable(map_sources) else None,
+        get_order_book=get_order_book if callable(get_order_book) else None,
     )
 
 
@@ -416,6 +500,11 @@ def fetch_fills(broker: str, auth_token: str, auth_obj, reader=None) -> FillBatc
             raise LedgerAuthError(str(e)) from e
         raise
     fills = FillBatch()
+    if source_from_orderbook() and getattr(reader, "map_order_sources", None):
+        try:  # a TradeBook that echoes remarks is evidence too; never fails the fetch
+            fills.tradebook_sources = reader.map_order_sources(raw_response) or {}
+        except Exception as e:
+            logger.warning("TradeBook source fields unreadable: %s", type(e).__name__)
     fills.skipped = max(int(skipped or 0), 0)
     fills.unmapped = min(max(int(getattr(skipped, "unmapped", 0) or 0), 0), fills.skipped)
     for item in mapped:
@@ -577,29 +666,65 @@ def get_coverage_anchor(
     return min(candidates) if candidates else None
 
 
+class EngineIds(set):
+    """Engine order ids; ``uncertain`` holds ids whose only rows have an unknown trade_mode
+    (DISCRETIONARY_ENGINE_LIVE_ONLY): such a fill is neither engine nor manual."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.uncertain: set[str] = set()
+
+
 def _engine_known_order_ids(order_ids: list[str]) -> set[str] | None:
     """Order ids present in signal_engine trades.db (read-only).
 
     A trades.db file that does not exist (signal_engine not installed) is an empty set: no
     order can be an engine order. A file that exists but cannot be read or queried gives None
     (the fills stay unresolved).
+
+    With DISCRETIONARY_ENGINE_LIVE_ONLY (default off) only rows with trade_mode "live" match;
+    "analyze" rows never match (a sandbox id may equal a broker id); rows of NULL / "unknown"
+    / any other mode, or a table without trade_mode, put the id in ``uncertain`` instead.
     """
     path = _signal_engine_db_path()
     if not os.path.exists(path):
-        return set()
+        return EngineIds()
     wanted = [o for o in order_ids if o and o not in SENTINEL_ORDER_IDS and not o.startswith("-")]
-    found: set[str] = set()
+    found = EngineIds()
+    live_only = engine_live_only()
     uri = "file:" + path.replace("\\", "/").replace("?", "%3f") + "?mode=ro"
     try:
         conn = sqlite3.connect(uri, uri=True, timeout=5)
         try:
+            has_mode = live_only and "trade_mode" in {
+                r[1] for r in conn.execute("PRAGMA table_info(trades)").fetchall()
+            }
             for i in range(0, len(wanted), _CHUNK):
                 chunk = wanted[i : i + _CHUNK]
                 marks = ",".join("?" * len(chunk))
+                if not live_only:
+                    rows = conn.execute(
+                        f"SELECT DISTINCT order_id FROM trades WHERE order_id IN ({marks})", chunk
+                    ).fetchall()
+                    found.update(r[0] for r in rows)
+                    continue
+                if not has_mode:
+                    rows = conn.execute(
+                        f"SELECT DISTINCT order_id FROM trades WHERE order_id IN ({marks})", chunk
+                    ).fetchall()
+                    found.uncertain.update(r[0] for r in rows)
+                    continue
                 rows = conn.execute(
-                    f"SELECT DISTINCT order_id FROM trades WHERE order_id IN ({marks})", chunk
+                    "SELECT order_id, LOWER(TRIM(COALESCE(trade_mode, ''))) FROM trades "
+                    f"WHERE order_id IN ({marks})",
+                    chunk,
                 ).fetchall()
-                found.update(r[0] for r in rows)
+                for oid, mode in rows:
+                    if mode == "live":
+                        found.add(oid)
+                    elif mode != "analyze":
+                        found.uncertain.add(oid)
+            found.uncertain -= set(found)
         finally:
             conn.close()
     except sqlite3.Error as e:
@@ -709,40 +834,308 @@ def classify(
     tag_min,
     now: datetime | None = None,
     same_day: bool = False,
+    evidence: dict | None = None,
+    code_names: dict | None = None,
 ) -> tuple[str, str | None, str, str]:
     """Return (state, strategy, reason, source) for one fill row dict.
 
     ``now`` (IST) enables the manual grace period: a fill younger than
     DISCRETIONARY_LEDGER_MANUAL_GRACE_MIN stays unresolved so late tags can still arrive.
     ``same_day`` (see same_day_covered) covers the fill even when the date rule does not.
+    ``evidence`` (parse_evidence of the fill's source_evidence; pass None when
+    DISCRETIONARY_SOURCE_FROM_ORDERBOOK is off) and ``code_names`` ({strategy code: name})
+    enable the evidence rules of the module docstring. With evidence None the result is
+    exactly the legacy one.
     """
+    return classify_with_evidence(
+        fill, live_tags, unknown_mode, engine_ids, tag_min, now, same_day, evidence, code_names
+    )[:4]
+
+
+def classify_with_evidence(
+    fill: dict,
+    live_tags,
+    unknown_mode,
+    engine_ids,
+    tag_min,
+    now: datetime | None = None,
+    same_day: bool = False,
+    evidence: dict | None = None,
+    code_names: dict | None = None,
+) -> tuple[str, str | None, str, str, str]:
+    """classify plus the evidence label of the decision (stored on the audit row)."""
+    from utils.order_source_tag import (
+        KIND_MALFORMED,
+        KIND_OTHER_VERSION,
+        KIND_TAG,
+        is_human_ordersource,
+        strategy_code,
+    )
+
+    unres = ledger.STATE_UNRESOLVED
     oid = fill["order_id"]
     if not oid or oid in SENTINEL_ORDER_IDS:
-        return ledger.STATE_UNRESOLVED, None, "no usable order id", "none"
+        return unres, None, "no usable order id", "none", "no order id"
+    ev = evidence or {}
+    kind = ev.get("rk")
+    code = ev.get("tc") if kind == KIND_TAG else None
     tags = [t for t in live_tags.get(oid, []) if t[1] in ("", "unknown", fill["broker"])]
     if tags:
         strategy = tags[0][0]
+        if code and (strategy in UI_ORDER_LABELS or strategy_code(strategy) != code):
+            return (
+                unres,
+                None,
+                "remarks tag conflicts with the registered order tag",
+                "none",
+                f"remarks tag {code} vs registered tag",
+            )
+        label = "registered live tag" + (" + remarks tag" if code else "")
         if strategy in UI_ORDER_LABELS:
-            return ledger.STATE_UI_MANUAL, strategy, "UI-placed order tag", "tag"
-        return ledger.STATE_STRATEGY_TAG, strategy, "live order tag", "tag"
+            return ledger.STATE_UI_MANUAL, strategy, "UI-placed order tag", "tag", label
+        return ledger.STATE_STRATEGY_TAG, strategy, "live order tag", "tag", label
+    if code:
+        if ev.get("tm") != "L":
+            return unres, None, "remarks tag of a non-live mode", "none", f"remarks tag {code}"
+        if ev.get("ob") == "ok" and is_human_ordersource(ev.get("os")):
+            return (
+                unres,
+                None,
+                "evidence conflict: OpenAlgo tag on a human-channel order",
+                "none",
+                f"remarks tag {code} vs ordersource {str(ev.get('os'))[:12]}",
+            )
+        name = (code_names or {}).get(code)
+        if isinstance(name, tuple):  # two or more registered names share this code
+            return (
+                ledger.STATE_STRATEGY_TAG,
+                f"tag:{code}",
+                f"remarks tag (ambiguous strategy code: {len(name)} registered names)",
+                "remarks",
+                f"remarks tag {code}, ambiguous",
+            )
+        return (
+            ledger.STATE_STRATEGY_TAG,
+            name or f"tag:{code}",
+            "remarks tag" + ("" if name else " (strategy name not in the lookup)"),
+            "remarks",
+            f"remarks tag {code}",
+        )
+    if kind in (KIND_MALFORMED, KIND_OTHER_VERSION):
+        return unres, None, "unrecognised OpenAlgo remarks", "none", f"remarks {kind}"
     if oid in unknown_mode:
-        return ledger.STATE_UNRESOLVED, None, "tag of unknown mode", "none"
+        return unres, None, "tag of unknown mode", "none", "tag of unknown mode"
     if engine_ids is None:
-        return ledger.STATE_UNRESOLVED, None, "signal_engine trades unreadable", "none"
+        return unres, None, "signal_engine trades unreadable", "none", "engine unreadable"
     if oid in engine_ids:
         return (
             ledger.STATE_STRATEGY_ENGINE,
             "signal_engine",
             "order in signal_engine trades",
             "signal_engine",
+            "engine order id",
+        )
+    if oid in getattr(engine_ids, "uncertain", ()):
+        return (
+            unres,
+            None,
+            "signal_engine row of unknown trade mode",
+            "none",
+            "engine row, mode unknown",
         )
     by_date = is_covered(fill["fill_time"], tag_min)
+    marker = ev.get("sm")
+    if marker:
+        return (
+            unres,
+            None,
+            "broker/RMS/system-generated order: never manual",
+            "none",
+            f"system marker {str(marker)[:24]}",
+        )
+    source = (ev.get("os") or "").strip() if ev.get("ob") == "ok" else ""
+    if source and source.upper() == "API":
+        return (
+            unres,
+            None,
+            "API order without an OpenAlgo tag: automated, strategy unknown",
+            "none",
+            "ordersource API, no tag",
+        )
+    if source and not is_human_ordersource(source):
+        return (
+            unres,
+            None,
+            "order source not an allow-listed human channel: never manual",
+            "none",
+            f"ordersource {source[:12]} not allow-listed",
+        )
+    if source and ordersource_manual_enabled():
+        if by_date or same_day:
+            why = "tag coverage ok" if by_date else "same-day coverage ok"
+            return (
+                ledger.STATE_MANUAL,
+                None,
+                f"ordersource {source[:12]} on a complete OrderBook read, no tag; {why}",
+                "ordersource",
+                f"ordersource {source[:12]}, orderbook ok",
+            )
+        return unres, None, "fill date before tag coverage", "none", f"ordersource {source[:12]}"
+    fallback = evidence_label(evidence) if evidence else "no source evidence"
     if by_date or same_day:
         if now is not None and now - fill["fill_time"] < timedelta(minutes=manual_grace_minutes()):
-            return ledger.STATE_UNRESOLVED, None, "within manual grace period", "none"
+            return unres, None, "within manual grace period", "none", fallback
         why = "tag coverage ok" if by_date else "same-day coverage ok"
-        return ledger.STATE_MANUAL, None, f"absent from tags and engine; {why}", "none"
-    return ledger.STATE_UNRESOLVED, None, "fill date before tag coverage", "none"
+        return ledger.STATE_MANUAL, None, f"absent from tags and engine; {why}", "none", fallback
+    return unres, None, "fill date before tag coverage", "none", fallback
+
+
+# ---------------------------------------------------------------- source evidence
+
+
+def parse_evidence(text) -> dict | None:
+    """The stored source_evidence JSON as a dict; None when absent or unreadable."""
+    if not text or not isinstance(text, str):
+        return None
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def evidence_label(evidence: dict | None) -> str:
+    """Short human label of an evidence dict (also used on audit rows)."""
+    if not evidence:
+        return "no source evidence"
+    parts = []
+    ob = evidence.get("ob")
+    parts.append(
+        {"ok": "orderbook ok", "missing": "orderbook row missing"}.get(ob, "orderbook not read")
+    )
+    if evidence.get("os"):
+        parts.append(f"ordersource {str(evidence['os'])[:12]}")
+    elif ob == "ok":
+        parts.append("ordersource blank")
+    kind = evidence.get("rk")
+    if kind == "tag":
+        parts.append(f"remarks tag {evidence.get('tc')}")
+    elif kind and kind != "empty":
+        parts.append(f"remarks {kind}")
+    if evidence.get("sm"):
+        parts.append(f"system marker {str(evidence['sm'])[:24]}")
+    return ", ".join(parts)
+
+
+def build_evidence(orderbook_row: dict | None, tradebook_row: dict | None, read_ok: bool) -> dict:
+    """Evidence dict of one order from its OrderBook row (None: absent) and TradeBook row.
+
+    ``read_ok`` False means the OrderBook could not be read. The raw remark is never stored:
+    only its kind and, for a tag, mode and code. The OrderBook remark wins; a TradeBook remark
+    is used only when the OrderBook one is not an OpenAlgo tag. ``sm`` is the class name of a
+    broker/RMS/system marker on either row (utils.order_source_tag.system_marker), else None;
+    the key is present only when set, so evidence of an unmarked order is stored as before.
+    """
+    from utils.order_source_tag import KIND_TAG, parse_remarks, system_marker
+
+    ev = {"ob": "error", "os": None, "rk": "empty", "tm": None, "tc": None, "rs": None}
+    marker = system_marker(orderbook_row) or system_marker(tradebook_row)
+    if marker:
+        ev["sm"] = marker
+    if read_ok:
+        ev["ob"] = "ok" if orderbook_row is not None else "missing"
+    if orderbook_row is not None:
+        source = orderbook_row.get("ordersource")
+        ev["os"] = (str(source).strip()[:20] or None) if source is not None else None
+        parsed = parse_remarks(orderbook_row.get("remarks"))
+        ev.update(rk=parsed["kind"], tm=parsed["mode"], tc=parsed["code"])
+        if parsed["kind"] != "empty":
+            ev["rs"] = "orderbook"
+    if ev["rk"] != KIND_TAG and tradebook_row is not None:
+        parsed = parse_remarks(tradebook_row.get("remarks"))
+        if parsed["kind"] == KIND_TAG or ev["rk"] == "empty":
+            if parsed["kind"] != "empty":
+                ev.update(rk=parsed["kind"], tm=parsed["mode"], tc=parsed["code"], rs="tradebook")
+    return ev
+
+
+def _dump_evidence(ev: dict) -> str:
+    return json.dumps(ev, sort_keys=True, separators=(",", ":"))
+
+
+def collect_order_evidence(broker: str, token: str, reader, fills) -> dict:
+    """Read the OrderBook ONCE and store source evidence per order of ``fills``. Never raises.
+
+    Returns {"orderbook": "ok" | "error" | "skipped" | "unsupported", "orders": n, "written": m}.
+    An unreadable OrderBook stores nothing from it (a previous evidence stays); a TradeBook
+    remark tag alone is still stored. An order absent from a readable OrderBook is stored as
+    "missing" only when the fill has no evidence yet (an earlier complete read is kept).
+    """
+    out = {"orderbook": "skipped", "orders": 0, "written": 0}
+    try:
+        ids = sorted({f.get("order_id") for f in fills if f.get("order_id")})
+        if not ids:
+            return out
+        get_book = getattr(reader, "get_order_book", None)
+        mapper = getattr(reader, "map_order_sources", None)
+        if not (callable(get_book) and callable(mapper)):
+            out["orderbook"] = "unsupported"
+            return out
+        tradebook = getattr(fills, "tradebook_sources", None) or {}
+        try:
+            book = mapper(get_book(token)) or {}
+            out["orderbook"] = "ok"
+        except Exception as e:
+            logger.warning("OrderBook unreadable for source evidence: %s", type(e).__name__)
+            book = None
+            out["orderbook"] = "error"
+        out["orders"] = len(ids)
+        for oid in ids:
+            row = book.get(oid) if book is not None else None
+            ev = build_evidence(row, tradebook.get(oid), book is not None)
+            if book is None and ev["rk"] != "tag":
+                continue  # nothing positive learnt; keep what is stored
+            only_if_null = row is None and ev["rk"] != "tag"
+            out["written"] += ledger.set_source_evidence(
+                broker, oid, _dump_evidence(ev), only_if_null=only_if_null
+            )
+    except Exception as e:
+        logger.warning("Source evidence not recorded: %s", type(e).__name__)
+    return out
+
+
+def _strategy_code_names() -> dict:
+    """{strategy code: strategy name} over the distinct live StrategyOrderTag strategies.
+
+    A code shared by two or more (stripped) names maps to the sorted tuple of those names: the
+    caller must not pick one (classify then attributes to "tag:<code>"). A renamed strategy
+    keeps both names in the tag table, so old and new codes both resolve.
+    """
+    from database.strategy_book_db import StrategyOrderTag, db_session
+    from utils.order_source_tag import strategy_code
+
+    try:
+        names = [
+            r[0]
+            for r in db_session.query(StrategyOrderTag.strategy)
+            .filter(StrategyOrderTag.mode == "live")
+            .distinct()
+            .all()
+            if r[0]
+        ]
+    except Exception as e:
+        logger.warning("Strategy names unreadable for tag lookup: %s", type(e).__name__)
+        names = []
+    finally:
+        db_session.remove()
+    by_code: dict = defaultdict(set)
+    for name in names:
+        if isinstance(name, str) and name.strip():
+            by_code[strategy_code(name)].add(name.strip())
+    return {
+        code: (next(iter(group)) if len(group) == 1 else tuple(sorted(group)))
+        for code, group in by_code.items()
+    }
 
 
 def attribute_unresolved(
@@ -778,6 +1171,7 @@ def attribute_unresolved(
                 ledger.LedgerFill.fill_time,
                 ledger.LedgerFill.attribution_state,
                 ledger.LedgerFill.exchange,
+                ledger.LedgerFill.source_evidence,
             ).where(
                 ledger.LedgerFill.attribution_state.in_(
                     (ledger.STATE_UNRESOLVED, ledger.STATE_MANUAL)
@@ -798,9 +1192,16 @@ def attribute_unresolved(
             "fill_time": r[3],
             "state": r[4],
             "exchange": r[5] or "",
+            "evidence": parse_evidence(r[6]),
         }
         for r in rows
     ]
+    use_evidence = source_from_orderbook()
+    code_names = (
+        _strategy_code_names()
+        if use_evidence and any((f["evidence"] or {}).get("tc") for f in fills)
+        else {}
+    )
     order_ids = sorted({f["order_id"] for f in fills if f["order_id"]})
     live, unknown = _load_live_tags(order_ids)
     engine_ids = _engine_known_order_ids(order_ids)
@@ -820,14 +1221,22 @@ def attribute_unresolved(
         same_day = d in pending and same_day_covered(
             f["fill_time"], f["exchange"], runs_by_day.get(d, []), current_start, start_fn
         )
-        state, strategy, reason, source = classify(
-            f, live, unknown, engine_ids, tag_min, now, same_day=same_day
+        state, strategy, reason, source, label = classify_with_evidence(
+            f,
+            live,
+            unknown,
+            engine_ids,
+            tag_min,
+            now,
+            same_day=same_day,
+            evidence=f["evidence"] if use_evidence else None,
+            code_names=code_names,
         )
         if state == f["state"] or state == ledger.STATE_UNRESOLVED:
             continue  # unchanged, or would be a downgrade
         if f["state"] == ledger.STATE_MANUAL:
             reason = f"upgraded from manual: {reason}"
-        if ledger.set_attribution(f["id"], state, strategy, reason, source):
+        if ledger.set_attribution(f["id"], state, strategy, reason, source, evidence=label):
             changed += 1
     return changed
 
@@ -925,6 +1334,10 @@ def sync_once(user: str, now_fn: Callable[[], datetime] = now_ist) -> dict:
             account = next(iter(accounts))  # run record and ledger rows use one label
         assign_dedup(fills)
         inserted = ledger.insert_fills(fills)
+        if source_from_orderbook():  # one OrderBook read; its failure never fails the sync
+            evidence = collect_order_evidence(broker, token, reader, fills)
+            if evidence.get("orderbook") == "error":
+                logger.warning("Discretionary ledger sync: OrderBook evidence unavailable")
         tag_min = get_tag_min_created_at()
         anchor = get_coverage_anchor(tag_min, started)
         # all brokers and accounts; the run in progress counts as a same-day heartbeat

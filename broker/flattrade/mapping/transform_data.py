@@ -171,10 +171,31 @@ def transform_data(data, token, auth_token=None):
         "ordersource": "API",
     }
 
+    # OpenAlgo fork addition: order-source tag in the Noren free-text "remarks" (see
+    # utils/order_source_tag.py). Only when DISCRETIONARY_ORDER_TAG_ENABLED is on (read now)
+    # and the caller passed a valid tag; otherwise the payload is exactly as before.
+    _add_order_source_remarks(transformed, data)
+
     # Log order data without sensitive fields (uid, actid contain API keys)
     safe_log = {k: v for k, v in transformed.items() if k not in ("uid", "actid")}
     logger.info(f"Transformed order data: {safe_log}")
     return transformed
+
+
+def _add_order_source_remarks(transformed, data):
+    """Set transformed["remarks"] to the order-source tag; never raises, never blocks."""
+    try:
+        from utils.order_source_tag import KIND_TAG, ORDER_TAG_KEY, parse_remarks, tag_enabled
+
+        tag = data.get(ORDER_TAG_KEY) if isinstance(data, dict) else None
+        if tag is None or not tag_enabled():
+            return
+        if parse_remarks(tag)["kind"] != KIND_TAG:
+            logger.warning("Order source tag ignored: not a valid tag")
+            return
+        transformed["remarks"] = tag
+    except Exception as e:
+        logger.warning(f"Order source tag not added: {type(e).__name__}")
 
 
 def transform_modify_order_data(data, token):

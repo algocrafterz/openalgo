@@ -9,7 +9,11 @@ Rules:
 
 * Original broker values (symbol, qty, price, time ...) are never updated. The only
   mutable columns of ``ledger_fills`` are ``attribution_state`` and ``strategy``, and
-  every change to them is mirrored by an append-only ``ledger_attribution_audit`` row.
+  every change to them is mirrored by an append-only ``ledger_attribution_audit`` row, plus
+  ``source_evidence``: the latest source evidence of the fill's broker order (derived, never a
+  broker value; NULL until a sync with DISCRETIONARY_SOURCE_FROM_ORDERBOOK records some). It is
+  not part of ``dedup_key`` or ``raw_hash``. Each audit row carries the evidence label behind
+  that state change in ``evidence`` (NULL on rows written before the column existed).
 * Rows are never deleted.
 * ``ledger_account_identity`` maps an OpenAlgo login (broker, auth name) to the account id
   the broker reports on its fills; the only rewrite of ``ledger_sync_runs.account`` is the
@@ -80,7 +84,15 @@ SYNC_STATUSES = (
     "no_fill_data",
     "partial",
 )
-AUDIT_SOURCES = ("tag", "signal_engine", "none", "user")
+AUDIT_SOURCES = ("tag", "signal_engine", "none", "user", "remarks", "ordersource")
+
+# Nullable columns added after the first release: (table, column, SQL type). Added by
+# init_discretionary_ledger_db and upgrade/migrate_discretionary_ledger.py (plain ADD COLUMN,
+# existing rows stay NULL; running it twice changes nothing).
+ADDED_COLUMNS = (
+    ("ledger_fills", "source_evidence", "TEXT"),
+    ("ledger_attribution_audit", "evidence", "VARCHAR(200)"),
+)
 
 _write_lock = threading.Lock()
 
@@ -111,6 +123,9 @@ class LedgerFill(Base):
     strategy = Column(String(120), nullable=True)
     synced_at = Column(DateTime, nullable=False, default=datetime.now)
     raw_hash = Column(String(64), nullable=True)
+    # Source evidence of the fill's broker order (compact JSON, see the ledger service); NULL
+    # when none was recorded. Derived, mutable, outside dedup_key / raw_hash.
+    source_evidence = Column(Text, nullable=True)
 
     __table_args__ = (
         Index("ix_ledger_fills_broker_account_time", "broker", "account", "fill_time"),
@@ -149,6 +164,7 @@ class LedgerAttributionAudit(Base):
     reason = Column(String(200), nullable=False, default="")
     source = Column(String(20), nullable=False, default="none")
     at = Column(DateTime, nullable=False, default=datetime.now)
+    evidence = Column(String(200), nullable=True)  # evidence label of this change
 
 
 class LedgerAccountIdentity(Base):
@@ -278,9 +294,34 @@ def relabel_sync_runs(broker: str, auth_name: str, account: str) -> int:
             db_session.remove()
 
 
+def add_missing_columns(bind=None) -> list[str]:
+    """ADD COLUMN for each ADDED_COLUMNS entry whose table exists without it. Idempotent.
+
+    Returns "table.column" of the columns added. Existing rows get NULL; nothing is rewritten.
+    """
+    from sqlalchemy import inspect, text
+
+    bind = bind or engine
+    added = []
+    inspector = inspect(bind)
+    tables = set(inspector.get_table_names())
+    for table, column, sql_type in ADDED_COLUMNS:
+        if table not in tables:
+            continue
+        if column in {c["name"] for c in inspector.get_columns(table)}:
+            continue
+        with bind.begin() as conn:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}"))
+        added.append(f"{table}.{column}")
+        logger.info("Discretionary ledger DB: added column %s.%s", table, column)
+    return added
+
+
 def init_discretionary_ledger_db() -> None:
-    """Create the ledger tables if absent. Idempotent; never drops or alters rows."""
+    """Create the ledger tables if absent and add later nullable columns. Idempotent; never
+    drops or rewrites rows."""
     Base.metadata.create_all(bind=engine)
+    add_missing_columns(engine)
     logger.debug("Discretionary ledger DB initialized")
 
 
@@ -341,9 +382,16 @@ def can_change_state(from_state: str, to_state: str) -> bool:
 
 
 def set_attribution(
-    fill_ref: int, to_state: str, strategy: str | None, reason: str, source: str
+    fill_ref: int,
+    to_state: str,
+    strategy: str | None,
+    reason: str,
+    source: str,
+    evidence: str | None = None,
 ) -> bool:
     """Move one fill to ``to_state`` and append an audit row. False if not allowed/changed.
+
+    ``evidence``: the evidence label of the change, stored on the audit row (None: none).
 
     The UPDATE is conditional on the state still being what was read, so two writers
     cannot both apply a transition.
@@ -379,10 +427,44 @@ def set_attribution(
                     reason=(reason or "")[:200],
                     source=source,
                     at=datetime.now(),
+                    evidence=(evidence or None) and evidence[:200],
                 )
             )
             db_session.commit()
             return True
+        except Exception:
+            db_session.rollback()
+            raise
+        finally:
+            db_session.remove()
+
+
+def set_source_evidence(
+    broker: str, order_id: str, evidence: str, only_if_null: bool = False
+) -> int:
+    """Store ``evidence`` on every fill of (broker, order_id) whose stored value differs.
+
+    Touches only ``source_evidence``; returns the number of rows changed. Partial fills of one
+    order share it, so a fill inserted later inherits the evidence at the next write.
+    ``only_if_null``: write only rows that have no evidence yet.
+    """
+    if not (broker and order_id and evidence):
+        return 0
+    from sqlalchemy import or_
+
+    if only_if_null:
+        cond = LedgerFill.source_evidence.is_(None)
+    else:
+        cond = or_(LedgerFill.source_evidence.is_(None), LedgerFill.source_evidence != evidence)
+    with _write_lock:
+        try:
+            res = db_session.execute(
+                update(LedgerFill)
+                .where(LedgerFill.broker == broker, LedgerFill.order_id == order_id, cond)
+                .values(source_evidence=evidence)
+            )
+            db_session.commit()
+            return int(res.rowcount or 0)
         except Exception:
             db_session.rollback()
             raise

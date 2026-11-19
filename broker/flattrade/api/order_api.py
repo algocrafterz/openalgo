@@ -28,6 +28,11 @@ from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
 
+# OpenAlgo fork addition: place_order_service may pass the order-source tag (see
+# utils/order_source_tag.py; off unless DISCRETIONARY_ORDER_TAG_ENABLED); transform_data puts it
+# in "remarks". Brokers without this attribute never receive it.
+ACCEPTS_ORDER_SOURCE_TAG = True
+
 
 def get_api_response(endpoint, auth, method="GET", payload="", retry_count=0):
     # OrderBook/TradeBook/PositionBook/Holdings are non-order endpoints, but

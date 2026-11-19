@@ -6,8 +6,10 @@ Creates the Stage 1 tables of the Discretionary Trading Performance module:
 `ledger_fills`, `ledger_sync_runs`, `ledger_attribution_audit`,
 `ledger_account_identity` (plus indexes).
 
-Create-only: uses CREATE TABLE / INDEX IF NOT EXISTS, never alters, drops or rewrites
-rows, so running it twice changes nothing.
+Create-only: uses CREATE TABLE / INDEX IF NOT EXISTS, plus a plain ADD COLUMN for each
+later nullable column a table lacks (ledger_fills.source_evidence,
+ledger_attribution_audit.evidence; existing rows stay NULL). It never drops or rewrites rows,
+so running it twice changes nothing.
 
 Usage:
     cd upgrade
@@ -63,6 +65,7 @@ DDL = (
         strategy VARCHAR(120),
         synced_at DATETIME NOT NULL,
         raw_hash VARCHAR(64),
+        source_evidence TEXT,
         UNIQUE (dedup_key)
     )
     """,
@@ -94,7 +97,8 @@ DDL = (
         to_state VARCHAR(20) NOT NULL,
         reason VARCHAR(200) NOT NULL,
         source VARCHAR(20) NOT NULL,
-        at DATETIME NOT NULL
+        at DATETIME NOT NULL,
+        evidence VARCHAR(200)
     )
     """,
     "CREATE INDEX IF NOT EXISTS ix_ledger_attribution_audit_fill_ref "
@@ -110,6 +114,26 @@ DDL = (
     )
     """,
 )
+
+
+# Nullable columns added after the first release (same list as
+# database/discretionary_ledger_db.ADDED_COLUMNS; kept here so the script needs no app import).
+ADDED_COLUMNS = (
+    ("ledger_fills", "source_evidence", "TEXT"),
+    ("ledger_attribution_audit", "evidence", "VARCHAR(200)"),
+)
+
+
+def _missing_columns(conn) -> list[tuple[str, str, str]]:
+    tables = _existing(conn)
+    out = []
+    for table, column, sql_type in ADDED_COLUMNS:
+        if table not in tables:
+            continue
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in cols:
+            out.append((table, column, sql_type))
+    return out
 
 
 def _resolve(explicit: str | None, env_name: str, default: str) -> str:
@@ -133,14 +157,27 @@ def run(db_path: str, status_only: bool = False) -> int:
         before = _existing(con)
         if status_only:
             missing = [t for t in TABLES if t not in before]
-            print(f"{MIGRATION_NAME}: present={sorted(before)} missing={missing}")
+            cols = [f"{t}.{c}" for t, c, _ in _missing_columns(con)]
+            print(
+                f"{MIGRATION_NAME}: present={sorted(before)} missing={missing} "
+                f"missing_columns={cols}"
+            )
             return 0
         for stmt in DDL:
             con.execute(stmt)
+        added = []
+        for table, column, sql_type in _missing_columns(con):
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
+            added.append(f"{table}.{column}")
         con.commit()
         created = [t for t in TABLES if t not in before]
-        logger.info(f"{MIGRATION_NAME}: created {created or 'none (present)'}")
-        print(f"{MIGRATION_NAME}: done. created={created or 'none'}")
+        logger.info(
+            f"{MIGRATION_NAME}: created {created or 'none (present)'}; "
+            f"columns added {added or 'none'}"
+        )
+        print(
+            f"{MIGRATION_NAME}: done. created={created or 'none'} columns_added={added or 'none'}"
+        )
         return 0
     finally:
         con.close()

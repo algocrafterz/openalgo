@@ -43,6 +43,39 @@ def import_broker_module(broker_name: str) -> Any | None:
         return None
 
 
+def _place_with_source_tag(broker_module: Any, order_data: dict[str, Any], auth_token: str):
+    """Call ``broker_module.place_order_api``; with DISCRETIONARY_ORDER_TAG_ENABLED (read now,
+    default off) and a broker module declaring ACCEPTS_ORDER_SOURCE_TAG, the order carries the
+    compact order-source tag (utils/order_source_tag.py) under ORDER_TAG_KEY for that broker's
+    transform to put in the order itself. The key is removed again after the call, whatever
+    happens. Building the tag can never block, alter or fail the order: on any problem the
+    order goes out exactly as without the flag. Flag off or another broker: the dict passed is
+    untouched (identical payload to before). Only this single-order path is tagged: smart,
+    basket and split orders call place_order_api directly and are never tagged. A key the
+    caller already set is left alone (the transform still validates it)."""
+    key = None
+    try:
+        if getattr(broker_module, "ACCEPTS_ORDER_SOURCE_TAG", False) is True:
+            from utils.order_source_tag import ORDER_TAG_KEY, build_order_tag, tag_enabled
+
+            if tag_enabled() and ORDER_TAG_KEY not in order_data:
+                tag = build_order_tag(order_data.get("strategy"), "live")
+                if tag:
+                    order_data[ORDER_TAG_KEY] = tag
+                    key = ORDER_TAG_KEY
+    except Exception as e:
+        logger.warning("Order source tag skipped: %s", type(e).__name__)
+        key = None
+    try:
+        return broker_module.place_order_api(order_data, auth_token)
+    finally:
+        if key is not None:
+            try:  # cleanup must never replace the order's own result or exception
+                order_data.pop(key, None)
+            except Exception as e:
+                logger.warning("Order source tag not removed: %s", type(e).__name__)
+
+
 def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dict[str, Any]:
     """Publish an analyzer error event and return the error response dict."""
     error_response = {"mode": "analyze", "status": "error", "message": error_message}
@@ -218,7 +251,7 @@ def place_order_with_auth(
         return False, error_response, 404
 
     try:
-        res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
+        res, response_data, order_id = _place_with_source_tag(broker_module, order_data, auth_token)
     except BrokerBusyError as e:
         # Refused before it was sent: the broker's request queue was longer
         # than a caller may wait under the gthread worker. Never raised under

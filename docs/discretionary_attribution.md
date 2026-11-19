@@ -199,3 +199,61 @@ A ledger account label is always a broker account id, never the OpenAlgo user na
 - **Expired derivatives are unsupported.** There is no settlement close and no expiry
   handling: an open derivative position is never settled at expiry and stays open. Do not rely
   on derivative P&L here.
+
+## Source identification by order tags and broker order evidence (all OFF by default)
+
+Settings (environment, read at call time, all default off; none changes anything until set):
+
+| Setting | Effect |
+|---|---|
+| `DISCRETIONARY_ORDER_TAG_ENABLED` | live `placeorder` with a strategy name sends a 12-char tag `OA1L<8 hex>` (sha256 of the strategy name) in the Flattrade `remarks`, at the broker call. Not for `UI Exit Position`, `Squareoff`, blank names, analyze/sandbox, smart / basket / close-all paths. |
+| `DISCRETIONARY_SOURCE_FROM_ORDERBOOK` | each sync reads the OrderBook once (broker rate limiter) and stores per-order evidence (`ledger_fills.source_evidence`: remark kind/tag, order source; never the raw remark). Enables the remark-tag and "API, untagged" rules. |
+| `DISCRETIONARY_ORDERSOURCE_MANUAL` + `DISCRETIONARY_ORDERSOURCE_API_VERIFIED` | both needed: an allow-listed human order source on a complete OrderBook read proves MANUAL at once. Set the second only after one real API order showed `ordersource=API`. |
+| `DISCRETIONARY_MANUAL_ORDERSOURCES` (default `WEB,MOB`) | the human-channel allow-list, comma separated, case-insensitive. Documented Noren values are `MOB / WEB / TT` (meanings not documented); only `WEB` is observed (7/7 manual orders). `TT` is not in the default; `API` can never be listed. |
+| `DISCRETIONARY_ENGINE_LIVE_ONLY` | engine ids match only trades.db rows with `trade_mode=live`; analyze rows never; NULL/unknown rows keep the fill unresolved. Changes attribution: needs approval. |
+
+Decision order (first match wins; evidence rules only with `..._FROM_ORDERBOOK`):
+
+1. no usable order id: UNCLASSIFIED.
+2. registered live order tag: a remark tag with another strategy code (or on a UI-labelled
+   order) gives UNCLASSIFIED; otherwise SIGNAL_LIVE (`strategy_tag`) or MANUAL (`ui_manual`).
+3. remark tag v1, mode L: SIGNAL_LIVE at once (registered name for the code, else `tag:<code>`;
+   a code shared by two registered names also gives `tag:<code>`, marked ambiguous, never a
+   guessed name). A tag on an order whose order source is an allow-listed human channel is an
+   evidence conflict (someone typed it, or the broker relabelled it): UNCLASSIFIED.
+4. remark with the OpenAlgo marker but another version / broken body / non-live mode, or a
+   tag embedded in longer text or in other case: UNCLASSIFIED.
+5. registered tag of unknown mode, engine db unreadable, engine row of unknown mode: UNCLASSIFIED.
+6. engine order id: SIGNAL_LIVE (`strategy_engine`).
+7. system marker (`utils/order_source_tag.py` `SYSTEM_REMARK_PATTERNS` and `system_marker`):
+   remark classes square-off, auto exit, RMS next to an exit word, MTM, liquidation,
+   expiry/physical close, GTT/OCO, bracket/cover; a cover/bracket child leg (`snonum`); a broker
+   algo (`algo_name`); a source user (`src_uid`) other than the account: UNCLASSIFIED for good.
+   A bare "RMS" is not a marker (the RMS also annotates human orders, e.g. the observed
+   51-character price note on a manual WEB order, which stays MANUAL).
+8. complete OrderBook read, order source `API`, no tag: UNCLASSIFIED for good (automated,
+   strategy unknown; never manual through the grace).
+9. complete read, order source present but NOT in the allow-list: UNCLASSIFIED for good.
+10. complete read, allow-listed order source, both manual flags on, covered (date or same-day
+    rule): MANUAL at once. Not covered: UNCLASSIFIED.
+11. otherwise (no evidence: setting off, OrderBook unread, order missing from it, blank order
+    source, allow-listed source with the gate off): the legacy rule, coverage plus the
+    30-minute grace.
+
+The grace is kept only for rule 11 (no positive evidence: legacy/untagged orders, tag-write
+lag of the post-order registered tag, OrderBook unread or order missing). It is not applied
+when a remark tag (rule 3) or an allow-listed order source with the gate (rule 10) decides,
+and rules 7 to 9 never reach it.
+
+A broker/RMS square-off of a manual position stays UNCLASSIFIED: the manual position shows an
+EXIT PENDING / open leg until that fill is resolved by hand. This is deliberate: booking a
+system exit as a manual trade would be silent misattribution.
+
+States only move up (unresolved, then manual, then strategy_tag / strategy_engine /
+ui_manual; `can_change_state`). Turning a setting on later (for example
+`DISCRETIONARY_ENGINE_LIVE_ONLY`) re-decides only rows that are still unresolved, may upgrade
+manual rows, and never downgrades a stored manual or strategy row (no audit row, nothing
+changes). Coverage stays as completeness evidence. Audit rows
+carry the evidence label of each change (`ledger_attribution_audit.evidence`).
+Read-time labels (`source_label`): SIGNAL_LIVE, MANUAL, UNCLASSIFIED in the unresolved list,
+the provisional block, trade fills and `summary.source_labels`; accounting does not read them.

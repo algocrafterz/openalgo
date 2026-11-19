@@ -733,4 +733,50 @@ def map_trade_fills(raw_response, default_account=""):
     return fills, FillSkipCount(missing_fields, symbol_unmapped, product_unmapped)
 
 
+_ORDER_SOURCE_FIELDS = (
+    "remarks",
+    "ordersource",
+    "status",
+    "norentm",
+    "src_uid",
+    "uid",
+    "actid",
+    "algo_name",
+    "snonum",
+)
+
+
+def map_order_sources(raw_response):
+    """Per-order source fields of a raw OrderBook (or TradeBook) response, keyed by order id.
+
+    Returns {norenordno: {"remarks", "ordersource", "status", "norentm", "src_uid", "uid",
+    "actid", "algo_name", "snonum"}}; a field the row lacks (or leaves blank) is None. Read-only
+    and pure: nothing is fetched and the input is not modified. ``remarks`` is returned raw for
+    the caller to parse; it may be a broker-generated note. ``src_uid`` / ``uid`` / ``actid`` /
+    ``algo_name`` / ``snonum`` feed the system-order check (utils.order_source_tag.system_marker)
+    and must never be stored or logged by the caller. An empty book ("no data") is {}; an error response raises FlattradeTradeBookError
+    (``is_auth_error`` for a dead session), exactly like map_trade_fills. A row without an order
+    id is ignored. When an order id repeats (a TradeBook has one row per fill), the first
+    non-blank value of each field is kept.
+    """
+
+    def text(row, key):
+        value = row.get(key)
+        if value is None:
+            return None
+        value = str(value).strip()
+        return value or None
+
+    out = {}
+    for row in _fill_rows(raw_response):
+        oid = text(row, "norenordno")
+        if not oid:
+            continue
+        entry = out.setdefault(oid, dict.fromkeys(_ORDER_SOURCE_FIELDS))
+        for key in entry:
+            if entry[key] is None:
+                entry[key] = text(row, key)
+    return out
+
+
 # ===== END OpenAlgo fork addition =====
