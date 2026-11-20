@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
+  attributionCards,
   bucketLabel,
   DAILY_CHART_CAPTION,
   dailyBars,
@@ -437,8 +438,16 @@ export function HowYouTradeCard({
  * Data quality of the selection: where every collected execution is (one state each), charges
  * without an estimate, price coverage and the ledger sync.
  */
-export function DataQualityStrip({ dq }: { dq: DataQuality }) {
+export function DataQualityStrip({
+  dq,
+  sourceLabels,
+}: {
+  dq: DataQuality
+  /** `source_labels` of the summary (same period and filters); absent from older servers. */
+  sourceLabels?: Record<string, number> | null
+}) {
   const states = dataQualityStates(dq)
+  const attribution = attributionCards(dq, sourceLabels)
   const sync = syncSummary({
     last_successful_sync: dq.sync.last_successful_sync,
     days_without_sync: dq.sync.days_without_sync,
@@ -470,6 +479,21 @@ export function DataQualityStrip({ dq }: { dq: DataQuality }) {
             </div>
             <div className="font-mono font-semibold">{s.count}</div>
             {s.detail && <div className="text-[11px] text-muted-foreground">{s.detail}</div>}
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 text-[11px] font-medium text-muted-foreground">Attribution</div>
+      <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-3" data-testid="dq-attribution">
+        {attribution.map((c) => (
+          <div key={c.key} className="rounded border px-2 py-1.5" data-testid={`dq-attr-${c.key}`}>
+            <div className="text-[11px] text-muted-foreground">{c.label}</div>
+            <div className="font-mono font-semibold">{c.count}</div>
+            <div className="text-[11px] text-muted-foreground">{c.detail}</div>
+            {c.note && (
+              <div className="text-[10px] text-muted-foreground" data-testid="dq-attr-window">
+                {c.note}
+              </div>
+            )}
           </div>
         ))}
       </div>

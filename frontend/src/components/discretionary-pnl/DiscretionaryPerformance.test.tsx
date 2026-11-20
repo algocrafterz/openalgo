@@ -1134,3 +1134,197 @@ describe('refresh after a broker fill (order_update socket event)', () => {
     expect(sock.handlers.get('order_update')?.size).toBe(1)
   })
 })
+
+function tcsFill(fill_ref: number, role: 'ENTRY' | 'EXIT', minute: number) {
+  return {
+    fill_ref,
+    role,
+    qty_used: role === 'ENTRY' ? 20 : 15,
+    charge_allocated: 1.5,
+    price: role === 'ENTRY' ? 3000 + fill_ref : 3010 + fill_ref,
+    fill_time: `2026-11-19 ${role === 'ENTRY' ? '09' : '11'}:${String(minute).padStart(2, '0')}:00`,
+    order_id: `ORD-${role}-${fill_ref}`,
+    fill_id: `f${fill_ref}`,
+    broker: 'flattrade',
+    account: 'FT1',
+    symbol: 'TCS',
+    exchange: 'NSE',
+    product: 'MIS',
+    side: role === 'ENTRY' ? 'BUY' : 'SELL',
+    attribution_state: 'manual',
+  }
+}
+
+const TCS_FILLS = [
+  tcsFill(1, 'ENTRY', 20),
+  tcsFill(2, 'ENTRY', 21),
+  tcsFill(3, 'ENTRY', 40),
+  tcsFill(4, 'EXIT', 10),
+  tcsFill(5, 'EXIT', 20),
+  tcsFill(6, 'EXIT', 30),
+  tcsFill(7, 'EXIT', 40),
+]
+
+describe('UI review: header, heading, reasons, expandable closed trades', () => {
+  it('states the nominal period and the clamp to the start of ledger history', async () => {
+    summaryFn.mockResolvedValue(
+      summary({
+        period: {
+          period: '7d',
+          start: '2026-11-18',
+          end: '2026-11-19',
+          reliable_since: '2026-11-18',
+        },
+      })
+    )
+    renderIt({ period: '7d' })
+    const header = await screen.findByTestId('discretionary-period-header')
+    expect(header).toHaveTextContent(
+      'Last 7 days: 13-19 Nov 2026. Showing 18-19 Nov: ledger history starts 18 Nov.'
+    )
+  })
+
+  it('heads the metric cards with the selected range and the closed-position count', async () => {
+    summaryFn.mockResolvedValue(
+      summary({
+        sample: {
+          completed_trades: 3,
+          trading_days: 2,
+          min_trades: 30,
+          min_days: 10,
+          sufficient: false,
+        },
+      })
+    )
+    renderIt()
+    const heading = await screen.findByTestId('selected-period-heading')
+    expect(
+      within(heading).getByRole('heading', { name: 'Selected Period Performance' })
+    ).toBeInTheDocument()
+    expect(heading).toHaveTextContent('19 Oct - 17 Nov 2026 · 3 closed positions')
+  })
+
+  it('falls back to the metrics count for the heading on an older server', async () => {
+    renderIt()
+    expect(await screen.findByTestId('selected-period-heading')).toHaveTextContent(
+      '2 closed positions'
+    )
+  })
+
+  it('shows the plain-language reason of each unresolved fill', async () => {
+    unresolvedFn.mockResolvedValue({
+      unresolved: [
+        {
+          id: 1,
+          symbol: 'TCS',
+          order_id: 'O-1',
+          attribution_state: 'unresolved',
+          reason: 'before_coverage',
+          coverage_from: '2026-11-19',
+        },
+        { id: 2, symbol: 'INFY', attribution_state: 'unresolved', reason: 'within_grace' },
+        { id: 3, symbol: 'SBIN', attribution_state: 'unresolved' },
+      ],
+      unresolved_count: 3,
+      orphans: [],
+      orphans_count: 0,
+    })
+    renderIt()
+    await userEvent.click(await screen.findByRole('button', { name: 'Unresolved fills' }))
+    expect(
+      await screen.findByText('Fill dated before attribution coverage began (19 Nov)')
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Inside the safety window after the fill/)).toBeInTheDocument()
+    // an older server sends no reason: the state text stays
+    expect(
+      screen.getByText('Not yet attributed to a strategy or to you, so it is left out of P&L')
+    ).toBeInTheDocument()
+  })
+
+  it('shows entry and exit fill counts from the server and the holding duration', async () => {
+    summaryFn.mockResolvedValue(
+      summary({
+        trades: [
+          trade({ symbol: 'TCS', entry_fills: 3, exit_fills: 4, legs: 4, hold_minutes: 140 }),
+        ],
+      })
+    )
+    renderIt()
+    const row = await screen.findByRole('button', { name: /Show fills of TCS/ })
+    expect(within(row).getByTestId('entry-fills')).toHaveTextContent('3')
+    expect(within(row).getByTestId('exit-fills')).toHaveTextContent('4')
+    expect(row).toHaveTextContent('2h 20m')
+    expect(fillsFn).not.toHaveBeenCalled()
+  })
+
+  it('expands a row in place with its fills, fetched once, and collapses it', async () => {
+    summaryFn.mockResolvedValue(summary({ trades: [trade({ symbol: 'TCS', legs: 4 })] }))
+    fillsFn.mockResolvedValue({ build_id: 'b1', trade: trade(), fills: TCS_FILLS, linked_fills: 7 })
+    renderIt()
+    const row = await screen.findByRole('button', { name: /Show fills of TCS/ })
+    // an older server sends no counts: a dash until expanded
+    expect(within(row).getByTestId('entry-fills')).toHaveTextContent('—')
+    const chevron = screen.getByRole('button', { name: /Show entry and exit fills of TCS/ })
+    expect(chevron).toHaveAttribute('aria-expanded', 'false')
+    await userEvent.click(chevron)
+    expect(chevron).toHaveAttribute('aria-expanded', 'true')
+    const detail = await screen.findByTestId('closed-trade-fills')
+    expect(await within(detail).findByText('ORD-ENTRY-1')).toBeInTheDocument()
+    expect(within(detail).getByText('ORD-EXIT-7')).toBeInTheDocument()
+    expect(within(detail).getAllByText('Entry')).toHaveLength(3)
+    expect(within(detail).getAllByText('Exit')).toHaveLength(4)
+    expect(within(detail).getAllByText('Rs 1.50')).toHaveLength(7)
+    expect(within(row).getByTestId('entry-fills')).toHaveTextContent('3')
+    expect(within(row).getByTestId('exit-fills')).toHaveTextContent('4')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(fillsFn).toHaveBeenCalledTimes(1)
+    expect(fillsFn).toHaveBeenCalledWith(11, 'b1')
+    await userEvent.click(chevron)
+    expect(chevron).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByTestId('closed-trade-fills')).not.toBeInTheDocument()
+    await userEvent.click(chevron)
+    expect(await screen.findByTestId('closed-trade-fills')).toBeInTheDocument()
+    expect(fillsFn).toHaveBeenCalledTimes(1) // cached: same key as the dialog
+  })
+
+  it('expands from the keyboard without opening the dialog', async () => {
+    fillsFn.mockResolvedValue({ build_id: 'b1', trade: trade(), fills: TCS_FILLS, linked_fills: 7 })
+    renderIt()
+    const chevron = await screen.findByRole('button', {
+      name: /Show entry and exit fills of RELIANCE/,
+    })
+    chevron.focus()
+    await userEvent.keyboard('{Enter}')
+    expect(chevron).toHaveAttribute('aria-expanded', 'true')
+    expect(await screen.findByTestId('closed-trade-fills')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await userEvent.keyboard(' ')
+    expect(chevron).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('shows a changed build inside the expanded area, with Refresh', async () => {
+    fillsFn.mockRejectedValue(new DiscretionaryApiError('The data changed', 'build_changed', 409))
+    renderIt()
+    await userEvent.click(
+      await screen.findByRole('button', { name: /Show entry and exit fills of RELIANCE/ })
+    )
+    const detail = await screen.findByTestId('closed-trade-fills')
+    expect(await within(detail).findByText('Data changed')).toBeInTheDocument()
+    const calls = summaryFn.mock.calls.length
+    await userEvent.click(within(detail).getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(summaryFn.mock.calls.length).toBeGreaterThan(calls))
+  })
+
+  it('still opens the dialog from the row and from Details', async () => {
+    fillsFn.mockResolvedValue({ build_id: 'b1', trade: trade(), fills: TCS_FILLS, linked_fills: 7 })
+    renderIt()
+    await userEvent.click(
+      await screen.findByRole('button', { name: /Show entry and exit fills of RELIANCE/ })
+    )
+    const detail = await screen.findByTestId('closed-trade-fills')
+    await userEvent.click(await within(detail).findByRole('button', { name: 'Details' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByText('ORD-ENTRY-1')).toBeInTheDocument()
+    expect(fillsFn).toHaveBeenCalledTimes(1) // the dialog reuses the cached answer
+  })
+})

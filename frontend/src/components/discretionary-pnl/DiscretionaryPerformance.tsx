@@ -29,18 +29,20 @@ import {
   DRAWDOWN_BASIS,
   EQUITY_CAPTION,
   filterChoices,
+  fmtDayRange,
   fmtProfitFactor,
   fmtWinRate,
   holdingRows,
   isEmptyBook,
   netDefinitionText,
+  periodHeader,
   ratioCell,
   summarizeUnrealized,
   syncSummary,
   totalCard,
   withheldSentence,
 } from '@/lib/discretionaryPnlView'
-import { fmtDate, fmtDuration, pnlClass } from '@/lib/strategyPnlView'
+import { fmtDuration, pnlClass } from '@/lib/strategyPnlView'
 import { cn } from '@/lib/utils'
 import {
   DailyPnlChart,
@@ -209,6 +211,9 @@ export function DiscretionaryPerformance({
   // Executions exist but none is attributable yet (all await attribution): a specific message
   // instead of the generic empty state, and the Unresolved fills list opens.
   const awaiting = awaitingAttribution(summary)
+  const header = summary
+    ? periodHeader(summary.period, period === 'custom' ? range?.start : undefined)
+    : null
   const openTrade = (id: number, buildId?: string | null) => {
     const bid = buildId ?? summary?.build_id
     if (bid) setSelectedTrade({ id, buildId: bid })
@@ -299,6 +304,8 @@ export function DiscretionaryPerformance({
     const net = summary.realized_net_of_charges
     const total = totalCard(net, unrealized, summary.charges_unavailable_trades)
     const empty = isEmptyBook(summary)
+    // the completed-trade count of the sample note (the metrics count on older servers)
+    const closedCount = summary.sample?.completed_trades ?? metrics.trades_count
     const chargesHint =
       summary.charges_unavailable_trades > 0
         ? `${summary.charges_unavailable_trades} trade(s) without a charge estimate: not complete`
@@ -345,6 +352,14 @@ export function DiscretionaryPerformance({
       />
     ) : (
       <>
+        <div data-testid="selected-period-heading">
+          <h2 className="text-lg font-semibold">Selected Period Performance</h2>
+          <p className="text-sm text-muted-foreground">
+            {fmtDayRange(summary.period.start, summary.period.end)}
+            {' · '}
+            {closedCount} closed position{closedCount === 1 ? '' : 's'}
+          </p>
+        </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3">
           <MetricCard
             label="Net realized (after est. charges)"
@@ -589,6 +604,7 @@ export function DiscretionaryPerformance({
                 trades={summary.trades}
                 formatCurrency={formatCurrency}
                 onSelect={(id) => openTrade(id)}
+                buildId={summary.build_id}
               />
             )}
             {summary.trades_truncated > 0 && (
@@ -625,14 +641,12 @@ export function DiscretionaryPerformance({
     <div className="space-y-6" data-testid="discretionary-performance">
       {toolbar}
 
-      {summary && (
-        <p className="text-sm">
-          Showing{' '}
+      {summary && header && (
+        <p className="text-sm" data-testid="discretionary-period-header">
           <span className="font-medium">
-            {summary.period.start === summary.period.end
-              ? fmtDate(summary.period.start)
-              : `${fmtDate(summary.period.start)} - ${fmtDate(summary.period.end)}`}
+            {header.name}: {header.nominal ?? header.shown}.
           </span>
+          {header.note && <span className="text-muted-foreground"> {header.note}</span>}
           {summary.market_hours_source && (
             <span className="text-muted-foreground">
               {' '}
@@ -685,7 +699,9 @@ export function DiscretionaryPerformance({
         </p>
       )}
 
-      {summary?.data_quality && <DataQualityStrip dq={summary.data_quality} />}
+      {summary?.data_quality && (
+        <DataQualityStrip dq={summary.data_quality} sourceLabels={summary.source_labels} />
+      )}
 
       {summary?.today && (
         // the current session, whatever the period; same build as everything below

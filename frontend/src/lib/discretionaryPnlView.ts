@@ -351,12 +351,32 @@ const REASON_TEXT: Record<string, string> = {
     'Could not tell whether a strategy or you placed this order, so it is left out of P&L',
   unresolved: 'Not yet attributed to a strategy or to you, so it is left out of P&L',
   opening_not_in_ledger: 'The fill that opened this position is not in the ledger',
+  // why an unresolved fill is still unresolved (server `reason` of the unresolved list)
+  before_coverage: 'Fill dated before attribution coverage began',
+  within_grace: 'Inside the safety window after the fill: a strategy tag may still arrive',
+  evidence_conflict: 'Conflicting evidence: the order tag and the order source disagree',
+  system_order: 'Broker, RMS or system-generated order (for example a square-off): never manual',
+  api_untagged: 'API order without an OpenAlgo tag: automated, strategy unknown',
+  non_human_source: 'The order source is not a recognised manual channel',
+  no_order_id: 'No usable broker order id',
+  non_live_tag: 'OpenAlgo tag of a non-live (sandbox) order',
+  unrecognised_remarks: 'Unrecognised OpenAlgo order remarks',
+  unknown_mode_tag: 'Strategy tag of an unknown trade mode',
+  engine_unreadable: 'The strategy engine trade records could not be read',
+  engine_unknown_mode: 'Strategy engine order of an unknown trade mode',
+  awaiting_sync: 'Can now be attributed: updates at the next ledger sync',
+  unknown: 'Reason not determined',
 }
 
-/** Plain text for a raw reason or attribution code; unknown codes are shown with spaces. */
-export function reasonText(code: string | null | undefined): string {
+/**
+ * Plain text for a raw reason or attribution code; unknown codes are shown with spaces.
+ * `coverageFrom` (ISO date) is added to the before-coverage text when the server sent it.
+ */
+export function reasonText(code: string | null | undefined, coverageFrom?: string | null): string {
   if (!code) return '—'
-  return REASON_TEXT[code] ?? code.replace(/_/g, ' ')
+  const text = REASON_TEXT[code] ?? code.replace(/_/g, ' ')
+  if (code === 'before_coverage' && coverageFrom) return `${text} (${fmtDayMonth(coverageFrom)})`
+  return text
 }
 
 /** Plain-text net definition (the server sends field names; the page shows what they mean). */
@@ -737,10 +757,7 @@ export function dataQualityStates(dq: DataQuality): DataQualityState[] {
       step: '2',
       label: 'Awaiting attribution',
       count: dq.awaiting_attribution,
-      detail:
-        dq.awaiting_attribution > 0
-          ? `${dq.awaiting_grace} in the safety window, ${dq.awaiting_other} other`
-          : undefined,
+      detail: dq.awaiting_attribution > 0 ? 'unresolved, excluded from P&L' : undefined,
     },
     {
       key: 'open',
@@ -785,3 +802,137 @@ export const PROVISIONAL_TITLE =
   'Pending attribution: provisional figures (not included in any total above)'
 export const PROVISIONAL_EXPLANATION =
   'These executions are excluded from your P&L until classified as manual. Figures are computed from the broker fills as if they were yours; if any of them were placed by a strategy they would be removed.'
+
+/** One card of the attribution split of the data-quality strip. */
+export interface AttributionCard {
+  key: 'manual' | 'unresolved' | 'strategy'
+  label: string
+  count: number
+  detail: string
+  /** Small secondary line (the safety-window split of the unresolved fills). */
+  note?: string
+}
+
+/**
+ * Who the executions of the period belong to: Manual (positively identified, in P&L),
+ * Unresolved (awaiting attribution, excluded from P&L) and Strategy-attributed (excluded; from
+ * `source_labels`, card omitted when the server does not send it). Unresolved fills are never
+ * counted as manual: Manual is the collected fills minus the unresolved ones.
+ */
+export function attributionCards(
+  dq: DataQuality,
+  sourceLabels?: Record<string, number> | null
+): AttributionCard[] {
+  const manual = Math.max(0, dq.collected - dq.awaiting_attribution)
+  const window = dq.grace_minutes ? `${dq.grace_minutes} minute safety window` : 'safety window'
+  const cards: AttributionCard[] = [
+    {
+      key: 'manual',
+      label: 'Manual',
+      count: manual,
+      detail:
+        dq.not_placed > 0
+          ? `positively identified, in P&L; ${dq.not_placed} could not be placed`
+          : 'positively identified, in P&L',
+    },
+    {
+      key: 'unresolved',
+      label: 'Unresolved',
+      count: dq.awaiting_attribution,
+      detail: 'awaiting attribution, excluded from P&L',
+      note:
+        dq.awaiting_attribution > 0
+          ? `${dq.awaiting_grace} inside the ${window}, ${dq.awaiting_other} past it`
+          : undefined,
+    },
+  ]
+  const strategy = sourceLabels?.SIGNAL_LIVE
+  if (typeof strategy === 'number') {
+    cards.push({
+      key: 'strategy',
+      label: 'Strategy-attributed',
+      count: strategy,
+      detail: 'strategy orders, excluded from this view',
+    })
+  }
+  return cards
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+function parseIsoDay(iso: string | null | undefined): { y: number; m: number; d: number } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso ?? '')
+  if (!match) return null
+  const [y, m, d] = [Number(match[1]), Number(match[2]), Number(match[3])]
+  return m >= 1 && m <= 12 ? { y, m, d } : null
+}
+
+/** '19 Nov' (or '19 Nov 2026' with `withYear`) from an ISO date; the input when unparsable. */
+export function fmtDayMonth(iso: string | null | undefined, withYear = false): string {
+  const p = parseIsoDay(iso)
+  if (!p) return iso ?? ''
+  return `${p.d} ${MONTHS[p.m - 1]}${withYear ? ` ${p.y}` : ''}`
+}
+
+/** '13-19 Nov 2026', '28 Oct - 3 Nov 2026', '28 Dec 2025 - 3 Jan 2026' or '19 Nov 2026'. */
+export function fmtDayRange(start: string, end: string, withYear = true): string {
+  const a = parseIsoDay(start)
+  const b = parseIsoDay(end)
+  if (!a || !b) return start === end ? start : `${start} - ${end}`
+  const year = withYear ? ` ${b.y}` : ''
+  if (start === end) return `${b.d} ${MONTHS[b.m - 1]}${year}`
+  if (a.y !== b.y) return `${fmtDayMonth(start, true)} - ${fmtDayMonth(end, true)}`
+  if (a.m !== b.m) return `${a.d} ${MONTHS[a.m - 1]} - ${b.d} ${MONTHS[b.m - 1]}${year}`
+  return `${a.d}-${b.d} ${MONTHS[b.m - 1]}${year}`
+}
+
+const FIXED_WINDOW_DAYS: Record<string, number> = { '7d': 7, '15d': 15, '30d': 30, '90d': 90 }
+const PERIOD_NAMES: Record<string, string> = {
+  '1d': 'Last session',
+  '7d': 'Last 7 days',
+  '15d': 'Last 15 days',
+  '30d': 'Last 30 days',
+  '90d': 'Last 90 days',
+  ytd: 'Year to date',
+  all: 'All time',
+  custom: 'Custom range',
+}
+
+function isoMinusDays(iso: string, days: number): string | null {
+  const p = parseIsoDay(iso)
+  if (!p) return null
+  const t = new Date(Date.UTC(p.y, p.m - 1, p.d - days))
+  return t.toISOString().slice(0, 10)
+}
+
+/**
+ * The selected period as asked for and as shown. The server clamps the start to the start of
+ * ledger history (`reliable_since`), so a 7 or 30 day window can show fewer days; this says so.
+ * `nominal` is the window as asked (null for 'all', which has no fixed start), `shown` the
+ * served range, `note` the clamp sentence: only when the shown start is later than the nominal
+ * start and equals `reliable_since`. `customStart` is the start the user picked (custom only).
+ */
+export function periodHeader(
+  period: { period: string; start: string; end: string; reliable_since?: string },
+  customStart?: string
+): { name: string; nominal: string | null; shown: string; note: string | null } {
+  const { start, end } = period
+  const name = PERIOD_NAMES[period.period] ?? period.period
+  const shown = fmtDayRange(start, end)
+  let nominalStart: string | null = null
+  const days = FIXED_WINDOW_DAYS[period.period]
+  if (days) nominalStart = isoMinusDays(end, days - 1)
+  else if (period.period === 'ytd') nominalStart = `${end.slice(0, 4)}-01-01`
+  else if (period.period === 'custom') nominalStart = customStart ?? start
+  else if (period.period === '1d') nominalStart = start
+  const nominal = nominalStart ? fmtDayRange(nominalStart, end) : null
+  const clamped =
+    nominalStart !== null &&
+    !!period.reliable_since &&
+    start > nominalStart &&
+    start === period.reliable_since
+  const note = clamped
+    ? `Showing ${fmtDayRange(start, end, false)}: ledger history starts ${fmtDayMonth(start)}.`
+    : null
+  return { name, nominal, shown, note }
+}

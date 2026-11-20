@@ -199,7 +199,8 @@ describe('DataQualityStrip', () => {
     render(<DataQualityStrip dq={dataQuality()} />)
     expect(screen.getByTestId('dq-collected')).toHaveTextContent('1. Collected9')
     expect(screen.getByTestId('dq-awaiting')).toHaveTextContent('2. Awaiting attribution2')
-    expect(screen.getByTestId('dq-awaiting')).toHaveTextContent('1 in the safety window, 1 other')
+    expect(screen.getByTestId('dq-awaiting')).toHaveTextContent('excluded from P&L')
+    expect(screen.getByTestId('dq-awaiting')).not.toHaveTextContent('other')
     expect(screen.getByTestId('dq-open')).toHaveTextContent('3')
     expect(screen.getByTestId('dq-included')).toHaveTextContent('4. In completed trades3')
     expect(screen.getByTestId('dq-not_placed')).toHaveTextContent('1')
@@ -237,6 +238,41 @@ describe('DataQualityStrip', () => {
     expect(screen.getByTestId('dq-prices')).toHaveTextContent('Prices: 1 without a usable price')
     expect(screen.getByTestId('dq-sync')).toHaveTextContent('no successful sync yet')
     expect(screen.getByTestId('dq-sync-problems')).toHaveTextContent('1 sync problem(s)')
+  })
+})
+
+describe('DataQualityStrip attribution split', () => {
+  it('splits manual, unresolved (with the safety window) and strategy-attributed', () => {
+    render(<DataQualityStrip dq={dataQuality()} sourceLabels={{ SIGNAL_LIVE: 4, MANUAL: 7 }} />)
+    // manual = collected 9 minus the 2 unresolved: unresolved is never counted as manual
+    expect(screen.getByTestId('dq-attr-manual')).toHaveTextContent('Manual7')
+    expect(screen.getByTestId('dq-attr-manual')).toHaveTextContent('in P&L; 1 could not be placed')
+    const unresolved = screen.getByTestId('dq-attr-unresolved')
+    expect(unresolved).toHaveTextContent('Unresolved2')
+    expect(unresolved).toHaveTextContent('awaiting attribution, excluded from P&L')
+    expect(within(unresolved).getByTestId('dq-attr-window')).toHaveTextContent(
+      '1 inside the 30 minute safety window, 1 past it'
+    )
+    expect(screen.getByTestId('dq-attr-strategy')).toHaveTextContent('Strategy-attributed4')
+    expect(screen.getByTestId('dq-attr-strategy')).toHaveTextContent('excluded')
+  })
+
+  it('hides the strategy card without source labels and the window line without unresolved', () => {
+    render(
+      <DataQualityStrip
+        dq={dataQuality({
+          collected: 6,
+          awaiting_attribution: 0,
+          awaiting_grace: 0,
+          awaiting_other: 0,
+          not_placed: 0,
+        })}
+      />
+    )
+    expect(screen.queryByTestId('dq-attr-strategy')).not.toBeInTheDocument()
+    expect(screen.getByTestId('dq-attr-manual')).toHaveTextContent('Manual6')
+    expect(screen.getByTestId('dq-attr-manual')).not.toHaveTextContent('could not be placed')
+    expect(screen.queryByTestId('dq-attr-window')).not.toBeInTheDocument()
   })
 })
 

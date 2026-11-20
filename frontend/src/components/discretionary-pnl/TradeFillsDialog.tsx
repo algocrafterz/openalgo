@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Loader2 } from 'lucide-react'
-import { discretionaryPnlApi } from '@/api/discretionaryPnl'
+import { discretionaryPnlApi, type TradeFill } from '@/api/discretionaryPnl'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -30,10 +30,135 @@ export interface SelectedTrade {
 }
 
 /**
+ * The fills of one completed trade. Trade ids are reassigned by a rebuild, so the request
+ * carries the build_id of the summary the row came from and the cache key includes it: a
+ * changed build is reported (code build_changed), never reused. The dialog and the inline
+ * expansion of the closed-trades table share this query (same key, same cache).
+ */
+export function useTradeFills(selected: SelectedTrade | null) {
+  return useQuery({
+    queryKey: ['discretionary-pnl', 'fills', selected?.buildId, selected?.id],
+    queryFn: () =>
+      discretionaryPnlApi.tradeFills(selected?.id as number, selected?.buildId as string),
+    enabled: selected !== null,
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+/** The ENTRY / EXIT fills table (one row per fill and role). */
+export function TradeFillsTable({
+  fills,
+  formatCurrency,
+}: {
+  fills: TradeFill[]
+  formatCurrency: (value: number) => string
+}) {
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Role</TableHead>
+          <TableHead>Time</TableHead>
+          <TableHead>Side</TableHead>
+          <TableHead className="text-right">Qty used</TableHead>
+          <TableHead className="text-right">Price</TableHead>
+          <TableHead className="text-right">Charge</TableHead>
+          <TableHead>Order</TableHead>
+          <TableHead>Attribution</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {fills.map((fill) => (
+          <TableRow key={`${fill.role}-${fill.fill_ref}`}>
+            <TableCell>
+              <Badge variant="outline">{fill.role === 'ENTRY' ? 'Entry' : 'Exit'}</Badge>
+            </TableCell>
+            <TableCell className="font-mono">{fmtStamp(fill.fill_time)}</TableCell>
+            <TableCell>{fill.side}</TableCell>
+            <TableCell className="text-right font-mono">{fmtQty(fill.qty_used)}</TableCell>
+            <TableCell className="text-right font-mono">{fmtPrice(fill.price)}</TableCell>
+            <TableCell className="text-right font-mono text-muted-foreground">
+              {fill.charge_allocated == null ? '—' : formatCurrency(fill.charge_allocated)}
+            </TableCell>
+            <TableCell className="font-mono text-xs">{fill.order_id || '—'}</TableCell>
+            <TableCell className="text-xs">{fill.attribution_state}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  )
+}
+
+/**
+ * Loading, build_changed (with Refresh), error (with Retry) or `children` for a trade-fills
+ * query. `onRefreshed` runs after Refresh invalidated the page's queries.
+ */
+export function TradeFillsStatus({
+  query,
+  onRefreshed,
+  children,
+}: {
+  query: ReturnType<typeof useTradeFills>
+  onRefreshed?: () => void
+  children: React.ReactNode
+}) {
+  const queryClient = useQueryClient()
+  const changed = (query.error as { code?: string } | null)?.code === 'build_changed'
+  if (query.isLoading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="h-6 w-6 animate-spin" />
+      </div>
+    )
+  }
+  if (changed) {
+    return (
+      <Alert variant="warning">
+        <AlertTriangle className="h-4 w-4" />
+        <AlertTitle>Data changed</AlertTitle>
+        <AlertDescription>
+          <p>The data changed since this page loaded. Refresh to see the current trades.</p>
+          <Button
+            type="button"
+            size="sm"
+            className="mt-2"
+            onClick={() => {
+              queryClient.invalidateQueries({ queryKey: ['discretionary-pnl'] })
+              onRefreshed?.()
+            }}
+          >
+            Refresh
+          </Button>
+        </AlertDescription>
+      </Alert>
+    )
+  }
+  if (query.error) {
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>Could not load the fills</AlertTitle>
+        <AlertDescription>
+          <p>{(query.error as Error).message}</p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="mt-2"
+            onClick={() => query.refetch()}
+          >
+            Retry
+          </Button>
+        </AlertDescription>
+      </Alert>
+    )
+  }
+  return query.data ? children : null
+}
+
+/**
  * The ledger fills behind one completed trade (every leg): entries and exits, with the charge
  * each carried.
- * Trade ids are reassigned by a rebuild, so the request carries the build_id of the summary the
- * row came from and the cache key includes it: a changed build is reported, never reused.
  */
 export function TradeFillsDialog({
   selected,
@@ -44,18 +169,9 @@ export function TradeFillsDialog({
   onClose: () => void
   formatCurrency: (value: number) => string
 }) {
-  const queryClient = useQueryClient()
   const open = selected !== null
-  const query = useQuery({
-    queryKey: ['discretionary-pnl', 'fills', selected?.buildId, selected?.id],
-    queryFn: () =>
-      discretionaryPnlApi.tradeFills(selected?.id as number, selected?.buildId as string),
-    enabled: open,
-    staleTime: 60_000,
-    retry: false,
-  })
+  const query = useTradeFills(selected)
   const trade = query.data?.trade
-  const changed = (query.error as { code?: string } | null)?.code === 'build_changed'
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
@@ -70,46 +186,7 @@ export function TradeFillsDialog({
             Charges are estimates split across the fills.
           </DialogDescription>
         </DialogHeader>
-        {query.isLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-6 w-6 animate-spin" />
-          </div>
-        ) : changed ? (
-          <Alert variant="warning">
-            <AlertTriangle className="h-4 w-4" />
-            <AlertTitle>Data changed</AlertTitle>
-            <AlertDescription>
-              <p>The data changed since this page loaded. Refresh to see the current trades.</p>
-              <Button
-                type="button"
-                size="sm"
-                className="mt-2"
-                onClick={() => {
-                  queryClient.invalidateQueries({ queryKey: ['discretionary-pnl'] })
-                  onClose()
-                }}
-              >
-                Refresh
-              </Button>
-            </AlertDescription>
-          </Alert>
-        ) : query.error ? (
-          <Alert variant="destructive">
-            <AlertTitle>Could not load the fills</AlertTitle>
-            <AlertDescription>
-              <p>{(query.error as Error).message}</p>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="mt-2"
-                onClick={() => query.refetch()}
-              >
-                Retry
-              </Button>
-            </AlertDescription>
-          </Alert>
-        ) : query.data ? (
+        <TradeFillsStatus query={query} onRefreshed={onClose}>
           <div className="space-y-3">
             {trade && (
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
@@ -129,40 +206,9 @@ export function TradeFillsDialog({
                 )}
               </div>
             )}
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Time</TableHead>
-                  <TableHead>Side</TableHead>
-                  <TableHead className="text-right">Qty used</TableHead>
-                  <TableHead className="text-right">Price</TableHead>
-                  <TableHead className="text-right">Charge</TableHead>
-                  <TableHead>Order</TableHead>
-                  <TableHead>Attribution</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {query.data.fills.map((fill) => (
-                  <TableRow key={`${fill.role}-${fill.fill_ref}`}>
-                    <TableCell>
-                      <Badge variant="outline">{fill.role === 'ENTRY' ? 'Entry' : 'Exit'}</Badge>
-                    </TableCell>
-                    <TableCell className="font-mono">{fmtStamp(fill.fill_time)}</TableCell>
-                    <TableCell>{fill.side}</TableCell>
-                    <TableCell className="text-right font-mono">{fmtQty(fill.qty_used)}</TableCell>
-                    <TableCell className="text-right font-mono">{fmtPrice(fill.price)}</TableCell>
-                    <TableCell className="text-right font-mono text-muted-foreground">
-                      {fill.charge_allocated == null ? '—' : formatCurrency(fill.charge_allocated)}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">{fill.order_id || '—'}</TableCell>
-                    <TableCell className="text-xs">{fill.attribution_state}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <TradeFillsTable fills={query.data?.fills ?? []} formatCurrency={formatCurrency} />
           </div>
-        ) : null}
+        </TradeFillsStatus>
       </DialogContent>
     </Dialog>
   )

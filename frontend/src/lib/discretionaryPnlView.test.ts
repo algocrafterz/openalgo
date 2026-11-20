@@ -515,3 +515,129 @@ describe('dashboard additions', () => {
     ])
   })
 })
+
+describe('unresolved reasons', () => {
+  it('maps every server reason code to plain text', () => {
+    const codes = [
+      'before_coverage',
+      'within_grace',
+      'evidence_conflict',
+      'system_order',
+      'api_untagged',
+      'non_human_source',
+      'no_order_id',
+      'non_live_tag',
+      'unrecognised_remarks',
+      'unknown_mode_tag',
+      'engine_unreadable',
+      'engine_unknown_mode',
+      'awaiting_sync',
+      'unknown',
+    ]
+    for (const code of codes) {
+      const text = reasonText(code)
+      expect(text).not.toContain('_')
+      expect(text.length).toBeGreaterThan(10)
+    }
+    expect(reasonText('system_order')).toMatch(/never manual/)
+    expect(reasonText('unknown')).toBe('Reason not determined')
+  })
+
+  it('adds the coverage start date to the before-coverage text only', () => {
+    expect(reasonText('before_coverage', '2026-11-19')).toBe(
+      'Fill dated before attribution coverage began (19 Nov)'
+    )
+    expect(reasonText('before_coverage')).toBe('Fill dated before attribution coverage began')
+    expect(reasonText('within_grace', '2026-11-19')).not.toContain('19 Nov')
+    expect(reasonText('brand_new_code', '2026-11-19')).toBe('brand new code')
+  })
+})
+
+describe('attribution cards', () => {
+  it('never counts unresolved fills as manual and hides the strategy card without labels', () => {
+    const cards = view.attributionCards(dataQuality())
+    expect(cards.map((c) => [c.key, c.count])).toEqual([
+      ['manual', 7],
+      ['unresolved', 2],
+    ])
+    expect(cards[1].note).toBe('1 inside the 30 minute safety window, 1 past it')
+    const all = view.attributionCards(
+      dataQuality({ collected: 2, awaiting_attribution: 2, awaiting_grace: 0, awaiting_other: 2 }),
+      { SIGNAL_LIVE: 5, MANUAL: 0, UNCLASSIFIED: 2 }
+    )
+    expect(all.map((c) => [c.key, c.count])).toEqual([
+      ['manual', 0],
+      ['unresolved', 2],
+      ['strategy', 5],
+    ])
+    expect(all[1].note).toBe('0 inside the 30 minute safety window, 2 past it')
+  })
+})
+
+describe('period header', () => {
+  const p = (period: string, start: string, end: string, reliable_since = '2026-11-18') => ({
+    period,
+    start,
+    end,
+    reliable_since,
+  })
+
+  it('7d clamped to the start of ledger history', () => {
+    const h = view.periodHeader(p('7d', '2026-11-18', '2026-11-19'))
+    expect(`${h.name}: ${h.nominal}. ${h.note}`).toBe(
+      'Last 7 days: 13-19 Nov 2026. Showing 18-19 Nov: ledger history starts 18 Nov.'
+    )
+  })
+
+  it('30d clamped, across months', () => {
+    const h = view.periodHeader(p('30d', '2026-11-18', '2026-11-19'))
+    expect(h.nominal).toBe('21 Oct - 19 Nov 2026')
+    expect(h.note).toBe('Showing 18-19 Nov: ledger history starts 18 Nov.')
+  })
+
+  it('no clamp when the window starts after the history start', () => {
+    const h = view.periodHeader(p('7d', '2026-11-13', '2026-11-19', '2026-11-01'))
+    expect(h.nominal).toBe('13-19 Nov 2026')
+    expect(h.note).toBeNull()
+  })
+
+  it('a later start that is not reliable_since gets no note', () => {
+    const h = view.periodHeader(p('7d', '2026-11-15', '2026-11-19', '2026-11-01'))
+    expect(h.note).toBeNull()
+  })
+
+  it('1d is one session, with no note', () => {
+    const h = view.periodHeader(p('1d', '2026-11-19', '2026-11-19'))
+    expect(`${h.name}: ${h.nominal}`).toBe('Last session: 19 Nov 2026')
+    expect(h.note).toBeNull()
+  })
+
+  it('weekend: 1d is the last traded session, 7d spans the weekend', () => {
+    // Sunday 22 Nov: 1d resolves to Friday 20 Nov
+    expect(view.periodHeader(p('1d', '2026-11-20', '2026-11-20')).nominal).toBe('20 Nov 2026')
+    const h = view.periodHeader(p('7d', '2026-11-18', '2026-11-22'))
+    expect(h.nominal).toBe('16-22 Nov 2026')
+    expect(h.note).toBe('Showing 18-22 Nov: ledger history starts 18 Nov.')
+  })
+
+  it('custom uses the picked start', () => {
+    const h = view.periodHeader(p('custom', '2026-11-18', '2026-11-19'), '2026-11-10')
+    expect(`${h.name}: ${h.nominal}`).toBe('Custom range: 10-19 Nov 2026')
+    expect(h.note).toBe('Showing 18-19 Nov: ledger history starts 18 Nov.')
+    expect(view.periodHeader(p('custom', '2026-11-18', '2026-11-19'), '2026-11-18').note).toBeNull()
+  })
+
+  it('all time has no nominal start and no note', () => {
+    const h = view.periodHeader(p('all', '2026-11-18', '2026-11-19'))
+    expect(h.nominal).toBeNull()
+    expect(`${h.name}: ${h.shown}`).toBe('All time: 18-19 Nov 2026')
+    expect(h.note).toBeNull()
+  })
+
+  it('formats ranges across years', () => {
+    expect(view.fmtDayRange('2025-12-28', '2026-01-03')).toBe('28 Dec 2025 - 3 Jan 2026')
+    expect(view.periodHeader(p('ytd', '2026-11-18', '2026-11-19')).nominal).toBe(
+      '1 Jan - 19 Nov 2026'
+    )
+  })
+})

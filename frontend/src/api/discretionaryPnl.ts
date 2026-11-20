@@ -326,6 +326,9 @@ export interface DiscretionaryTrade {
   /** Number of closing legs (partial exits) in this trade. */
   legs: number
   position_seq?: number
+  /** Distinct entry / exit fills of the trade (its fill links); absent from older servers. */
+  entry_fills?: number
+  exit_fills?: number
 }
 
 export interface DiscretionaryPosition {
@@ -577,7 +580,10 @@ export interface TradeFills {
 export interface UnresolvedFill {
   id?: number
   fill_ref?: number | null
+  /** Why it is unresolved / not placed (a code; see reasonText). Unresolved rows of older servers have none. */
   reason?: string
+  /** First date of attribution coverage (ISO), sent with the unresolved reason. */
+  coverage_from?: string | null
   broker?: string | null
   account?: string | null
   symbol?: string | null
