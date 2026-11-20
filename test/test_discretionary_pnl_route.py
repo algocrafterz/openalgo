@@ -827,3 +827,19 @@ def test_summary_carries_the_today_block_and_honours_filters(client, env, monkey
     other = summary(client, period="30d", symbol="ITC")["today"]
     assert other["open_positions"] == 0 and other["realized_gross"] == 0
     assert other["pending_attribution"]["grace_count"] == 0
+
+
+def test_unresolved_route_carries_a_reason_code(client, env, monkeypatch):
+    enable(monkeypatch)
+    monkeypatch.setattr(
+        pnl,
+        "unresolved_reasons",
+        lambda fills, now=None: {
+            f["id"]: {"reason": "before_coverage", "coverage_from": "2026-11-19"} for f in fills
+        },
+    )
+    seed(env)
+    body = get(client, "/api/discretionary-pnl/unresolved").get_json()
+    (row,) = body["unresolved"]
+    assert (row["reason"], row["coverage_from"]) == ("before_coverage", "2026-11-19")
+    assert row["attribution_state"] == "unresolved"
