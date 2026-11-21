@@ -91,7 +91,9 @@ export function TodayClosedTable({
                 <TableCell className="text-right font-mono">
                   {fmtQty(r.total_quantity)}
                   {r.legs > 1 && (
-                    <span className="ml-1 text-xs text-muted-foreground">({r.legs} exits)</span>
+                    <span className="ml-1 text-xs text-muted-foreground">
+                      ({r.legs} exit fills)
+                    </span>
                   )}
                 </TableCell>
                 <TableCell className="text-right font-mono">{fmtPrice(r.entry_price)}</TableCell>
@@ -179,7 +181,7 @@ export function TodayPerformance({
             value={formatCurrency(today.realized_gross)}
             positive={today.realized_gross > 0}
             negative={today.realized_gross < 0}
-            hint={`${today.exit_legs} exit(s), partial exits included`}
+            hint={`${today.exit_legs} exit fills (incl. partial exits)`}
           />
           <Card data-testid="today-net">
             <CardContent className="py-4">
@@ -201,7 +203,7 @@ export function TodayPerformance({
                   <Badge
                     variant="outline"
                     className="text-[11px] border-amber-500/50 text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
-                    title={`${today.charges_unavailable_legs} exit(s) have no charge estimate: counted as 0`}
+                    title={`${today.charges_unavailable_legs} exit fills have no charge estimate: counted as 0`}
                     data-testid="today-charges-incomplete"
                   >
                     incomplete

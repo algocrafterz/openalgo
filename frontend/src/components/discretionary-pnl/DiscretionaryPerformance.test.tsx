@@ -124,6 +124,25 @@ function renderIt(props: Partial<React.ComponentProps<typeof DiscretionaryPerfor
   )
 }
 
+/** Advanced analysis is collapsed by default: open it before looking inside. */
+async function openAdvanced() {
+  const toggle = await screen.findByTestId('advanced-analysis-toggle')
+  if (toggle.getAttribute('aria-expanded') !== 'true') await userEvent.click(toggle)
+}
+
+/** Opens the fills dialog of a trade: expand its row, then press its lifecycle button. */
+async function openFills(symbol: string) {
+  const expander = await screen.findByRole('button', {
+    name: new RegExp(`details of trade \\d+, ${symbol}`),
+  })
+  if (expander.getAttribute('aria-expanded') !== 'true') await userEvent.click(expander)
+  await userEvent.click(
+    await screen.findByRole('button', {
+      name: new RegExp(`Show fills and lifecycle of trade \\d+, ${symbol}`),
+    })
+  )
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   summaryFn.mockResolvedValue(summary())
@@ -359,6 +378,7 @@ describe('populated view', () => {
     // 10 close dates over 2 months: the medium profile offers all three tabs
     summaryFn.mockResolvedValue(withDays(10, { monthly: monthRows() }))
     renderIt()
+    await openAdvanced()
     await screen.findByRole('tab', { name: 'Daily' })
     // every one of the 10 fixture days is flagged incomplete
     expect(screen.getAllByText('incomplete')).toHaveLength(10)
@@ -370,6 +390,7 @@ describe('populated view', () => {
 
   it('shows the breakdown tables and the holding durations', async () => {
     renderIt()
+    await openAdvanced()
     await screen.findByText('By symbol')
     expect(screen.getByText('Long vs Short')).toBeInTheDocument()
     expect(screen.getByText('By product')).toBeInTheDocument()
@@ -386,10 +407,15 @@ describe('populated view', () => {
     const table = (await screen.findByText('Closed trades')).closest(
       '[data-slot="card"]'
     ) as HTMLElement
-    expect(within(table).getByText('estimated')).toBeInTheDocument()
+    // the row keeps the warning visible; the plain 'estimated' note is in the detail row
     expect(within(table).getByText('charges unavailable')).toBeInTheDocument()
+    expect(within(table).queryByText('estimated')).not.toBeInTheDocument()
     expect(within(table).getByText('Rs 12.50')).toBeInTheDocument()
     expect(within(table).getByText('Rs 87.50')).toBeInTheDocument()
+    await userEvent.click(
+      within(table).getByRole('button', { name: /details of trade \d+, RELIANCE/ })
+    )
+    expect(within(table).getByText('estimated')).toBeInTheDocument()
   })
 
   it('notes a truncated trade list', async () => {
@@ -676,20 +702,93 @@ describe('trade fills dialog', () => {
       ],
     })
     renderIt()
-    const row = await screen.findByRole('button', { name: /Show fills of RELIANCE/ })
-    await userEvent.click(row)
+    await openFills('RELIANCE')
     const dialog = await screen.findByRole('dialog')
     expect(await within(dialog).findByText('ORD-ENTRY')).toBeInTheDocument()
     expect(within(dialog).getByText('ORD-EXIT')).toBeInTheDocument()
-    expect(within(dialog).getByText('Entry')).toBeInTheDocument()
-    expect(within(dialog).getByText('Exit')).toBeInTheDocument()
+    expect(
+      within(dialog)
+        .getAllByTestId('lifecycle-label')
+        .map((e) => e.textContent)
+    ).toEqual(['Entry', 'Final exit'])
+    expect(
+      within(dialog)
+        .getAllByTestId('lifecycle-net')
+        .map((e) => e.textContent)
+    ).toEqual(['+10', '0'])
+    expect(
+      within(dialog).getByText(/Every fill that opened, added to, reduced or closed this trade/)
+    ).toBeInTheDocument()
+    expect(within(dialog).queryByText(/legs/)).not.toBeInTheDocument()
     expect(fillsFn).toHaveBeenCalledWith(11, 'b1')
+  })
+
+  it('groups the partial fills of one order and nests them under it', async () => {
+    const f = (
+      fill_ref: number,
+      role: 'ENTRY' | 'EXIT',
+      side: string,
+      qty: number,
+      price: number,
+      time: string,
+      order: string
+    ) => ({
+      fill_ref,
+      role,
+      qty_used: qty,
+      charge_allocated: 0.25,
+      price,
+      fill_time: `2026-11-16 ${time}`,
+      order_id: order,
+      fill_id: `f${fill_ref}`,
+      broker: 'flattrade',
+      account: 'FT1',
+      symbol: 'RELIANCE',
+      exchange: 'NSE',
+      product: 'MIS',
+      side,
+      attribution_state: 'manual',
+    })
+    fillsFn.mockResolvedValue({
+      build_id: 'b1',
+      trade: trade({ closed_quantity: 25 }),
+      linked_fills: 3,
+      // stored out of order: the dialog sorts them
+      fills: [
+        f(3, 'EXIT', 'SELL', 25, 2390, '10:30:00', 'ORD-X'),
+        f(2, 'ENTRY', 'BUY', 21, 2385, '10:08:46', 'ORD-92152'),
+        f(1, 'ENTRY', 'BUY', 4, 2385, '10:08:45', 'ORD-92152'),
+      ],
+    })
+    renderIt()
+    await openFills('RELIANCE')
+    const dialog = await screen.findByRole('dialog')
+    const events = await within(dialog).findAllByTestId('lifecycle-event')
+    expect(events).toHaveLength(2)
+    expect(events[0]).toHaveTextContent('ORD-92152')
+    expect(events[0]).toHaveTextContent('25')
+    expect(events[0]).toHaveTextContent('2385.00')
+    expect(events[0]).toHaveTextContent('+25')
+    expect(events[1]).toHaveTextContent('Final exit')
+    // the individual fills are nested beneath the order, behind an accessible button
+    expect(within(dialog).queryAllByTestId('lifecycle-fill')).toHaveLength(0)
+    const toggle = within(events[0]).getByRole('button', { name: /Show the 2 fills of this order/ })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await userEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    const nested = within(dialog).getAllByTestId('lifecycle-fill')
+    expect(nested.map((r) => r.textContent)).toEqual([
+      expect.stringContaining('4'),
+      expect.stringContaining('21'),
+    ])
+    expect(nested[0]).toHaveTextContent('f1')
+    expect(nested[1]).toHaveTextContent('f2')
   })
 
   it('shows the error when the fills cannot be read', async () => {
     fillsFn.mockRejectedValue(new DiscretionaryApiError('Trade not found.', 'trade_not_found', 404))
     renderIt()
-    await userEvent.click(await screen.findByRole('button', { name: /Show fills of RELIANCE/ }))
+    await openFills('RELIANCE')
     const dialog = await screen.findByRole('dialog')
     expect(await within(dialog).findByText('Trade not found.')).toBeInTheDocument()
   })
@@ -699,7 +798,7 @@ describe('trade fills dialog', () => {
       new DiscretionaryApiError('Could not read the trade fills.', undefined, 500)
     )
     renderIt()
-    await userEvent.click(await screen.findByRole('button', { name: /Show fills of RELIANCE/ }))
+    await openFills('RELIANCE')
     const dialog = await screen.findByRole('dialog')
     expect(await within(dialog).findByText('Could not read the trade fills.')).toBeInTheDocument()
     expect(dialog.querySelector('[data-slot="alert"]')).toHaveClass('text-destructive')
@@ -712,7 +811,7 @@ describe('trade fills dialog', () => {
   it('asks with the build of the summary the row came from, and says so when the data changed', async () => {
     fillsFn.mockRejectedValue(new DiscretionaryApiError('The data changed', 'build_changed', 409))
     renderIt()
-    await userEvent.click(await screen.findByRole('button', { name: /Show fills of RELIANCE/ }))
+    await openFills('RELIANCE')
     const dialog = await screen.findByRole('dialog')
     expect(fillsFn).toHaveBeenCalledWith(11, 'b1')
     expect(
@@ -727,16 +826,73 @@ describe('trade fills dialog', () => {
 
   it('does not reuse a cached answer for the same trade id under a new build', async () => {
     renderIt()
-    await userEvent.click(await screen.findByRole('button', { name: /Show fills of RELIANCE/ }))
+    await openFills('RELIANCE')
     await screen.findByRole('dialog')
     await waitFor(() => expect(fillsFn).toHaveBeenCalledTimes(1))
     await userEvent.keyboard('{Escape}')
     summaryFn.mockResolvedValue(summary({ build_id: 'b2' }))
     await userEvent.click(screen.getByRole('switch', { name: 'Fetch live prices' }))
     await waitFor(() => expect(screen.queryByText(/updating/)).not.toBeInTheDocument())
-    await userEvent.click(await screen.findByRole('button', { name: /Show fills of RELIANCE/ }))
+    await openFills('RELIANCE')
     await waitFor(() => expect(fillsFn).toHaveBeenLastCalledWith(11, 'b2'))
     expect(fillsFn).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('data quality at the bottom of the page', () => {
+  const clear = {
+    collected: 26,
+    awaiting_attribution: 0,
+    awaiting_grace: 0,
+    awaiting_other: 0,
+    attributed_open: 0,
+    not_placed: 0,
+    included: 26,
+    reconciles: true,
+    charges_incomplete_trades: 0,
+    charges_incomplete_legs: 0,
+  }
+
+  it('shows one line when everything reconciles, below the closed trades and insights', async () => {
+    summaryFn.mockResolvedValue(summary({ data_quality: dataQuality(clear) }))
+    renderIt()
+    const line = await screen.findByTestId('dq-all-clear')
+    expect(line).toHaveTextContent(`26 fills, all in ${summary().trades_total} completed trades`)
+    expect(screen.queryByTestId('dq-awaiting')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('dq-open')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('dq-not_placed')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('dq-sync')).not.toBeInTheDocument()
+    const dq = screen.getByTestId('data-quality')
+    for (const id of ['ledger-card', 'trading-insights', 'advanced-analysis']) {
+      expect(
+        screen.getByTestId(id).compareDocumentPosition(dq) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+    }
+  })
+
+  it('keeps fills that await attribution, and the non-zero counts, fully visible', async () => {
+    summaryFn.mockResolvedValue(
+      summary({
+        data_quality: dataQuality({
+          ...clear,
+          collected: 28,
+          awaiting_attribution: 2,
+          awaiting_grace: 1,
+          awaiting_other: 1,
+          reconciles: false,
+        }),
+      })
+    )
+    renderIt()
+    const awaiting = await screen.findByTestId('dq-awaiting')
+    expect(awaiting).toHaveTextContent('2')
+    expect(awaiting).toHaveTextContent('1 in the safety window, 1 other')
+    expect(screen.getByTestId('dq-collected')).toHaveTextContent('28')
+    expect(screen.getByText('counts do not add up')).toBeInTheDocument()
+    expect(screen.queryByTestId('dq-all-clear')).not.toBeInTheDocument()
+    // zero tiles stay hidden
+    expect(screen.queryByTestId('dq-open')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('dq-not_placed')).not.toBeInTheDocument()
   })
 })
 
@@ -786,6 +942,7 @@ describe('incomplete net in the tables', () => {
       })
     )
     renderIt()
+    await openAdvanced()
     const bySymbol = (await screen.findByText('By symbol')).parentElement as HTMLElement
     expect(within(bySymbol).getAllByText('incomplete')).toHaveLength(1)
     const bySide = screen.getByText('Long vs Short').parentElement as HTMLElement
@@ -815,6 +972,7 @@ describe('labels and layout', () => {
   it('labels the win / loss figures as net of charges, as the server computes them', async () => {
     renderIt()
     await screen.findByText('Closed trades')
+    await openAdvanced()
     for (const label of [
       'Win rate (net)',
       'Profit factor (net)',
@@ -833,13 +991,19 @@ describe('labels and layout', () => {
     expect(screen.getByText('Gross realized', { selector: 'div' })).toBeInTheDocument()
   })
 
-  it('shows an Account column in the closed trades and open positions tables', async () => {
+  it('shows the account in the closed trade detail row and an Account column in open positions', async () => {
     renderIt()
     const closed = (await screen.findByText('Closed trades')).closest(
       '[data-slot="card"]'
     ) as HTMLElement
-    expect(within(closed).getByRole('columnheader', { name: 'Account' })).toBeInTheDocument()
-    expect(within(closed).getByText('ZR1')).toBeInTheDocument()
+    expect(within(closed).queryByRole('columnheader', { name: 'Account' })).not.toBeInTheDocument()
+    expect(within(closed).queryByText(trade().account)).not.toBeInTheDocument()
+    await userEvent.click(
+      within(closed).getByRole('button', { name: /details of trade \d+, RELIANCE/ })
+    )
+    const detail = within(closed).getByTestId('closed-trade-detail')
+    expect(within(detail).getByText('Account')).toBeInTheDocument()
+    expect(within(detail).getByText(trade().account)).toBeInTheDocument()
     const open = screen.getByText('Open positions').closest('[data-slot="card"]') as HTMLElement
     expect(within(open).getByRole('columnheader', { name: 'Account' })).toBeInTheDocument()
     expect(within(open).getByText(position().account)).toBeInTheDocument()
@@ -847,6 +1011,7 @@ describe('labels and layout', () => {
 
   it('keeps every breakdown column reachable: one column layout, scrollable tables', async () => {
     renderIt()
+    await openAdvanced()
     const bySymbol = (await screen.findByText('By symbol')).parentElement as HTMLElement
     for (const name of ['Gross P&L', 'Net of charges', 'Trades']) {
       expect(within(bySymbol).getByRole('columnheader', { name })).toBeInTheDocument()
@@ -856,27 +1021,95 @@ describe('labels and layout', () => {
     expect(bySymbol.parentElement?.className).not.toMatch(/(^|\s)lg:grid-cols-2/)
   })
 
-  it('lets a keyboard or screen reader user open a trade: rows are buttons', async () => {
+  it('lets a keyboard or screen reader user open a trade: a real button expands the detail row', async () => {
     renderIt()
-    const row = await screen.findByRole('button', { name: /Show fills of RELIANCE/ })
-    expect(row.tagName).toBe('TR')
-    row.focus()
+    const expander = await screen.findByRole('button', { name: /details of trade 1, RELIANCE/ })
+    // a real button in the first cell; the row itself is not a button
+    expect(expander.tagName).toBe('BUTTON')
+    expect(expander).toHaveAttribute('aria-expanded', 'false')
+    expect(expander.closest('tr')).not.toHaveAttribute('role', 'button')
+    expect(expander.closest('tr')).not.toHaveAttribute('tabindex')
+    expect(expander.closest('td')).toBe(expander.closest('tr')?.firstElementChild)
+    expect(screen.queryByTestId('closed-trade-detail')).not.toBeInTheDocument()
+    expander.focus()
     await userEvent.keyboard('{Enter}')
+    expect(expander).toHaveAttribute('aria-expanded', 'true')
+    const detail = screen.getByTestId('closed-trade-detail')
+    expect(expander.getAttribute('aria-controls')).toBe(detail.id)
+    await userEvent.keyboard(' ')
+    expect(expander).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByTestId('closed-trade-detail')).not.toBeInTheDocument()
+    await userEvent.keyboard('{Enter}')
+    await userEvent.click(
+      within(screen.getByTestId('closed-trade-detail')).getByRole('button', {
+        name: /Show fills and lifecycle of trade 1, RELIANCE/,
+      })
+    )
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })
 })
 
 describe('completed trades (a position from flat to flat)', () => {
-  it('shows a legs badge on a trade closed in parts', async () => {
+  it('shows total bought and total sold instead of a quantity and a legs badge', async () => {
     summaryFn.mockResolvedValue(
       summary({
-        trades: [trade({ legs: 2, closed_quantity: 45 }), trade({ id: 12, symbol: 'INFY' })],
+        trades: [
+          trade({ legs: 2, closed_quantity: 45 }),
+          trade({ id: 12, symbol: 'INFY', closed_quantity: 7 }),
+        ],
       })
     )
     renderIt()
-    const row = await screen.findByRole('button', { name: /Show fills of RELIANCE/ })
-    expect(within(row).getByText('2 legs')).toBeInTheDocument()
-    expect(screen.getAllByText(/legs$/)).toHaveLength(1) // a one-leg trade has no badge
+    const table = (await screen.findByText('Closed trades')).closest(
+      '[data-slot="card"]'
+    ) as HTMLElement
+    expect(within(table).getByRole('columnheader', { name: 'Bought / Sold' })).toBeInTheDocument()
+    expect(within(table).queryByRole('columnheader', { name: 'Qty' })).not.toBeInTheDocument()
+    const cells = within(table).getAllByTestId('bought-sold')
+    expect(cells.map((c) => c.textContent)).toEqual(['45 / 45', '7 / 7'])
+    expect(cells[0]).toHaveAttribute('title', 'Bought 45, sold 45')
+    // no legs badge, with or without partial exits
+    expect(within(table).queryByText(/\blegs?\b/)).not.toBeInTheDocument()
+  })
+
+  it('shows eleven visible columns and numbers the trades by opening time', async () => {
+    summaryFn.mockResolvedValue(
+      summary({
+        trades: [
+          trade({
+            id: 12,
+            symbol: 'INFY',
+            opened_at: '2026-11-16 11:00:00',
+            closed_at: '2026-11-16 11:30:00',
+          }),
+          trade({ id: 11, opened_at: '2026-11-16 09:20:00', closed_at: '2026-11-16 10:05:00' }),
+        ],
+      })
+    )
+    renderIt()
+    const table = (await screen.findByText('Closed trades')).closest(
+      '[data-slot="card"]'
+    ) as HTMLElement
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent)
+    ).toEqual([
+      'Trade #',
+      'Symbol',
+      'Direction',
+      'Entry → exit',
+      'Held',
+      'Bought / Sold',
+      'Avg entry',
+      'Avg exit',
+      'Gross P&L',
+      'Charges (est.)',
+      'Net P&L',
+    ])
+    // the table keeps the server's newest-first order; numbers follow opening time
+    expect(screen.getByRole('button', { name: /details of trade 2, INFY/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /details of trade 1, RELIANCE/ })).toBeInTheDocument()
   })
 
   it('shows the realized-so-far of an open position partly closed', async () => {
@@ -950,12 +1183,24 @@ describe('completed trades (a position from flat to flat)', () => {
       fills: [fill(1, 'ENTRY', 45, 100), fill(2, 'EXIT', 20, 110), fill(3, 'EXIT', 25, 108)],
     })
     renderIt()
-    await userEvent.click(await screen.findByRole('button', { name: /Show fills of RELIANCE/ }))
+    await openFills('RELIANCE')
     const dialog = await screen.findByRole('dialog')
     expect(await within(dialog).findByText('ORD-1')).toBeInTheDocument()
     expect(within(dialog).getByText('ORD-2')).toBeInTheDocument()
     expect(within(dialog).getByText('ORD-3')).toBeInTheDocument()
-    expect(within(dialog).getAllByText('Exit')).toHaveLength(2)
+    expect(
+      within(dialog)
+        .getAllByTestId('lifecycle-label')
+        .map((e) => e.textContent)
+    ).toEqual(['Entry', 'Partial exit', 'Final exit'])
+    expect(
+      within(dialog)
+        .getAllByTestId('lifecycle-net')
+        .map((e) => e.textContent)
+    ).toEqual(['+45', '+25', '0'])
+    expect(within(dialog).getByTestId('lifecycle-peak')).toHaveTextContent(
+      'Peak position in this trade 45'
+    )
   })
 })
 
@@ -977,7 +1222,7 @@ describe("today's performance", () => {
     // Today's figures sit in the summary header, right after the headline figures and before the groups
     const cards = screen.getByText('Net realized (after est. charges)')
     expect(cards.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    const groups = screen.getByTestId('discretionary-groups')
+    const groups = screen.getByTestId('discretionary-groups-performance')
     expect(section.compareDocumentPosition(groups) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     await userEvent.click(within(section).getByTestId('today-closed-row'))
     await waitFor(() => expect(fillsFn).toHaveBeenCalledWith(11, 'b1'))
@@ -1050,15 +1295,16 @@ describe('dashboard additions', () => {
     summaryFn.mockResolvedValue(withDays(3, full()))
     renderIt()
     const dq = await screen.findByTestId('data-quality')
+    await openAdvanced()
     const risk = screen.getByTestId('risk-strip')
     const how = screen.getByTestId('how-you-trade')
     expect(screen.getByTestId('daily-pnl-chart')).toBeInTheDocument()
     expect(screen.getByTestId('discretionary-sample-note')).toHaveTextContent(
       'Ratios based on 2 completed trade(s) over 1 trading day(s).'
     )
-    // data quality near the top, then the risk strip, then How you trade
-    expect(dq.compareDocumentPosition(risk) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // the risk strip, then How you trade (both in Advanced analysis), then data quality at the bottom
     expect(risk.compareDocumentPosition(how) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(how.compareDocumentPosition(dq) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     // the existing breakdown tables stay, so no table is shown twice
     expect(screen.getByText('By symbol')).toBeInTheDocument()
     expect(within(how).queryByText('By symbol')).not.toBeInTheDocument()
@@ -1075,7 +1321,7 @@ describe('dashboard additions', () => {
     await waitFor(() => expect(fillsFn).toHaveBeenLastCalledWith(12, 'b1'))
   })
 
-  it('shows a dash with the reason on the drawdown card for a single trading day', async () => {
+  it('shows a dash with the reason for the maximum drawdown of a single trading day, in the summary only', async () => {
     summaryFn.mockResolvedValue(
       summary({
         consistency: consistency({
@@ -1085,15 +1331,16 @@ describe('dashboard additions', () => {
       })
     )
     renderIt()
-    // the metric card comes first; the risk strip below has its own Max drawdown tile
-    const [label] = await screen.findAllByText('Max drawdown', { selector: 'div' })
-    expect(label.parentElement?.querySelector('.font-mono')?.textContent).toBe('—')
-    expect(screen.getByTestId('risk-drawdown')).toHaveTextContent('needs at least 2 trading days')
+    const tile = await screen.findByTestId('summary-drawdown')
+    expect(tile).toHaveTextContent('—')
     expect(
       screen.getByText(
         'needs at least 2 trading days; basis: gross realized, excludes charges and unrealized'
       )
     ).toBeInTheDocument()
+    await openAdvanced()
+    // the Risk card no longer repeats it
+    expect(screen.queryByTestId('risk-drawdown')).not.toBeInTheDocument()
   })
 
   it('shows the position age next to the opening date', async () => {
@@ -1328,6 +1575,7 @@ describe('new analysis blocks', () => {
   it('shows points per instrument with symbol and exchange and no combined total', async () => {
     summaryFn.mockResolvedValue(withBlocks())
     renderIt()
+    await openAdvanced()
     const card = (await screen.findByTestId('points-card')) as HTMLElement
     expect(card).toHaveTextContent('Points per unit')
     const rows = within(card).getAllByTestId('points-row')
@@ -1347,8 +1595,11 @@ describe('new analysis blocks', () => {
   it('shows drawdown in rupees without a percentage, and the streaks', async () => {
     summaryFn.mockResolvedValue(withBlocks())
     renderIt()
+    await openAdvanced()
     const strip = await screen.findByTestId('risk-strip')
-    expect(within(strip).getByTestId('risk-drawdown')).toHaveTextContent('-Rs 320.50')
+    // the maximum drawdown is in the summary only; the strip keeps the current drawdown
+    expect(within(strip).queryByTestId('risk-drawdown')).not.toBeInTheDocument()
+    expect(screen.getByTestId('summary-drawdown')).toHaveTextContent('-Rs 320.50')
     expect(within(strip).getByTestId('risk-current-drawdown')).toHaveTextContent('-Rs 120.00')
     expect(strip.textContent).not.toMatch(/%/)
     expect(within(strip).getByTestId('risk-win-streak')).toHaveTextContent('3')
@@ -1357,8 +1608,9 @@ describe('new analysis blocks', () => {
     expect(screen.getByTestId('risk-basis')).toHaveTextContent('1 position(s) without a net P&L')
     // one net drawdown, not a second (gross) card next to it
     expect(screen.queryByText(/basis: gross realized/)).not.toBeInTheDocument()
-    // the largest win and loss stay in the same strip
-    expect(within(strip).getByTestId('risk-largest-win')).toBeInTheDocument()
+    // the largest win and loss are in the summary, not repeated in this strip
+    expect(within(strip).queryByTestId('risk-largest-win')).not.toBeInTheDocument()
+    expect(screen.getByTestId('summary-largest-win')).toBeInTheDocument()
   })
 
   it('shows trade management and costs, with the reason when the percentage is null', async () => {
@@ -1372,6 +1624,7 @@ describe('new analysis blocks', () => {
       })
     )
     renderIt()
+    await openAdvanced()
     const tm = await screen.findByTestId('trade-management')
     expect(within(tm).getByTestId('tm-winner-hold')).toHaveTextContent('45m')
     expect(within(tm).getByTestId('tm-winner-hold')).toHaveTextContent('median 30m, 3 position(s)')
@@ -1385,7 +1638,11 @@ describe('new analysis blocks', () => {
   it('shows the charges percentage when there is gross profit', async () => {
     summaryFn.mockResolvedValue(withBlocks())
     renderIt()
+    await openAdvanced()
     expect(await screen.findByTestId('cost-pct')).toHaveTextContent('15.0%')
+    // total charges are shown once, in the summary
+    expect(screen.queryByTestId('cost-total')).not.toBeInTheDocument()
+    expect(screen.getByTestId('summary-charges')).toBeInTheDocument()
   })
 
   it('shows the monthly and weekday tables and bars, with signs and the close-date basis', async () => {
@@ -1393,6 +1650,7 @@ describe('new analysis blocks', () => {
     const base = withBlocks()
     summaryFn.mockResolvedValue({ ...base, by_period: { ...base.by_period, daily: dailyRows(10) } })
     renderIt()
+    await openAdvanced()
     const card = await screen.findByTestId('calendar-card')
     const rows = within(card).getAllByTestId('calendar-row')
     expect(rows).toHaveLength(5)
@@ -1421,6 +1679,7 @@ describe('new analysis blocks', () => {
       })
     )
     renderIt()
+    await openAdvanced()
     const chart = await screen.findByTestId('symbol-chart')
     const bars = within(chart).getAllByTestId('net-bar')
     expect(bars[0]).toHaveTextContent('RELIANCE')
@@ -1443,12 +1702,14 @@ describe('new analysis blocks', () => {
       })
     )
     renderIt()
+    await openAdvanced()
     await screen.findByText('Closed trades')
     expect(screen.queryByTestId('points-card')).not.toBeInTheDocument()
     expect(screen.queryByTestId('calendar-card')).not.toBeInTheDocument()
     expect(screen.queryByTestId('trade-management')).not.toBeInTheDocument()
     // without the net risk block the gross figures stay, labelled as gross
-    expect(screen.getByTestId('risk-drawdown')).toHaveTextContent('gross realized')
+    expect(screen.getByTestId('summary-drawdown')).toHaveTextContent('gross realized')
+    expect(screen.queryByTestId('risk-drawdown')).not.toBeInTheDocument()
     expect(screen.queryByTestId('risk-current-drawdown')).not.toBeInTheDocument()
   })
 
@@ -1474,6 +1735,7 @@ describe('new analysis blocks', () => {
   it('does not scale anything: rupee fields and points go through the page formatter once', async () => {
     summaryFn.mockResolvedValue(withBlocks())
     renderIt({ formatCurrency: (v: number) => `Rs ${v.toFixed(2)}` })
+    await openAdvanced()
     const card = await screen.findByTestId('points-card')
     // points are shown as recorded, not as rupees
     expect(card).not.toHaveTextContent('Rs')
@@ -1484,6 +1746,7 @@ describe('new analysis blocks', () => {
 describe('MAE / MFE', () => {
   it('loads after the summary and shows the note, coverage and precision text', async () => {
     renderIt()
+    await openAdvanced()
     const panel = await screen.findByTestId('excursion-panel')
     expect(excursionsFn).toHaveBeenCalledWith('30d', undefined, {}, 'all')
     expect(within(panel).getByTestId('excursions-note')).toHaveTextContent(EXCURSION_NOTE)
@@ -1501,6 +1764,7 @@ describe('MAE / MFE', () => {
   it('does not block the page while it loads', async () => {
     excursionsFn.mockReturnValue(new Promise(() => {}))
     renderIt()
+    await openAdvanced()
     expect(await screen.findByText('Closed trades')).toBeInTheDocument()
     expect(screen.getByTestId('excursions-status')).toHaveTextContent('Loading MAE / MFE')
   })
@@ -1514,6 +1778,7 @@ describe('MAE / MFE', () => {
 
   it('shows the aggregate table: averages, medians, profit capture of winners', async () => {
     renderIt()
+    await openAdvanced()
     const panel = await screen.findByTestId('excursion-panel')
     const rows = within(panel).getAllByTestId('excursion-row')
     expect(rows[0]).toHaveTextContent('points')
@@ -1527,32 +1792,66 @@ describe('MAE / MFE', () => {
     expect(rows[0].textContent).not.toMatch(/0\.00.*—|—.*0\.00/)
   })
 
-  it('shows a dash with the reason, never 0, for an unavailable position in the table', async () => {
+  it('shows a dash with the reason, never 0, for an unavailable position in the detail row', async () => {
     renderIt()
     const table = (await screen.findByText('Closed trades')).closest(
       '[data-slot="card"]'
     ) as HTMLElement
-    const infy = within(table).getByRole('button', { name: /Show fills of INFY/ })
-    await waitFor(() => expect(within(infy).getAllByTestId('mae-unavailable')).toHaveLength(1))
-    const dash = within(infy).getByTestId('mae-unavailable')
+    await userEvent.click(within(table).getByRole('button', { name: /details of trade \d+, INFY/ }))
+    await userEvent.click(
+      within(table).getByRole('button', { name: /details of trade \d+, RELIANCE/ })
+    )
+    const [relDetail, infyDetail] = within(table).getAllByTestId('closed-trade-detail')
+    await waitFor(() =>
+      expect(within(infyDetail).getAllByTestId('mae-unavailable')).toHaveLength(1)
+    )
+    const dash = within(infyDetail).getByTestId('mae-unavailable')
     expect(dash).toHaveTextContent('—')
     expect(dash).toHaveAttribute('title', 'unsupported segment')
-    expect(within(infy).getByTestId('mfe-unavailable')).toHaveAttribute(
+    expect(within(infyDetail).getByTestId('mfe-unavailable')).toHaveAttribute(
       'title',
       'unsupported segment'
     )
-    expect(infy.textContent).not.toMatch(/\b0\.00\b/)
+    expect(infyDetail.textContent).not.toMatch(/\b0\.00\b/)
     // the available one shows its points
-    const rel = within(table).getByRole('button', { name: /Show fills of RELIANCE/ })
-    expect(rel).toHaveTextContent('2.50')
-    expect(rel).toHaveTextContent('14.00')
+    expect(relDetail).toHaveTextContent('2.50')
+    expect(relDetail).toHaveTextContent('14.00')
+  })
+
+  it('words the MFE as a market measurement, not achievable profit', async () => {
+    renderIt()
+    const table = (await screen.findByText('Closed trades')).closest(
+      '[data-slot="card"]'
+    ) as HTMLElement
+    await userEvent.click(
+      within(table).getByRole('button', { name: /details of trade \d+, RELIANCE/ })
+    )
+    const detail = within(table).getByTestId('closed-trade-detail')
+    const mfe = await within(detail).findByTestId('mfe-value')
+    expect(mfe.getAttribute('title')).toContain(
+      'price move x quantity open at that moment; a market measurement, not achievable profit'
+    )
+    await openAdvanced()
+    const panel = await screen.findByTestId('excursion-panel')
+    expect(panel).toHaveTextContent(
+      'MFE: largest favourable price move while open (market measurement, not realisable P&L)'
+    )
+    expect(panel).not.toHaveTextContent('best move for you')
+    expect(screen.getByTestId('profit-capture-block')).toHaveTextContent(
+      'of the favourable move (minute bars, lower bound)'
+    )
+    // the lower-bound text stays
+    expect(screen.getByTestId('excursions-precision')).toHaveTextContent('lower bound')
   })
 
   it('shows dashes while the excursions have not loaded, not zero', async () => {
     excursionsFn.mockReturnValue(new Promise(() => {}))
     renderIt()
-    const rel = await screen.findByRole('button', { name: /Show fills of RELIANCE/ })
-    expect(within(rel).getByTestId('mae-unavailable')).toHaveAttribute(
+    await userEvent.click(
+      await screen.findByRole('button', { name: /details of trade \d+, RELIANCE/ })
+    )
+    const detail = await screen.findByTestId('closed-trade-detail')
+    expect(within(detail).getByTestId('mae-unavailable')).toHaveAttribute(
       'title',
       'MAE / MFE is not loaded yet'
     )
@@ -1561,14 +1860,17 @@ describe('MAE / MFE', () => {
   it('does not join excursions of another build to the rows', async () => {
     excursionsFn.mockResolvedValue(excursions({ build_id: 'other' }))
     renderIt()
+    await openAdvanced()
     await screen.findByTestId('excursion-panel')
-    const rel = screen.getByRole('button', { name: /Show fills of RELIANCE/ })
-    expect(within(rel).getByTestId('mae-unavailable')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /details of trade \d+, RELIANCE/ }))
+    const detail = screen.getByTestId('closed-trade-detail')
+    expect(within(detail).getByTestId('mae-unavailable')).toBeInTheDocument()
   })
 
   it('shows an error with a retry when the excursions fail, and the rest of the page stays', async () => {
     excursionsFn.mockRejectedValueOnce(new DiscretionaryApiError('Could not compute MAE / MFE.'))
     renderIt()
+    await openAdvanced()
     expect(await screen.findByText('MAE / MFE could not be loaded.')).toBeInTheDocument()
     expect(screen.getByText('Closed trades')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
@@ -1593,6 +1895,7 @@ describe('MAE / MFE', () => {
       })
     )
     renderIt()
+    await openAdvanced()
     const scatter = await screen.findByTestId('mae-mfe-scatter')
     expect(within(scatter).getAllByTestId('scatter-winner')).toHaveLength(1)
     expect(within(scatter).getAllByTestId('scatter-loser')).toHaveLength(1)
@@ -1617,35 +1920,61 @@ describe('MAE / MFE', () => {
       })
     )
     renderIt()
+    await openAdvanced()
     expect(await screen.findByTestId('mae-mfe-scatter-empty')).toBeInTheDocument()
   })
 })
 
 describe('closed positions table', () => {
-  it('has the extended columns', async () => {
+  it('has the eleven primary columns and moves the secondary ones to the detail row', async () => {
     renderIt()
     const table = (await screen.findByText('Closed trades')).closest(
       '[data-slot="card"]'
     ) as HTMLElement
     for (const name of [
+      'Trade #',
       'Symbol',
-      'Category',
       'Direction',
-      'Entry time',
-      'Exit time',
+      'Entry → exit',
+      'Held',
+      'Bought / Sold',
       'Avg entry',
       'Avg exit',
-      'Qty',
-      'Points / unit',
       'Gross P&L',
-      'Charges',
+      'Charges (est.)',
       'Net P&L',
-      'MAE',
-      'MFE',
-      'Held',
     ]) {
       expect(within(table).getByRole('columnheader', { name })).toBeInTheDocument()
     }
+    for (const name of [
+      'Category',
+      'Points / unit',
+      'MAE',
+      'MFE',
+      'Product',
+      'Broker',
+      'Account',
+    ]) {
+      expect(within(table).queryByRole('columnheader', { name })).not.toBeInTheDocument()
+    }
+    await userEvent.click(
+      within(table).getByRole('button', { name: /details of trade \d+, RELIANCE/ })
+    )
+    const detail = within(table).getByTestId('closed-trade-detail')
+    for (const label of [
+      'Points / unit',
+      'MAE',
+      'MFE',
+      'Category',
+      'Product',
+      'Broker',
+      'Account',
+    ]) {
+      expect(within(detail).getByText(label)).toBeInTheDocument()
+    }
+    expect(
+      within(detail).getByRole('button', { name: /Show fills and lifecycle/ })
+    ).toBeInTheDocument()
   })
 
   it('shows the exchange, the times, points per unit and a dash for a missing net', async () => {
@@ -1671,20 +2000,28 @@ describe('closed positions table', () => {
       })
     )
     renderIt()
-    const rel = await screen.findByRole('button', { name: /Show fills of RELIANCE/ })
+    const relBtn = await screen.findByRole('button', { name: /details of trade \d+, RELIANCE/ })
+    const infyBtn = screen.getByRole('button', { name: /details of trade \d+, INFY/ })
+    const rel = relBtn.closest('tr') as HTMLElement
+    const infy = infyBtn.closest('tr') as HTMLElement
     expect(rel).toHaveTextContent('RELIANCENSE')
-    expect(rel).toHaveTextContent('2026-11-16 09:20')
-    expect(rel).toHaveTextContent('2026-11-16 10:05')
-    expect(rel).toHaveTextContent('+10.00')
-    expect(rel).toHaveTextContent('Intraday')
-    const infy = screen.getByRole('button', { name: /Show fills of INFY/ })
+    // same day: the exit shows only its clock
+    expect(rel).toHaveTextContent('2026-11-16 09:20 → 10:05')
+    expect(rel).toHaveTextContent('Long')
     expect(infy).toHaveTextContent('INFYBSE')
-    expect(infy).toHaveTextContent('Swing')
-    expect(infy).toHaveTextContent('-4.50')
+    // another day: both stamps in full
+    expect(infy).toHaveTextContent('2026-11-13 10:00 → 2026-11-16 11:30')
     expect(infy).toHaveTextContent('Short')
     // net unavailable: a dash, not 0
     const cells = within(infy).getAllByRole('cell')
-    expect(cells[11]).toHaveTextContent('—')
+    expect(cells[10]).toHaveTextContent('—')
+    await userEvent.click(relBtn)
+    await userEvent.click(infyBtn)
+    const [relDetail, infyDetail] = screen.getAllByTestId('closed-trade-detail')
+    expect(relDetail).toHaveTextContent('+10.00')
+    expect(relDetail).toHaveTextContent('Intraday')
+    expect(infyDetail).toHaveTextContent('Swing')
+    expect(infyDetail).toHaveTextContent('-4.50')
   })
 
   it('shows Unclassified with the reason as a tooltip', async () => {
@@ -1700,6 +2037,11 @@ describe('closed positions table', () => {
       })
     )
     renderIt()
+    // the reliability flag stays on the row
+    expect(await screen.findByText('opening unknown')).toBeInTheDocument()
+    await userEvent.click(
+      await screen.findByRole('button', { name: /details of trade \d+, RELIANCE/ })
+    )
     const badge = await screen.findByTestId('category-badge')
     expect(badge).toHaveTextContent('Unclassified')
     expect(badge).toHaveAttribute(
@@ -1827,6 +2169,7 @@ describe('no net P&L: ratios are null, shown as a dash and never as 0', () => {
     expect(screen.getByText('no completed trade has a net P&L')).toBeInTheDocument()
     expect(screen.queryByText('0.0%')).not.toBeInTheDocument()
     expect(screen.queryByText('0.00')).not.toBeInTheDocument()
+    await openAdvanced()
     const bySymbol = (await screen.findByText('By symbol')).parentElement as HTMLElement
     expect(within(bySymbol).getAllByText('—').length).toBeGreaterThan(0)
   })

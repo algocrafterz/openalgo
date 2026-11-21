@@ -57,7 +57,7 @@ const THIN_ROWS = 5
  */
 export function PointsByInstrumentTable({ rows }: { rows: PointsByInstrumentRow[] }) {
   if (rows.length === 0) {
-    return <p className="text-sm text-muted-foreground">No closed positions in this range.</p>
+    return <p className="text-sm text-muted-foreground">No completed trades in this range.</p>
   }
   return (
     <div className="min-w-0 overflow-x-auto" data-testid="points-by-instrument">
@@ -267,26 +267,13 @@ export function TradeManagementStrip({
           </>
         )}
         {costs && (
-          <>
-            <StripTile
-              label="Charges"
-              testId="cost-total"
-              hint={
-                costs.charges_unavailable_positions > 0
-                  ? `${costs.charges_unavailable_positions} position(s) without an estimate`
-                  : 'estimated'
-              }
-            >
-              {formatCurrency(costs.total_charges)}
-            </StripTile>
-            <StripTile label="Charges as % of gross profit" testId="cost-pct">
-              {costs.charges_pct_of_gross_profit == null ? (
-                <Unavailable reason={costs.reason ?? 'not available'} />
-              ) : (
-                fmtPct(costs.charges_pct_of_gross_profit)
-              )}
-            </StripTile>
-          </>
+          <StripTile label="Charges as % of gross profit" testId="cost-pct">
+            {costs.charges_pct_of_gross_profit == null ? (
+              <Unavailable reason={costs.reason ?? 'not available'} />
+            ) : (
+              fmtPct(costs.charges_pct_of_gross_profit)
+            )}
+          </StripTile>
         )}
       </div>
       {management &&

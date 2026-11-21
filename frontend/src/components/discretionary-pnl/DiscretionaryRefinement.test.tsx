@@ -5,6 +5,7 @@ import { exportCsvUrl } from '@/api/discretionaryPnl'
 import {
   consistency,
   costsBlock,
+  dataQuality,
   emptyToday,
   excursionPosition,
   excursions,
@@ -102,6 +103,12 @@ function full(days: number, months: number) {
   })
 }
 
+/** Advanced analysis is collapsed by default: open it before looking inside. */
+async function openAdvanced() {
+  const toggle = await screen.findByTestId('advanced-analysis-toggle')
+  if (toggle.getAttribute('aria-expanded') !== 'true') await userEvent.click(toggle)
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   summaryFn.mockResolvedValue(summary())
@@ -109,12 +116,14 @@ beforeEach(() => {
 })
 
 describe('summary header', () => {
-  it('leads with a verdict, three large figures and one dense supporting row', async () => {
+  it('leads with three large figures and one dense supporting row', async () => {
     summaryFn.mockResolvedValue(full(3, 1))
     renderIt()
     const header = await screen.findByTestId('discretionary-summary')
-    expect(within(header).getByTestId('summary-verdict')).toHaveTextContent(
-      'Profitable on net: Rs 47.50 after estimated charges from 2 closed positions. Win rate 50.0%.'
+    // the verdict moved to Trading insights, below the closed trades
+    expect(within(header).queryByTestId('summary-verdict')).not.toBeInTheDocument()
+    expect(screen.getByTestId('summary-verdict')).toHaveTextContent(
+      'Profitable on net: Rs 47.50 after estimated charges from 2 completed trades. Win rate 50.0%.'
     )
     expect(within(header).getByTestId('summary-net')).toHaveTextContent('Rs 47.50')
     expect(within(header).getByTestId('summary-count')).toHaveTextContent('2')
@@ -134,7 +143,7 @@ describe('summary header', () => {
     }
     // the drawdown figure is the Risk card's
     expect(within(support).getByTestId('summary-drawdown')).toHaveTextContent('-Rs 320.50')
-    expect(within(header).getByRole('link', { name: 'Jump to closed positions' })).toHaveAttribute(
+    expect(within(header).getByRole('link', { name: 'Jump to closed trades' })).toHaveAttribute(
       'href',
       '#discretionary-ledger'
     )
@@ -146,7 +155,7 @@ describe('summary header', () => {
     // charges are 12.5% of gross profit and the largest loss is smaller than the largest win here,
     // so the first applicable rule is the current drawdown
     expect(await screen.findByTestId('summary-weakness')).toHaveTextContent(
-      'Biggest weakness: Currently Rs 120.00 below the best net equity so far.'
+      'Needs attention: Currently Rs 120.00 below the best net equity so far.'
     )
   })
 
@@ -179,23 +188,25 @@ describe('four groups and the metric inventory', () => {
   it('shows the four groups, in two columns from md and one column below', async () => {
     summaryFn.mockResolvedValue(full(10, 2))
     renderIt()
-    const groups = await screen.findByTestId('discretionary-groups')
+    // Performance sits with the summary; risk and management are in Advanced analysis
+    const perf = await screen.findByTestId('discretionary-groups-performance')
+    expect(within(perf).getByTestId('group-performance')).toBeInTheDocument()
+    await openAdvanced()
+    const groups = await screen.findByTestId('discretionary-groups-analysis')
     expect(groups.className).toContain('grid-cols-1')
     expect(groups.className).toContain('md:grid-cols-2')
-    for (const id of [
-      'group-performance',
-      'risk-strip',
-      'group-trade-management',
-      'group-trade-quality',
-    ]) {
+    for (const id of ['risk-strip', 'group-trade-management']) {
       expect(within(groups).getByTestId(id)).toBeInTheDocument()
     }
+    // MAE / MFE and profit capture are in the MAE / MFE card only
+    expect(screen.queryByTestId('group-trade-quality')).not.toBeInTheDocument()
   })
 
   it('still shows every metric label the page showed before the regrouping', async () => {
     summaryFn.mockResolvedValue(full(40, 4))
     renderIt()
-    await screen.findByTestId('discretionary-groups')
+    await screen.findByTestId('discretionary-groups-performance')
+    await openAdvanced()
     const previous = [
       // the twelve former metric cards
       'Net realized (after est. charges)',
@@ -209,22 +220,22 @@ describe('four groups and the metric inventory', () => {
       'Avg win (net)',
       'Avg loss (net)',
       'Expectancy (net)',
-      // risk and consistency
-      'Largest win',
-      'Largest loss',
+      // risk and consistency (largest win / loss and the maximum drawdown are in the summary only)
+      'Largest winner',
+      'Largest loser',
       'Avg daily P&L (gross)',
       'Profitable / losing days',
       'Max consecutive winning trades',
       'Max consecutive losing trades',
       'Current streak',
       'Avg holding time',
-      'Max drawdown',
+      'Max drawdown (net)',
       'Current drawdown',
       // trade management and costs
       'Winners: average hold',
       'Losers: average hold',
       'Median net P&L',
-      'Charges',
+      'Charges (est.)',
       'Charges as % of gross profit',
       // tables and cards
       'Points by instrument',
@@ -250,6 +261,7 @@ describe('four groups and the metric inventory', () => {
   it('shows each hold figure once: the old Breakdowns duplicate is gone when trade management is sent', async () => {
     summaryFn.mockResolvedValue(full(40, 4))
     renderIt()
+    await openAdvanced()
     await screen.findByTestId('group-trade-management')
     expect(screen.queryByTestId('hold-durations')).not.toBeInTheDocument()
     expect(screen.getByTestId('tm-winner-hold')).toBeInTheDocument()
@@ -258,6 +270,7 @@ describe('four groups and the metric inventory', () => {
 
   it('falls back to the hold cards when an older server sends no trade-management block', async () => {
     renderIt()
+    await openAdvanced()
     const hold = await screen.findByTestId('hold-durations')
     expect(within(hold).getByText('Winners')).toBeInTheDocument()
     expect(within(hold).getByText('30m')).toBeInTheDocument()
@@ -271,6 +284,7 @@ describe('sections follow the data', () => {
     expect(await screen.findByTestId('profile-note')).toHaveTextContent(
       'Month, weekday and period tables are hidden because this view covers one trading day'
     )
+    await openAdvanced()
     expect(screen.queryByTestId('calendar-card')).not.toBeInTheDocument()
     expect(screen.queryByTestId('period-card')).not.toBeInTheDocument()
     expect(screen.queryByTestId('daily-pnl-chart')).not.toBeInTheDocument()
@@ -283,6 +297,7 @@ describe('sections follow the data', () => {
   it('shows weekday and the daily tab only for 2 to 7 dates, with the note', async () => {
     summaryFn.mockResolvedValue(full(5, 2))
     renderIt({ period: '7d' })
+    await openAdvanced()
     await screen.findByTestId('calendar-card')
     expect(screen.queryByTestId('monthly-chart')).not.toBeInTheDocument()
     expect(screen.getByTestId('weekday-chart')).toBeInTheDocument()
@@ -296,6 +311,7 @@ describe('sections follow the data', () => {
   it('shows everything, open, for a long range, with the end-of-day curve explained', async () => {
     summaryFn.mockResolvedValue(full(40, 4))
     renderIt({ period: 'all' })
+    await openAdvanced()
     await screen.findByTestId('calendar-card')
     expect(screen.getByTestId('monthly-chart')).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Monthly' })).toBeInTheDocument()
@@ -333,18 +349,24 @@ describe('sections follow the data', () => {
     expect(screen.getByTestId('ledger-card')).toHaveAttribute('id', 'discretionary-ledger')
   })
 
-  it('orders the page: summary, curve, groups, how you trade, trade quality, ledger, open positions', async () => {
-    summaryFn.mockResolvedValue(full(12, 2))
+  it('orders the page: summary, session progression, closed trades, insights, advanced analysis, data quality', async () => {
+    summaryFn.mockResolvedValue({ ...full(12, 2), data_quality: dataQuality() })
     renderIt()
-    await screen.findByTestId('discretionary-groups')
+    await screen.findByTestId('discretionary-groups-performance')
+    await openAdvanced()
     const ids = [
       'discretionary-summary',
+      'discretionary-groups-performance',
       'equity-card',
-      'discretionary-groups',
+      'ledger-card',
+      'open-positions-card',
+      'trading-insights',
+      'advanced-analysis',
+      'discretionary-groups-analysis',
       'how-you-trade',
       'points-card',
       'excursion-card',
-      'ledger-card',
+      'data-quality',
     ]
     const els = ids.map((id) => screen.getByTestId(id))
     for (let i = 1; i < els.length; i++) {
@@ -475,7 +497,7 @@ describe('MAE / MFE presentation', () => {
     const { unmount } = panel()
     const block = screen.getByTestId('profit-capture-block')
     expect(block).toHaveTextContent('Winners captured')
-    expect(block).toHaveTextContent('of the favourable move (median')
+    expect(block).toHaveTextContent('of the favourable move (minute bars, lower bound) (median')
     expect(block.getAttribute('title')).toContain('gross points a winner made / its MFE points')
     // the aggregate table and its caveat are as before
     expect(screen.getByTestId('profit-capture-row')).toBeInTheDocument()
@@ -487,7 +509,9 @@ describe('MAE / MFE presentation', () => {
     none.aggregates.winners.profit_capture = { count: 0, average: null, median: null }
     panel(none)
     const empty = screen.getByTestId('profit-capture-block')
-    expect(empty).toHaveTextContent('Winners captured — of the favourable move')
+    expect(empty).toHaveTextContent(
+      'Winners captured — of the favourable move (minute bars, lower bound)'
+    )
     expect(empty).toHaveTextContent('no winning position has both gross points')
     expect(empty).not.toHaveTextContent('0.0%')
   })

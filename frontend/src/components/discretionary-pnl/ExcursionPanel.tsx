@@ -91,7 +91,8 @@ export function ExcursionPanel({
       fmt: pts,
     },
     {
-      label: 'MFE (best move for you)',
+      label:
+        'MFE: largest favourable price move while open (market measurement, not realisable P&L)',
       unit: 'points per unit',
       w: w.mfe_points,
       l: l.mfe_points,
@@ -172,7 +173,7 @@ export function ExcursionPanel({
           <span>
             Winners captured{' '}
             <span className="font-mono font-semibold">{fmtPct(capture.average * 100)}</span> of the
-            favourable move (median{' '}
+            favourable move (minute bars, lower bound) (median{' '}
             <span className="font-mono">
               {capture.median != null ? fmtPct(capture.median * 100) : '—'}
             </span>
@@ -181,7 +182,7 @@ export function ExcursionPanel({
         ) : (
           <span>
             Winners captured <span className="font-mono font-semibold">—</span> of the favourable
-            move:{' '}
+            move (minute bars, lower bound):{' '}
             <span className="text-muted-foreground">
               no winning position has both gross points and a favourable move to compare.
             </span>

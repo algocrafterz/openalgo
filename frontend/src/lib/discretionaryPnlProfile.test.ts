@@ -578,7 +578,7 @@ describe('verdictLine and weaknessLine', () => {
     const loss = verdictLine(s({ realized_net_of_charges: -80 }), money)
     expect(loss.tone).toBe('loss')
     expect(loss.text).toContain('Not profitable on net: Rs 80.00 lost')
-    expect(loss.text).toContain('2 closed positions')
+    expect(loss.text).toContain('2 completed trades')
     expect(loss.text).toContain('Win rate 50.0%')
     expect(verdictLine(s({ realized_net_of_charges: 0.001 }), money).tone).toBe('flat')
   })

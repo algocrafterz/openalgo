@@ -68,6 +68,7 @@ describe('TodayPerformance', () => {
       />
     )
     expect(cardValue('Realised (gross)')).toBe('Rs 650.00')
+    expect(screen.getByText('2 exit fills (incl. partial exits)')).toBeInTheDocument()
     expect(cardValue('Net after est. charges')).toBe('Rs 630.00')
     expect(screen.getByText('after Rs 20.00 charges')).toBeInTheDocument()
     expect(cardValue('Unrealised')).toBe('Rs -250.00')
@@ -114,6 +115,10 @@ describe('TodayPerformance', () => {
       />
     )
     expect(screen.getByTestId('today-charges-incomplete')).toHaveTextContent('incomplete')
+    expect(screen.getByTestId('today-charges-incomplete')).toHaveAttribute(
+      'title',
+      '1 exit fills have no charge estimate: counted as 0'
+    )
     const cells = within(screen.getByTestId('today-closed-row')).getAllByRole('cell')
     expect(cells[8]).toHaveTextContent('unavailable')
     expect(cells[9]).toHaveTextContent('—')
@@ -185,7 +190,7 @@ describe('TodayPerformance', () => {
       />
     )
     const cells = within(screen.getByTestId('today-closed-row')).getAllByRole('cell')
-    expect(cells[2]).toHaveTextContent('45(2 exits)')
+    expect(cells[2]).toHaveTextContent('45(2 exit fills)')
     expect(cells[5]).toHaveTextContent('2026-11-16 10:00')
     expect(screen.getByText(/exits made on earlier days are in those days/)).toBeInTheDocument()
   })

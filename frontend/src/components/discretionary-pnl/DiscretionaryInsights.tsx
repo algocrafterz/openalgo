@@ -25,6 +25,7 @@ import {
   bucketLabel,
   DAILY_CHART_CAPTION,
   dailyBars,
+  dataQualityAllClear,
   dataQualityPrices,
   dataQualityStates,
   fmtNetMoney,
@@ -184,7 +185,7 @@ export function Unavailable({ reason }: { reason: string | null | undefined }) {
   )
 }
 
-function TradeButton({
+export function TradeButton({
   trade,
   formatCurrency,
   onSelect,
@@ -220,14 +221,13 @@ function TradeButton({
 }
 
 /**
- * One compact row of risk and consistency figures. Largest win / loss open the fills
- * drill-down; figures that need more data say why instead of showing a number.
+ * One compact row of risk and consistency figures; figures that need more data say why instead
+ * of showing a number. Largest win / loss and the maximum drawdown are in the summary only.
  */
 export function RiskStrip({
   consistency: c,
   risk,
   formatCurrency,
-  onSelectTrade,
   compact = false,
 }: {
   /** Half-width card: fewer tile columns. */
@@ -236,7 +236,6 @@ export function RiskStrip({
   /** Net realised drawdown and streaks; when given they replace the gross drawdown and streak tiles. */
   risk?: RiskBlock | null
   formatCurrency: Money
-  onSelectTrade: (trade: TradeRef) => void
 }) {
   return (
     <Card data-testid="risk-strip" className={compact ? 'gap-3 py-4' : undefined}>
@@ -259,28 +258,6 @@ export function RiskStrip({
               : 'grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-9'
           }
         >
-          <StripTile label="Largest win" testId="risk-largest-win">
-            {c.largest_win ? (
-              <TradeButton
-                trade={c.largest_win}
-                formatCurrency={formatCurrency}
-                onSelect={onSelectTrade}
-              />
-            ) : (
-              <Unavailable reason="no winning trade" />
-            )}
-          </StripTile>
-          <StripTile label="Largest loss" testId="risk-largest-loss">
-            {c.largest_loss ? (
-              <TradeButton
-                trade={c.largest_loss}
-                formatCurrency={formatCurrency}
-                onSelect={onSelectTrade}
-              />
-            ) : (
-              <Unavailable reason="no losing trade" />
-            )}
-          </StripTile>
           <StripTile
             label="Avg daily P&L (gross)"
             testId="risk-avg-daily"
@@ -353,50 +330,18 @@ export function RiskStrip({
               fmtDuration(c.avg_hold_minutes)
             )}
           </StripTile>
-          {risk ? (
-            <>
-              <StripTile
-                label="Max drawdown"
-                testId="risk-drawdown"
-                hint={
-                  risk.max_drawdown_at ? `at ${fmtStamp(risk.max_drawdown_at)}` : NET_DRAWDOWN_BASIS
-                }
-              >
-                <span
-                  className={risk.max_drawdown > 0 ? 'text-red-600 dark:text-red-400' : undefined}
-                >
-                  {risk.max_drawdown > 0 ? '-' : ''}
-                  {formatCurrency(Math.abs(risk.max_drawdown))}
-                </span>
-              </StripTile>
-              <StripTile
-                label="Current drawdown"
-                testId="risk-current-drawdown"
-                hint="below the best net equity so far"
-              >
-                <span
-                  className={
-                    risk.current_drawdown > 0 ? 'text-red-600 dark:text-red-400' : undefined
-                  }
-                >
-                  {risk.current_drawdown > 0 ? '-' : ''}
-                  {formatCurrency(Math.abs(risk.current_drawdown))}
-                </span>
-              </StripTile>
-            </>
-          ) : (
+          {risk && (
             <StripTile
-              label="Max drawdown"
-              testId="risk-drawdown"
-              hint="gross realized; excludes charges and unrealized"
+              label="Current drawdown"
+              testId="risk-current-drawdown"
+              hint="below the best net equity so far (max drawdown: see the summary)"
             >
-              {c.max_drawdown == null ? (
-                <Unavailable reason={c.max_drawdown_unavailable_reason} />
-              ) : (
-                <span className={c.max_drawdown < 0 ? 'text-red-600 dark:text-red-400' : undefined}>
-                  {formatCurrency(Math.abs(c.max_drawdown))}
-                </span>
-              )}
+              <span
+                className={risk.current_drawdown > 0 ? 'text-red-600 dark:text-red-400' : undefined}
+              >
+                {risk.current_drawdown > 0 ? '-' : ''}
+                {formatCurrency(Math.abs(risk.current_drawdown))}
+              </span>
             </StripTile>
           )}
         </div>
@@ -554,8 +499,16 @@ export function HowYouTradeCard({
  * Data quality of the selection: where every collected execution is (one state each), charges
  * without an estimate, price coverage and the ledger sync.
  */
-export function DataQualityStrip({ dq }: { dq: DataQuality }) {
+export function DataQualityStrip({
+  dq,
+  completedTrades,
+}: {
+  dq: DataQuality
+  /** Completed trades of the same selection; enables the one-line all-clear. */
+  completedTrades?: number
+}) {
   const states = dataQualityStates(dq)
+  const allClear = completedTrades == null ? null : dataQualityAllClear(dq, completedTrades)
   const sync = syncSummary({
     last_successful_sync: dq.sync.last_successful_sync,
     days_without_sync: dq.sync.days_without_sync,
@@ -574,42 +527,49 @@ export function DataQualityStrip({ dq }: { dq: DataQuality }) {
           </Badge>
         )}
       </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-5">
-        {states.map((s) => (
-          <div
-            key={s.key}
-            className="rounded border px-2 py-1.5"
-            data-testid={`dq-${s.key}`}
-            title={s.title}
-          >
-            <div className="text-[11px] text-muted-foreground">
-              {s.step}. {s.label}
+      {allClear ? (
+        <p className="font-mono text-sm" data-testid="dq-all-clear">
+          {allClear}
+        </p>
+      ) : (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-5">
+          {states.map((s) => (
+            <div
+              key={s.key}
+              className="rounded border px-2 py-1.5"
+              data-testid={`dq-${s.key}`}
+              title={s.title}
+            >
+              <div className="text-[11px] text-muted-foreground">
+                {s.step}. {s.label}
+              </div>
+              <div className="font-mono font-semibold">{s.count}</div>
+              {s.detail && <div className="text-[11px] text-muted-foreground">{s.detail}</div>}
             </div>
-            <div className="font-mono font-semibold">{s.count}</div>
-            {s.detail && <div className="text-[11px] text-muted-foreground">{s.detail}</div>}
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
       <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <li data-testid="dq-charges">
           {dq.charges_incomplete_trades > 0 || dq.charges_incomplete_legs > 0 ? (
             <span className="text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500">
-              Charges: {dq.charges_incomplete_trades} trade(s) / {dq.charges_incomplete_legs}{' '}
-              exit(s) without an estimate
+              Charges: {dq.charges_incomplete_trades} trade(s) / {dq.charges_incomplete_legs} exit
+              fills without an estimate
             </span>
           ) : (
             'Charges: every trade has an estimate'
           )}
         </li>
         <li data-testid="dq-prices">{dataQualityPrices(dq)}</li>
-        <li
-          data-testid="dq-sync"
-          className={cn(
-            sync.problem && 'text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500'
-          )}
-        >
-          {sync.text}
-        </li>
+        {sync.problem && (
+          // a healthy sync is not repeated here; a problem stays visible
+          <li
+            data-testid="dq-sync"
+            className="text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
+          >
+            {sync.text}
+          </li>
+        )}
         {dq.earliest_attributable_at && dq.awaiting_grace > 0 && (
           <li>Earliest attribution {fmtStamp(dq.earliest_attributable_at)} IST</li>
         )}

@@ -1,3 +1,5 @@
+import { ChevronDown, ChevronRight } from 'lucide-react'
+import { Fragment, useMemo, useState } from 'react'
 import type {
   BreakdownRow,
   DiscretionaryPosition,
@@ -6,6 +8,7 @@ import type {
   PeriodRow,
 } from '@/api/discretionaryPnl'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import {
   Table,
   TableBody,
@@ -221,6 +224,10 @@ function CategoryBadge({ trade }: { trade: DiscretionaryTrade }) {
   )
 }
 
+/** What the MFE amount is: a market measurement, never realisable profit. */
+export const MFE_TOOLTIP =
+  'price move x quantity open at that moment; a market measurement, not achievable profit'
+
 /** MAE or MFE of a closed row: points per unit, a dash (with the reason) when not available. */
 function ExcursionCell({
   position,
@@ -247,17 +254,61 @@ function ExcursionCell({
     )
   }
   const amount = position?.[`${field}_amount`]
+  const title =
+    field === 'mfe'
+      ? `${amount != null ? `${formatCurrency(amount)}: ` : ''}${MFE_TOOLTIP}`
+      : amount != null
+        ? `${formatCurrency(amount)} on the full size`
+        : undefined
   return (
-    <span title={amount != null ? `${formatCurrency(amount)} on the full size` : undefined}>
+    <span title={title} data-testid={`${field}-value`}>
       {fmtDistance(points)}
     </span>
   )
 }
 
+/** Entry and exit time in one cell; the exit shows its date only when it is another day. */
+function timeSpan(opened: string, closed: string): string {
+  const o = fmtStamp(opened)
+  const c = fmtStamp(closed)
+  return o.slice(0, 10) === c.slice(0, 10) ? `${o} → ${c.slice(11)}` : `${o} → ${c}`
+}
+
+/** Trade numbers by opening time within the rows shown (1 = opened first); frontend only. */
+export function tradeNumbers(trades: DiscretionaryTrade[]): Map<number, number> {
+  const order = [...trades].sort((a, b) =>
+    a.opened_at < b.opened_at ? -1 : a.opened_at > b.opened_at ? 1 : a.id - b.id
+  )
+  return new Map(order.map((t, i) => [t.id, i + 1]))
+}
+
+const DETAIL_COLSPAN = 11
+
+function DetailItem({
+  label,
+  title,
+  children,
+}: {
+  label: string
+  title?: string
+  children: React.ReactNode
+}) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs text-muted-foreground" title={title}>
+        {label}
+      </dt>
+      <dd className="font-mono text-sm tabular-nums">{children}</dd>
+    </div>
+  )
+}
+
 /**
- * Completed trades (a position from flat to flat), newest first. A row opens the fills of all
- * its legs; a trade closed in parts shows a legs badge. MAE / MFE come from the lazy excursions
- * call, joined by position id; the table scrolls sideways inside its card.
+ * Completed trades (a position from flat to flat), newest first, in eleven columns. The
+ * disclosure button of the first cell opens a detail row with the secondary figures (points,
+ * MAE / MFE, category, product, broker, account, reliability notes) and the button that opens
+ * the fill lifecycle. MAE / MFE come from the lazy excursions call, joined by position id; the
+ * table scrolls sideways inside its card.
  */
 export function ClosedTradesTable({
   trades,
@@ -272,157 +323,206 @@ export function ClosedTradesTable({
   excursions?: Map<number, ExcursionPosition>
   excursionsLoaded?: boolean
 }) {
+  const [expanded, setExpanded] = useState<Set<number>>(() => new Set())
+  const numbers = useMemo(() => tradeNumbers(trades), [trades])
+  const toggle = (id: number) =>
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   return (
     <Table>
       <TableHeader>
         <TableRow>
+          <TableHead>Trade #</TableHead>
           <TableHead>Symbol</TableHead>
-          <TableHead>Category</TableHead>
           <TableHead>Direction</TableHead>
-          <TableHead>Entry time</TableHead>
-          <TableHead>Exit time</TableHead>
+          <TableHead>Entry → exit</TableHead>
+          <TableHead className="text-right">Held</TableHead>
+          <TableHead className="text-right">Bought / Sold</TableHead>
           <TableHead className="text-right">Avg entry</TableHead>
           <TableHead className="text-right">Avg exit</TableHead>
-          <TableHead className="text-right">Qty</TableHead>
-          <TableHead className="text-right">Points / unit</TableHead>
           <TableHead className="text-right">Gross P&amp;L</TableHead>
-          <TableHead className="text-right">Charges</TableHead>
+          <TableHead className="text-right">Charges (est.)</TableHead>
           <TableHead className="text-right">Net P&amp;L</TableHead>
-          <TableHead className="text-right">MAE</TableHead>
-          <TableHead className="text-right">MFE</TableHead>
-          <TableHead className="text-right">Held</TableHead>
-          <TableHead>Product</TableHead>
-          <TableHead>Broker</TableHead>
-          <TableHead>Account</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {trades.map((t) => {
           const badge = chargesBadge(t)
           const ex = excursions?.get(t.id)
+          const isOpen = expanded.has(t.id)
+          const n = numbers.get(t.id)
+          const detailId = `closed-trade-detail-${t.id}`
           return (
-            <TableRow
-              key={t.id}
-              className="cursor-pointer"
-              role="button"
-              tabIndex={0}
-              aria-label={`Show fills of ${t.symbol} closed ${t.closed_at}`}
-              onClick={() => onSelect(t.id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  onSelect(t.id)
-                }
-              }}
-            >
-              <TableCell className="whitespace-nowrap font-medium">
-                {t.symbol}
-                <span className="ml-1 text-xs font-normal text-muted-foreground">{t.exchange}</span>
-                {t.overnight && (
-                  <span className="ml-1 text-xs text-muted-foreground" title="Held overnight">
-                    overnight
+            <Fragment key={t.id}>
+              <TableRow data-testid="closed-trade-row">
+                <TableCell className="whitespace-nowrap font-mono tabular-nums">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded px-1 py-0.5 hover:bg-muted focus-visible:outline focus-visible:outline-2"
+                    aria-expanded={isOpen}
+                    aria-controls={detailId}
+                    aria-label={`${isOpen ? 'Hide' : 'Show'} details of trade ${n}, ${t.symbol} ${t.direction === 'LONG' ? 'long' : 'short'}`}
+                    onClick={() => toggle(t.id)}
+                    data-testid="trade-expander"
+                  >
+                    {isOpen ? (
+                      <ChevronDown className="size-4" aria-hidden="true" />
+                    ) : (
+                      <ChevronRight className="size-4" aria-hidden="true" />
+                    )}
+                    {n}
+                  </button>
+                </TableCell>
+                <TableCell className="whitespace-nowrap font-medium">
+                  {t.symbol}
+                  <span className="ml-1 text-xs font-normal text-muted-foreground">
+                    {t.exchange}
                   </span>
-                )}
-                {t.opening_unknown && (
-                  <Badge
-                    variant="outline"
-                    className="ml-1 border-amber-500/50 text-[10px] text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
-                    title="The fill that opened this position is not in the ledger, so the entry price may be off."
-                  >
-                    opening unknown
-                  </Badge>
-                )}
-                {t.has_orphan_fills && (
-                  <Badge
-                    variant="outline"
-                    className="ml-1 border-amber-500/50 text-[10px] text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
-                    title={`${t.orphan_fills ?? 'Some'} fill(s) of this position could not be placed and are not in its figures.`}
-                  >
-                    unplaced fills
-                  </Badge>
-                )}
-              </TableCell>
-              <TableCell>
-                <CategoryBadge trade={t} />
-              </TableCell>
-              <TableCell>
-                <DirectionBadge direction={t.direction} />
-              </TableCell>
-              <TableCell className="whitespace-nowrap font-mono" title={t.opened_at}>
-                {fmtStamp(t.opened_at)}
-              </TableCell>
-              <TableCell className="whitespace-nowrap font-mono" title={t.closed_at}>
-                {fmtStamp(t.closed_at)}
-              </TableCell>
-              <TableCell className="text-right font-mono">{fmtPrice(t.entry_price)}</TableCell>
-              <TableCell className="text-right font-mono">{fmtPrice(t.exit_price)}</TableCell>
-              <TableCell className="whitespace-nowrap text-right font-mono">
-                {fmtQty(t.closed_quantity)}
-                {t.legs > 1 && (
-                  <Badge
-                    variant="outline"
-                    className="ml-1 text-[10px] text-muted-foreground"
-                    title={`Closed in ${t.legs} parts (partial exits)`}
-                  >
-                    {t.legs} legs
-                  </Badge>
-                )}
-              </TableCell>
-              <TableCell
-                className={cn('text-right font-mono', pnlTextClass(t.points_per_unit ?? 0))}
-                title="Exit minus entry for a long, entry minus exit for a short, per unit"
-              >
-                {fmtPoints(t.points_per_unit)}
-              </TableCell>
-              <TableCell className={cn('text-right font-mono', pnlTextClass(t.realized_pnl))}>
-                {formatCurrency(t.realized_pnl)}
-              </TableCell>
-              <TableCell className="text-right">
-                <div className="flex flex-col items-end gap-0.5">
-                  {t.charges != null && (
-                    <span className="font-mono text-muted-foreground">
-                      {formatCurrency(t.charges)}
+                  {t.overnight && (
+                    <span className="ml-1 text-xs text-muted-foreground" title="Held overnight">
+                      overnight
                     </span>
                   )}
-                  <Badge
-                    variant="outline"
-                    className={
-                      badge.tone === 'warn'
-                        ? 'border-amber-500/50 text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500'
-                        : 'text-muted-foreground'
-                    }
-                    title={badge.title}
-                  >
-                    {badge.label}
-                  </Badge>
-                </div>
-              </TableCell>
-              <TableCell className={cn('text-right font-mono', pnlTextClass(t.net_pnl ?? 0))}>
-                {t.net_pnl == null ? '—' : formatCurrency(t.net_pnl)}
-              </TableCell>
-              <TableCell className="text-right font-mono">
-                <ExcursionCell
-                  position={ex}
-                  field="mae"
-                  loaded={excursionsLoaded}
-                  formatCurrency={formatCurrency}
-                />
-              </TableCell>
-              <TableCell className="text-right font-mono">
-                <ExcursionCell
-                  position={ex}
-                  field="mfe"
-                  loaded={excursionsLoaded}
-                  formatCurrency={formatCurrency}
-                />
-              </TableCell>
-              <TableCell className="whitespace-nowrap text-right font-mono">
-                {fmtDuration(t.hold_minutes)}
-              </TableCell>
-              <TableCell>{t.product}</TableCell>
-              <TableCell>{t.broker}</TableCell>
-              <TableCell>{t.account || '—'}</TableCell>
-            </TableRow>
+                  {t.opening_unknown && (
+                    <Badge
+                      variant="outline"
+                      className="ml-1 border-amber-500/50 text-[10px] text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
+                      title="The fill that opened this position is not in the ledger, so the entry price may be off."
+                    >
+                      opening unknown
+                    </Badge>
+                  )}
+                  {t.has_orphan_fills && (
+                    <Badge
+                      variant="outline"
+                      className="ml-1 border-amber-500/50 text-[10px] text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
+                      title={`${t.orphan_fills ?? 'Some'} fill(s) of this position could not be placed and are not in its figures.`}
+                    >
+                      unplaced fills
+                    </Badge>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <DirectionBadge direction={t.direction} />
+                </TableCell>
+                <TableCell
+                  className="whitespace-nowrap font-mono tabular-nums"
+                  title={`${t.opened_at} to ${t.closed_at}`}
+                >
+                  {timeSpan(t.opened_at, t.closed_at)}
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-right font-mono tabular-nums">
+                  {fmtDuration(t.hold_minutes)}
+                </TableCell>
+                <TableCell
+                  className="whitespace-nowrap text-right font-mono tabular-nums"
+                  title={`Bought ${fmtQty(t.closed_quantity)}, sold ${fmtQty(t.closed_quantity)}`}
+                  data-testid="bought-sold"
+                >
+                  {fmtQty(t.closed_quantity)} / {fmtQty(t.closed_quantity)}
+                </TableCell>
+                <TableCell className="text-right font-mono tabular-nums">
+                  {fmtPrice(t.entry_price)}
+                </TableCell>
+                <TableCell className="text-right font-mono tabular-nums">
+                  {fmtPrice(t.exit_price)}
+                </TableCell>
+                <TableCell
+                  className={cn('text-right font-mono tabular-nums', pnlTextClass(t.realized_pnl))}
+                >
+                  {formatCurrency(t.realized_pnl)}
+                </TableCell>
+                <TableCell className="text-right">
+                  <div className="flex flex-col items-end gap-0.5">
+                    {t.charges != null && (
+                      <span className="font-mono tabular-nums text-muted-foreground">
+                        {formatCurrency(t.charges)}
+                      </span>
+                    )}
+                    {badge.tone === 'warn' && (
+                      <Badge
+                        variant="outline"
+                        className="border-amber-500/50 text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
+                        title={badge.title}
+                      >
+                        {badge.label}
+                      </Badge>
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell
+                  className={cn('text-right font-mono tabular-nums', pnlTextClass(t.net_pnl ?? 0))}
+                >
+                  {t.net_pnl == null ? '—' : formatCurrency(t.net_pnl)}
+                </TableCell>
+              </TableRow>
+              {isOpen && (
+                <TableRow id={detailId} data-testid="closed-trade-detail" className="bg-muted/30">
+                  <TableCell colSpan={DETAIL_COLSPAN}>
+                    <dl className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4 lg:grid-cols-6">
+                      <DetailItem
+                        label="Points / unit"
+                        title="Exit minus entry for a long, entry minus exit for a short, per unit"
+                      >
+                        <span className={pnlTextClass(t.points_per_unit ?? 0)}>
+                          {fmtPoints(t.points_per_unit)}
+                        </span>
+                      </DetailItem>
+                      <DetailItem label="MAE" title="Largest adverse price move while open">
+                        <ExcursionCell
+                          position={ex}
+                          field="mae"
+                          loaded={excursionsLoaded}
+                          formatCurrency={formatCurrency}
+                        />
+                      </DetailItem>
+                      <DetailItem label="MFE" title={MFE_TOOLTIP}>
+                        <ExcursionCell
+                          position={ex}
+                          field="mfe"
+                          loaded={excursionsLoaded}
+                          formatCurrency={formatCurrency}
+                        />
+                      </DetailItem>
+                      <DetailItem label="Category">
+                        <CategoryBadge trade={t} />
+                      </DetailItem>
+                      <DetailItem label="Product">{t.product}</DetailItem>
+                      <DetailItem label="Broker">{t.broker}</DetailItem>
+                      <DetailItem label="Account">{t.account || '—'}</DetailItem>
+                      <DetailItem label="Charges" title={badge.title}>
+                        {t.charges != null ? formatCurrency(t.charges) : '—'}{' '}
+                        <span className="font-sans text-xs text-muted-foreground">
+                          {badge.label}
+                        </span>
+                      </DetailItem>
+                    </dl>
+                    {(t.opening_unknown || t.has_orphan_fills) && (
+                      <p className="mt-2 text-xs text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500">
+                        {t.opening_unknown &&
+                          'The fill that opened this position is not in the ledger, so the entry price may be off. '}
+                        {t.has_orphan_fills &&
+                          `${t.orphan_fills ?? 'Some'} fill(s) of this position could not be placed and are not in its figures.`}
+                      </p>
+                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="mt-2"
+                      onClick={() => onSelect(t.id)}
+                      aria-label={`Show fills and lifecycle of trade ${n}, ${t.symbol} closed ${t.closed_at}`}
+                    >
+                      Show fills and lifecycle
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              )}
+            </Fragment>
           )
         })}
       </TableBody>

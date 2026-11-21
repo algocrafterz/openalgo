@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Download, Gauge, Loader2 } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, Download, Gauge, Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   type DiscretionaryCategory,
@@ -11,6 +11,7 @@ import type { PerformancePeriod } from '@/api/strategyPnl'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import {
@@ -55,7 +56,7 @@ import { NetBarChart } from './DiscretionaryCharts'
 import { DiscretionaryEquityChart } from './DiscretionaryEquityChart'
 import { DiscretionaryGroups } from './DiscretionaryGroups'
 import { DailyPnlChart, DataQualityStrip, HowYouTradeCard } from './DiscretionaryInsights'
-import { DiscretionaryHeader, TodayLine } from './DiscretionarySummary'
+import { DiscretionaryHeader, TodayLine, TradingInsights } from './DiscretionarySummary'
 import {
   BreakdownTable,
   ClosedTradesTable,
@@ -149,6 +150,7 @@ export function DiscretionaryPerformance({
   const [quotes, setQuotes] = useState(false)
   const [category, setCategory] = useState<DiscretionaryCategory>('all')
   const [unresolvedOpen, setUnresolvedOpen] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [selectedTrade, setSelectedTrade] = useState<SelectedTrade | null>(null)
   const [knownBrokers, setKnownBrokers] = useState<string[]>([])
   const [knownAccounts, setKnownAccounts] = useState<string[]>([])
@@ -367,7 +369,7 @@ export function DiscretionaryPerformance({
     })
     const equityBasis =
       curveMode === 'position'
-        ? `Net realised P&L after estimated charges, per closed position by close time; excludes unrealized P&L. Based on ${positionCurve.used} completed trade(s)${
+        ? `Net realised P&L after estimated charges, per completed trade by close time; excludes unrealized P&L. Based on ${positionCurve.used} completed trade(s)${
             positionCurve.skipped > 0
               ? `; ${positionCurve.skipped} without a net P&L (no charge estimate) are left out`
               : ''
@@ -421,6 +423,7 @@ export function DiscretionaryPerformance({
           summary={summary}
           formatCurrency={formatCurrency}
           chargesHint={chargesHint}
+          onSelectTrade={(t) => openTrade(t.id, t.build_id)}
         >
           {todayNode}
         </DiscretionaryHeader>
@@ -429,6 +432,14 @@ export function DiscretionaryPerformance({
             {profile.note}
           </p>
         )}
+
+        <DiscretionaryGroups
+          summary={summary}
+          unrealized={unrealized}
+          total={total}
+          formatCurrency={formatCurrency}
+          part="performance"
+        />
 
         {(summary.trades.length > 0 || (summary.by_period?.daily ?? []).length > 0) && (
           <Card data-testid="equity-card">
@@ -472,190 +483,6 @@ export function DiscretionaryPerformance({
           </Card>
         )}
 
-        <DiscretionaryGroups
-          summary={summary}
-          unrealized={unrealized}
-          total={total}
-          excursions={excursionsQuery.data}
-          formatCurrency={formatCurrency}
-          onSelectTrade={(t) => openTrade(t.id, t.build_id)}
-        />
-
-        <h2 className="pt-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          How you trade
-        </h2>
-        {summary.breakdowns && (
-          <HowYouTradeCard
-            breakdowns={summary.breakdowns}
-            sample={summary.sample}
-            formatCurrency={formatCurrency}
-          />
-        )}
-
-        {(profile.showMonthly || profile.showWeekday) && (summary.monthly || summary.weekday) && (
-          <Card data-testid="calendar-card">
-            <CardHeader>
-              <CardTitle>
-                {profile.showMonthly ? 'Net P&L by month and weekday' : 'Net P&L by weekday'}
-              </CardTitle>
-              <p className="text-xs text-muted-foreground">
-                Each position counts once, on the date of its final close. * means some positions
-                have no charge estimate, so charges and net are not complete.
-              </p>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                {profile.showMonthly && summary.monthly && (
-                  <div className="min-w-0 space-y-3">
-                    <NetBarChart
-                      title="Net P&L by month"
-                      bars={calendarBars(summary.monthly)}
-                      formatCurrency={formatCurrency}
-                      samples="position(s)"
-                      emptyText="No closed positions in this range."
-                      testId="monthly-chart"
-                    />
-                    <CalendarTable
-                      rows={summary.monthly}
-                      first="Month"
-                      label={(r) => r.period ?? r.key}
-                      formatCurrency={formatCurrency}
-                    />
-                  </div>
-                )}
-                {profile.showWeekday && summary.weekday && (
-                  <div className="min-w-0 space-y-3">
-                    <NetBarChart
-                      title="Net P&L by weekday (close date)"
-                      bars={calendarBars(summary.weekday)}
-                      formatCurrency={formatCurrency}
-                      samples="position(s)"
-                      emptyText="No closed positions in this range."
-                      testId="weekday-chart"
-                    />
-                    <CalendarTable
-                      rows={summary.weekday}
-                      first="Weekday"
-                      label={(r) => r.weekday ?? r.key}
-                      formatCurrency={formatCurrency}
-                    />
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {profile.showByPeriodTabs && (
-          <Card data-testid="period-card">
-            <CardHeader>
-              <CardTitle>P&amp;L by period</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Tabs defaultValue="daily">
-                <TabsList>
-                  {profile.byPeriodTabs.map((g) => (
-                    <TabsTrigger key={g} value={g}>
-                      {g === 'daily' ? 'Daily' : g === 'weekly' ? 'Weekly' : 'Monthly'}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-                {profile.byPeriodTabs.map((g) => (
-                  <TabsContent key={g} value={g}>
-                    <PeriodTable
-                      rows={summary.by_period?.[g] ?? []}
-                      formatCurrency={formatCurrency}
-                    />
-                  </TabsContent>
-                ))}
-              </Tabs>
-            </CardContent>
-          </Card>
-        )}
-
-        {profile.showBreakdownTables && (
-          <details
-            open={!profile.collapseSecondary}
-            className="rounded-lg border"
-            data-testid="more-breakdowns"
-          >
-            <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
-              More breakdowns: by symbol, long vs short, product, intraday vs overnight
-            </summary>
-            <div className="border-t p-4">
-              <div className="mb-6">
-                <NetBarChart
-                  title="Net P&L by symbol"
-                  bars={symbolBars(summary.by_symbol)}
-                  formatCurrency={formatCurrency}
-                  samples="trade(s)"
-                  emptyText="No closed trades in this range."
-                  testId="symbol-chart"
-                />
-              </div>
-              <div className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
-                <BreakdownTable
-                  title="By symbol"
-                  firstColumn="Symbol"
-                  rows={summary.by_symbol ?? []}
-                  formatCurrency={formatCurrency}
-                />
-                <BreakdownTable
-                  title="Long vs Short"
-                  firstColumn="Side"
-                  rows={summary.by_side ?? []}
-                  formatCurrency={formatCurrency}
-                />
-                <BreakdownTable
-                  title="By product"
-                  firstColumn="Product"
-                  rows={summary.by_product ?? []}
-                  formatCurrency={formatCurrency}
-                />
-                <BreakdownTable
-                  title="Intraday vs overnight"
-                  firstColumn="Holding"
-                  rows={holdingRows(summary.by_holding)}
-                  formatCurrency={formatCurrency}
-                />
-              </div>
-            </div>
-          </details>
-        )}
-
-        <h2 className="pt-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          Trade quality
-        </h2>
-        {summary.points_by_instrument && (
-          <Card data-testid="points-card" id="discretionary-points" className="scroll-mt-4">
-            <CardHeader>
-              <CardTitle>Points by instrument</CardTitle>
-              <p className="text-xs text-muted-foreground">
-                Points per unit (not per lot or rupee), one row per symbol and exchange. Points are
-                never added across instruments.
-              </p>
-            </CardHeader>
-            <CardContent>
-              <PointsByInstrumentTable rows={summary.points_by_instrument} />
-            </CardContent>
-          </Card>
-        )}
-
-        <Card data-testid="excursion-card" id="discretionary-excursion" className="scroll-mt-4">
-          <CardHeader>
-            <CardTitle>MAE / MFE</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ExcursionPanel
-              data={excursionsQuery.data}
-              loading={excursionsQuery.isLoading}
-              failed={excursionsQuery.isError}
-              onRetry={() => excursionsQuery.refetch()}
-              formatCurrency={formatCurrency}
-            />
-          </CardContent>
-        </Card>
-
         <Card id="discretionary-ledger" className="scroll-mt-4" data-testid="ledger-card">
           <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
             <CardTitle>Closed trades</CardTitle>
@@ -687,7 +514,7 @@ export function DiscretionaryPerformance({
           </CardContent>
         </Card>
 
-        <Card>
+        <Card data-testid="open-positions-card">
           <CardHeader>
             <CardTitle>Open positions</CardTitle>
           </CardHeader>
@@ -704,6 +531,217 @@ export function DiscretionaryPerformance({
             )}
           </CardContent>
         </Card>
+
+        <TradingInsights summary={summary} formatCurrency={formatCurrency} />
+
+        <Collapsible
+          open={advancedOpen}
+          onOpenChange={setAdvancedOpen}
+          className="rounded-lg border"
+          data-testid="advanced-analysis"
+        >
+          <CollapsibleTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full justify-start gap-2 px-4 py-3 text-sm font-semibold"
+              data-testid="advanced-analysis-toggle"
+            >
+              {advancedOpen ? (
+                <ChevronDown className="size-4" />
+              ) : (
+                <ChevronRight className="size-4" />
+              )}
+              Advanced analysis
+              <span className="font-normal text-muted-foreground">
+                risk and consistency, trade management and costs, how you trade, MAE / MFE,
+                breakdowns, calendar
+              </span>
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="space-y-6 border-t p-4">
+            <DiscretionaryGroups
+              summary={summary}
+              unrealized={unrealized}
+              total={total}
+              formatCurrency={formatCurrency}
+              part="analysis"
+            />
+
+            {summary.breakdowns && (
+              <HowYouTradeCard
+                breakdowns={summary.breakdowns}
+                sample={summary.sample}
+                formatCurrency={formatCurrency}
+              />
+            )}
+
+            {(profile.showMonthly || profile.showWeekday) &&
+              (summary.monthly || summary.weekday) && (
+                <Card data-testid="calendar-card">
+                  <CardHeader>
+                    <CardTitle>
+                      {profile.showMonthly ? 'Net P&L by month and weekday' : 'Net P&L by weekday'}
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground">
+                      Each position counts once, on the date of its final close. * means some
+                      positions have no charge estimate, so charges and net are not complete.
+                    </p>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                      {profile.showMonthly && summary.monthly && (
+                        <div className="min-w-0 space-y-3">
+                          <NetBarChart
+                            title="Net P&L by month"
+                            bars={calendarBars(summary.monthly)}
+                            formatCurrency={formatCurrency}
+                            samples="position(s)"
+                            emptyText="No completed trades in this range."
+                            testId="monthly-chart"
+                          />
+                          <CalendarTable
+                            rows={summary.monthly}
+                            first="Month"
+                            label={(r) => r.period ?? r.key}
+                            formatCurrency={formatCurrency}
+                          />
+                        </div>
+                      )}
+                      {profile.showWeekday && summary.weekday && (
+                        <div className="min-w-0 space-y-3">
+                          <NetBarChart
+                            title="Net P&L by weekday (close date)"
+                            bars={calendarBars(summary.weekday)}
+                            formatCurrency={formatCurrency}
+                            samples="position(s)"
+                            emptyText="No completed trades in this range."
+                            testId="weekday-chart"
+                          />
+                          <CalendarTable
+                            rows={summary.weekday}
+                            first="Weekday"
+                            label={(r) => r.weekday ?? r.key}
+                            formatCurrency={formatCurrency}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+            {profile.showByPeriodTabs && (
+              <Card data-testid="period-card">
+                <CardHeader>
+                  <CardTitle>P&amp;L by period</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <Tabs defaultValue="daily">
+                    <TabsList>
+                      {profile.byPeriodTabs.map((g) => (
+                        <TabsTrigger key={g} value={g}>
+                          {g === 'daily' ? 'Daily' : g === 'weekly' ? 'Weekly' : 'Monthly'}
+                        </TabsTrigger>
+                      ))}
+                    </TabsList>
+                    {profile.byPeriodTabs.map((g) => (
+                      <TabsContent key={g} value={g}>
+                        <PeriodTable
+                          rows={summary.by_period?.[g] ?? []}
+                          formatCurrency={formatCurrency}
+                        />
+                      </TabsContent>
+                    ))}
+                  </Tabs>
+                </CardContent>
+              </Card>
+            )}
+
+            {profile.showBreakdownTables && (
+              <details
+                open={!profile.collapseSecondary}
+                className="rounded-lg border"
+                data-testid="more-breakdowns"
+              >
+                <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+                  More breakdowns: by symbol, long vs short, product, intraday vs overnight
+                </summary>
+                <div className="border-t p-4">
+                  <div className="mb-6">
+                    <NetBarChart
+                      title="Net P&L by symbol"
+                      bars={symbolBars(summary.by_symbol)}
+                      formatCurrency={formatCurrency}
+                      samples="trade(s)"
+                      emptyText="No closed trades in this range."
+                      testId="symbol-chart"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
+                    <BreakdownTable
+                      title="By symbol"
+                      firstColumn="Symbol"
+                      rows={summary.by_symbol ?? []}
+                      formatCurrency={formatCurrency}
+                    />
+                    <BreakdownTable
+                      title="Long vs Short"
+                      firstColumn="Side"
+                      rows={summary.by_side ?? []}
+                      formatCurrency={formatCurrency}
+                    />
+                    <BreakdownTable
+                      title="By product"
+                      firstColumn="Product"
+                      rows={summary.by_product ?? []}
+                      formatCurrency={formatCurrency}
+                    />
+                    <BreakdownTable
+                      title="Intraday vs overnight"
+                      firstColumn="Holding"
+                      rows={holdingRows(summary.by_holding)}
+                      formatCurrency={formatCurrency}
+                    />
+                  </div>
+                </div>
+              </details>
+            )}
+
+            <h3 className="pt-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              Trade quality
+            </h3>
+            {summary.points_by_instrument && (
+              <Card data-testid="points-card" id="discretionary-points" className="scroll-mt-4">
+                <CardHeader>
+                  <CardTitle>Points by instrument</CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    Points per unit (not per lot or rupee), one row per symbol and exchange. Points
+                    are never added across instruments.
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  <PointsByInstrumentTable rows={summary.points_by_instrument} />
+                </CardContent>
+              </Card>
+            )}
+
+            <Card data-testid="excursion-card" id="discretionary-excursion" className="scroll-mt-4">
+              <CardHeader>
+                <CardTitle>MAE / MFE</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ExcursionPanel
+                  data={excursionsQuery.data}
+                  loading={excursionsQuery.isLoading}
+                  failed={excursionsQuery.isError}
+                  onRetry={() => excursionsQuery.refetch()}
+                  formatCurrency={formatCurrency}
+                />
+              </CardContent>
+            </Card>
+          </CollapsibleContent>
+        </Collapsible>
       </>
     )
   }
@@ -810,11 +848,13 @@ export function DiscretionaryPerformance({
         </p>
       )}
 
-      {summary?.data_quality && <DataQualityStrip dq={summary.data_quality} />}
-
       {!populated && todayNode}
 
       {body}
+
+      {summary?.data_quality && (
+        <DataQualityStrip dq={summary.data_quality} completedTrades={summary.trades_total} />
+      )}
 
       <UnresolvedDialog
         open={unresolvedOpen}

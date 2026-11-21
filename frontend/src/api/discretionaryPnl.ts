@@ -340,7 +340,7 @@ export interface DiscretionaryTrade {
   charges: number | null
   charges_status: ChargesStatus
   net_pnl: number | null
-  /** Number of closing legs (partial exits) in this trade. */
+  /** Number of closing fills (partial exits included) in this trade. */
   legs: number
   position_seq?: number
   category?: 'intraday' | 'swing' | 'unclassified'

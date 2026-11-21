@@ -731,7 +731,11 @@ export const IN_COMPLETED_TITLE =
 export const ATTRIBUTED_OPEN_TITLE =
   'Fills of positions still open. Partial exits among them contribute realised P&L, which is already in your totals.'
 
-/** The four execution states (plus "not placed" when any) of the data-quality strip. */
+/**
+ * The execution states of the data-quality strip. Collected and In completed trades always show;
+ * Awaiting attribution, Attributed (position still open) and Not placed only when their count is
+ * not zero, so an unresolved fill is never hidden.
+ */
 export function dataQualityStates(dq: DataQuality): DataQualityState[] {
   const states: DataQualityState[] = [
     {
@@ -776,7 +780,23 @@ export function dataQualityStates(dq: DataQuality): DataQualityState[] {
       detail: 'opening not in the ledger or invalid',
     })
   }
-  return states
+  return states.filter((s) => s.count > 0 || s.key === 'collected' || s.key === 'included')
+}
+
+/**
+ * The single line shown when every fill is in a completed trade and the counts add up:
+ * "26 fills, all in 5 completed trades". Null when anything is awaiting, open or unplaced, or
+ * the counts do not reconcile.
+ */
+export function dataQualityAllClear(dq: DataQuality, completedTrades: number): string | null {
+  const clear =
+    dq.reconciles &&
+    dq.awaiting_attribution === 0 &&
+    dq.attributed_open === 0 &&
+    dq.not_placed === 0 &&
+    dq.collected === dq.included
+  if (!clear) return null
+  return `${dq.collected} fill${dq.collected === 1 ? '' : 's'}, all in ${completedTrades} completed trade${completedTrades === 1 ? '' : 's'}`
 }
 
 /** One line on the open-position prices, or "prices not requested". */
@@ -1328,7 +1348,7 @@ export function verdictLine(
   formatCurrency: (v: number) => string
 ): Verdict {
   const n = summary.metrics.trades_count
-  if (n === 0) return { tone: 'none', text: 'No closed position in this range yet.' }
+  if (n === 0) return { tone: 'none', text: 'No completed trade in this range yet.' }
   const net = cleanMoney(summary.realized_net_of_charges)
   const rate =
     summary.metrics.win_rate == null ? '' : ` Win rate ${fmtWinRate(summary.metrics.win_rate)}.`
@@ -1336,7 +1356,7 @@ export function verdictLine(
     summary.charges_unavailable_trades > 0
       ? ' Some charges are not estimated, so net is not complete.'
       : ''
-  const count = `${n} closed position${n === 1 ? '' : 's'}`
+  const count = `${n} completed trade${n === 1 ? '' : 's'}`
   if (net > 0)
     return {
       tone: 'profit',

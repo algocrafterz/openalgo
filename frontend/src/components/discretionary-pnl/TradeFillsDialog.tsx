@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Loader2 } from 'lucide-react'
-import { discretionaryPnlApi } from '@/api/discretionaryPnl'
+import { AlertTriangle, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
+import { useId, useMemo, useState } from 'react'
+import { discretionaryPnlApi, type TradeFill } from '@/api/discretionaryPnl'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -19,7 +20,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { fmtPrice, fmtQty, fmtStamp, pnlTextClass } from '@/lib/discretionaryPnlView'
+import { buildLifecycle, fmtNet, type LifecycleEvent } from '@/lib/discretionaryLifecycle'
+import { fmtPrice, fmtQty, pnlTextClass } from '@/lib/discretionaryPnlView'
 import { fmtDuration } from '@/lib/strategyPnlView'
 import { cn } from '@/lib/utils'
 
@@ -30,8 +32,8 @@ export interface SelectedTrade {
 }
 
 /**
- * The ledger fills behind one completed trade (every leg): entries and exits, with the charge
- * each carried.
+ * The ledger fills behind one completed trade: every fill that opened, added to, reduced or
+ * closed it, with the charge each carried, as a chronological lifecycle (see buildLifecycle).
  * Trade ids are reassigned by a rebuild, so the request carries the build_id of the summary the
  * row came from and the cache key includes it: a changed build is reported, never reused.
  */
@@ -66,8 +68,8 @@ export function TradeFillsDialog({
             fills
           </DialogTitle>
           <DialogDescription>
-            The broker executions this trade was built from, across all its legs (partial exits).
-            Charges are estimates split across the fills.
+            Every fill that opened, added to, reduced or closed this trade, grouped by broker order,
+            with the net position after each step. Charges are estimates split across the fills.
           </DialogDescription>
         </DialogHeader>
         {query.isLoading ? (
@@ -119,6 +121,7 @@ export function TradeFillsDialog({
                 </span>
                 <span>{trade.product}</span>
                 <span>Held {fmtDuration(trade.hold_minutes)}</span>
+                <PeakPosition fills={query.data.fills} />
                 <span className={cn('font-mono', pnlTextClass(trade.realized_pnl))}>
                   Gross {formatCurrency(trade.realized_pnl)}
                 </span>
@@ -129,41 +132,186 @@ export function TradeFillsDialog({
                 )}
               </div>
             )}
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Time</TableHead>
-                  <TableHead>Side</TableHead>
-                  <TableHead className="text-right">Qty used</TableHead>
-                  <TableHead className="text-right">Price</TableHead>
-                  <TableHead className="text-right">Charge</TableHead>
-                  <TableHead>Order</TableHead>
-                  <TableHead>Attribution</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {query.data.fills.map((fill) => (
-                  <TableRow key={`${fill.role}-${fill.fill_ref}`}>
-                    <TableCell>
-                      <Badge variant="outline">{fill.role === 'ENTRY' ? 'Entry' : 'Exit'}</Badge>
-                    </TableCell>
-                    <TableCell className="font-mono">{fmtStamp(fill.fill_time)}</TableCell>
-                    <TableCell>{fill.side}</TableCell>
-                    <TableCell className="text-right font-mono">{fmtQty(fill.qty_used)}</TableCell>
-                    <TableCell className="text-right font-mono">{fmtPrice(fill.price)}</TableCell>
-                    <TableCell className="text-right font-mono text-muted-foreground">
-                      {fill.charge_allocated == null ? '—' : formatCurrency(fill.charge_allocated)}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">{fill.order_id || '—'}</TableCell>
-                    <TableCell className="text-xs">{fill.attribution_state}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <LifecycleTable
+              fills={query.data.fills}
+              tradeId={trade?.id ?? selected?.id ?? 0}
+              formatCurrency={formatCurrency}
+            />
           </div>
         ) : null}
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** "14:05:09" of a "YYYY-MM-DD HH:MM:SS" stamp; the date too when the trade spans days. */
+function clock(value: string | null, withDate: boolean): string {
+  if (!value) return '—'
+  const t = value.replace('T', ' ')
+  return withDate ? t.slice(0, 19) : t.slice(11, 19)
+}
+
+/** Highest absolute running position, shown only when the fills list is whole. */
+function PeakPosition({ fills }: { fills: TradeFill[] }) {
+  const peak = useMemo(() => buildLifecycle(fills).peakPosition, [fills])
+  if (peak == null) return null
+  return (
+    <span data-testid="lifecycle-peak">
+      Peak position in this trade <span className="font-mono">{fmtQty(peak)}</span>
+    </span>
+  )
+}
+
+/**
+ * One row per broker order (chronological, with the net position after it); an order filled in
+ * parts has a disclosure button that shows its individual fills nested beneath it, with their
+ * charge, fill id and attribution state.
+ */
+function LifecycleTable({
+  fills,
+  tradeId,
+  formatCurrency,
+}: {
+  fills: TradeFill[]
+  tradeId: number
+  formatCurrency: (value: number) => string
+}) {
+  const lifecycle = useMemo(() => buildLifecycle(fills), [fills])
+  const baseId = useId()
+  const [open, setOpen] = useState<Record<string, boolean>>({})
+  const days = new Set(lifecycle.events.map((e) => (e.startTime ?? '').slice(0, 10)))
+  const withDate = days.size > 1
+  const money = (v: number | null) => (v == null ? '—' : formatCurrency(v))
+  return (
+    <Table data-testid="lifecycle-table" aria-label={`Position lifecycle of trade ${tradeId}`}>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Time</TableHead>
+          <TableHead>Action</TableHead>
+          <TableHead className="text-right">Quantity</TableHead>
+          <TableHead className="text-right">Price</TableHead>
+          <TableHead className="text-right">Net position after</TableHead>
+          <TableHead className="text-right">Charge (est.)</TableHead>
+          <TableHead>Order / fill</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {lifecycle.events.map((e, i) => {
+          const rowsId = `${baseId}-fills-${i}`
+          const expanded = !!open[e.key]
+          const multi = e.fills.length > 1
+          return (
+            <LifecycleRows
+              key={e.key}
+              event={e}
+              rowsId={rowsId}
+              expanded={expanded}
+              multi={multi}
+              withDate={withDate}
+              money={money}
+              onToggle={() => setOpen((o) => ({ ...o, [e.key]: !o[e.key] }))}
+            />
+          )
+        })}
+      </TableBody>
+    </Table>
+  )
+}
+
+function LifecycleRows({
+  event: e,
+  rowsId,
+  expanded,
+  multi,
+  withDate,
+  money,
+  onToggle,
+}: {
+  event: LifecycleEvent<TradeFill>
+  rowsId: string
+  expanded: boolean
+  multi: boolean
+  withDate: boolean
+  money: (v: number | null) => string
+  onToggle: () => void
+}) {
+  const time =
+    e.endTime && e.endTime !== e.startTime
+      ? `${clock(e.startTime, withDate)} - ${clock(e.endTime, false)}`
+      : clock(e.startTime, withDate)
+  const singleTitle = e.fills[0].attribution_state
+    ? `Attribution: ${e.fills[0].attribution_state}`
+    : undefined
+  return (
+    <>
+      <TableRow data-testid="lifecycle-event">
+        <TableCell className="whitespace-nowrap font-mono tabular-nums">{time}</TableCell>
+        <TableCell className="whitespace-nowrap">
+          <Badge variant="outline" data-testid="lifecycle-label">
+            {e.label}
+          </Badge>{' '}
+          <span className="text-xs text-muted-foreground">{e.side === 'BUY' ? 'Buy' : 'Sell'}</span>
+        </TableCell>
+        <TableCell className="text-right font-mono tabular-nums">
+          {fmtQty(e.quantity)}
+          {multi && (
+            <button
+              type="button"
+              className="ml-1 inline-flex items-center gap-0.5 rounded px-1 font-sans text-xs text-muted-foreground underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2"
+              aria-expanded={expanded}
+              aria-controls={e.fills.map((_, j) => `${rowsId}-${j}`).join(' ')}
+              aria-label={`${expanded ? 'Hide' : 'Show'} the ${e.fills.length} fills of this order`}
+              onClick={onToggle}
+            >
+              {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+              {e.fills.length} fills
+            </button>
+          )}
+        </TableCell>
+        <TableCell className="text-right font-mono tabular-nums">{fmtPrice(e.price)}</TableCell>
+        <TableCell
+          className="text-right font-mono tabular-nums font-medium"
+          data-testid="lifecycle-net"
+        >
+          {fmtNet(e.netAfter)}
+        </TableCell>
+        <TableCell className="text-right font-mono tabular-nums text-muted-foreground">
+          {money(e.charges)}
+        </TableCell>
+        <TableCell className="font-mono text-xs" title={multi ? undefined : singleTitle}>
+          {e.orderId || '—'}
+          {!multi && e.fills[0].fill_id && (
+            <span className="block text-muted-foreground">fill {e.fills[0].fill_id}</span>
+          )}
+        </TableCell>
+      </TableRow>
+      {(multi ? expanded : false) &&
+        e.fills.map((f, j) => (
+          <TableRow
+            key={`${f.role}-${f.fill_ref}`}
+            id={`${rowsId}-${j}`}
+            className="bg-muted/30"
+            data-testid="lifecycle-fill"
+          >
+            <TableCell className="whitespace-nowrap pl-6 font-mono text-xs tabular-nums">
+              {clock(f.fill_time, withDate)}
+            </TableCell>
+            <TableCell className="text-xs text-muted-foreground">
+              {f.side} fill{f.attribution_state ? `, ${f.attribution_state}` : ''}
+            </TableCell>
+            <TableCell className="text-right font-mono text-xs tabular-nums">
+              {fmtQty(f.qty_used)}
+            </TableCell>
+            <TableCell className="text-right font-mono text-xs tabular-nums">
+              {fmtPrice(f.price)}
+            </TableCell>
+            <TableCell />
+            <TableCell className="text-right font-mono text-xs tabular-nums text-muted-foreground">
+              {money(f.charge_allocated)}
+            </TableCell>
+            <TableCell className="font-mono text-xs">{f.fill_id || f.fill_ref}</TableCell>
+          </TableRow>
+        ))}
+    </>
   )
 }

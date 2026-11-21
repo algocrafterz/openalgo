@@ -97,42 +97,29 @@ describe('DailyPnlChart', () => {
 })
 
 describe('RiskStrip', () => {
-  it('shows the figures and opens the largest win and loss', async () => {
-    const onSelect = vi.fn()
-    render(
-      <RiskStrip consistency={consistency()} formatCurrency={money} onSelectTrade={onSelect} />
-    )
+  it('shows the risk and consistency figures once, without the summary figures', () => {
+    render(<RiskStrip consistency={consistency()} formatCurrency={money} />)
     expect(screen.getByTestId('risk-avg-daily')).toHaveTextContent('Rs 30.00')
     expect(screen.getByTestId('risk-avg-daily')).toHaveTextContent('net Rs 23.75 (incomplete)')
     expect(screen.getByTestId('risk-days')).toHaveTextContent('1 / 1')
-    expect(screen.getByTestId('risk-drawdown')).toHaveTextContent('Rs 40.00')
     expect(screen.getByTestId('risk-hold')).toHaveTextContent('45m')
-    await userEvent.click(screen.getByRole('button', { name: /largest win, RELIANCE/ }))
-    expect(onSelect).toHaveBeenLastCalledWith(expect.objectContaining({ id: 11, build_id: 'b1' }))
-    await userEvent.click(screen.getByRole('button', { name: /largest loss, INFY/ }))
-    expect(onSelect).toHaveBeenLastCalledWith(expect.objectContaining({ id: 12 }))
+    // largest win / loss and the maximum drawdown live in the summary only
+    expect(screen.queryByTestId('risk-largest-win')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('risk-largest-loss')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('risk-drawdown')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 
-  it('shows the largest win and loss on the net basis the server picks them on', () => {
-    render(<RiskStrip consistency={consistency()} formatCurrency={money} onSelectTrade={vi.fn()} />)
-    // RELIANCE: gross 100, net 87.50 -> the net is shown; INFY has no net -> gross, said so
-    expect(screen.getByTestId('risk-largest-win')).toHaveTextContent('Rs 87.50')
-    expect(screen.getByTestId('risk-largest-win')).toHaveTextContent('(net)')
-    expect(screen.getByTestId('risk-largest-loss')).toHaveTextContent('Rs -40.00')
-    expect(screen.getByTestId('risk-largest-loss')).toHaveTextContent('(gross)')
-  })
-
-  it('uses the net drawdown and streaks of the risk block when given, in rupees', () => {
+  it('uses the net current drawdown and streaks of the risk block when given, in rupees', () => {
     render(
       <RiskStrip
         consistency={consistency()}
         risk={riskBlock({ current_streak: { type: 'win', length: 1 } })}
         formatCurrency={money}
-        onSelectTrade={vi.fn()}
       />
     )
-    expect(screen.getByTestId('risk-drawdown')).toHaveTextContent('-Rs 320.50')
     expect(screen.getByTestId('risk-current-drawdown')).toHaveTextContent('-Rs 120.00')
+    expect(screen.queryByTestId('risk-drawdown')).not.toBeInTheDocument()
     expect(screen.getByTestId('risk-current-streak')).toHaveTextContent('1 win')
     expect(screen.getByTestId('risk-win-streak')).toHaveTextContent('3')
     expect(screen.getByTestId('risk-strip').textContent).not.toMatch(/\d%/)
@@ -142,22 +129,15 @@ describe('RiskStrip', () => {
     render(
       <RiskStrip
         consistency={consistency({
-          largest_win: null,
           trading_days: 1,
           avg_daily_pnl: null,
           avg_daily_net: null,
           avg_daily_unavailable_reason: 'needs at least 2 trading days',
-          max_drawdown: null,
-          max_drawdown_unavailable_reason: 'needs at least 2 trading days',
         })}
         formatCurrency={money}
-        onSelectTrade={vi.fn()}
       />
     )
-    expect(screen.getByTestId('risk-largest-win')).toHaveTextContent('no winning trade')
     expect(screen.getByTestId('risk-avg-daily')).toHaveTextContent('needs at least 2 trading days')
-    expect(screen.getByTestId('risk-drawdown')).toHaveTextContent('needs at least 2 trading days')
-    expect(screen.getByTestId('risk-drawdown')).not.toHaveTextContent('Rs 0.00')
   })
 })
 
@@ -218,7 +198,7 @@ describe('HowYouTradeCard', () => {
 })
 
 describe('DataQualityStrip', () => {
-  it('shows the four states, not placed, charges, prices and sync', () => {
+  it('shows the states with a count, charges and prices; a healthy sync is not repeated', () => {
     render(<DataQualityStrip dq={dataQuality()} />)
     expect(screen.getByTestId('dq-collected')).toHaveTextContent('1. Collected9')
     expect(screen.getByTestId('dq-awaiting')).toHaveTextContent('2. Awaiting attribution2')
@@ -227,13 +207,101 @@ describe('DataQualityStrip', () => {
     expect(screen.getByTestId('dq-included')).toHaveTextContent('4. In completed trades3')
     expect(screen.getByTestId('dq-not_placed')).toHaveTextContent('1')
     expect(screen.getByTestId('dq-charges')).toHaveTextContent(
-      '1 trade(s) / 1 exit(s) without an estimate'
+      '1 trade(s) / 1 exit fills without an estimate'
     )
     expect(screen.getByTestId('dq-prices')).toHaveTextContent('Prices not requested')
-    expect(screen.getByTestId('dq-sync')).toHaveTextContent(
-      'Ledger sync: last successful 2026-11-17 09:30 IST'
-    )
+    expect(screen.queryByTestId('dq-sync')).not.toBeInTheDocument()
     expect(screen.queryByText('counts do not add up')).not.toBeInTheDocument()
+  })
+
+  it('hides tiles with a zero count but keeps collected and included', () => {
+    render(
+      <DataQualityStrip
+        dq={dataQuality({
+          collected: 10,
+          awaiting_attribution: 0,
+          awaiting_grace: 0,
+          awaiting_other: 0,
+          attributed_open: 0,
+          not_placed: 0,
+          included: 9,
+          reconciles: true,
+        })}
+      />
+    )
+    expect(screen.getByTestId('dq-collected')).toBeInTheDocument()
+    expect(screen.getByTestId('dq-included')).toBeInTheDocument()
+    expect(screen.queryByTestId('dq-awaiting')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('dq-open')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('dq-not_placed')).not.toBeInTheDocument()
+  })
+
+  it('shows non-zero tiles, awaiting-attribution fills included, and the reconcile badge', () => {
+    render(
+      <DataQualityStrip
+        dq={dataQuality({
+          collected: 7,
+          awaiting_attribution: 2,
+          awaiting_grace: 2,
+          awaiting_other: 0,
+          attributed_open: 1,
+          not_placed: 1,
+          included: 3,
+          reconciles: false,
+        })}
+        completedTrades={3}
+      />
+    )
+    expect(screen.getByTestId('dq-awaiting')).toHaveTextContent('2')
+    expect(screen.getByTestId('dq-open')).toHaveTextContent('1')
+    expect(screen.getByTestId('dq-not_placed')).toHaveTextContent('1')
+    expect(screen.getByText('counts do not add up')).toBeInTheDocument()
+    expect(screen.queryByTestId('dq-all-clear')).not.toBeInTheDocument()
+  })
+
+  it('shows one line when every fill is in a completed trade', () => {
+    render(
+      <DataQualityStrip
+        dq={dataQuality({
+          collected: 26,
+          awaiting_attribution: 0,
+          awaiting_grace: 0,
+          awaiting_other: 0,
+          attributed_open: 0,
+          not_placed: 0,
+          included: 26,
+          reconciles: true,
+          charges_incomplete_trades: 0,
+          charges_incomplete_legs: 0,
+        })}
+        completedTrades={5}
+      />
+    )
+    expect(screen.getByTestId('dq-all-clear')).toHaveTextContent(
+      '26 fills, all in 5 completed trades'
+    )
+    expect(screen.queryByTestId('dq-collected')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('dq-sync')).not.toBeInTheDocument()
+  })
+
+  it('does not show the all-clear line while a fill awaits attribution', () => {
+    render(
+      <DataQualityStrip
+        dq={dataQuality({
+          collected: 5,
+          awaiting_attribution: 1,
+          awaiting_grace: 1,
+          awaiting_other: 0,
+          attributed_open: 0,
+          not_placed: 0,
+          included: 4,
+          reconciles: true,
+        })}
+        completedTrades={2}
+      />
+    )
+    expect(screen.queryByTestId('dq-all-clear')).not.toBeInTheDocument()
+    expect(screen.getByTestId('dq-awaiting')).toHaveTextContent('1')
   })
 
   it('reports price problems only when prices were requested, and sync problems', () => {

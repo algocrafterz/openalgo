@@ -14,7 +14,7 @@ import {
   weaknessLine,
 } from '@/lib/discretionaryPnlView'
 import { cn } from '@/lib/utils'
-import { JumpLink, StripTile, Unavailable } from './DiscretionaryInsights'
+import { JumpLink, StripTile, TradeButton, Unavailable } from './DiscretionaryInsights'
 
 type Money = (value: number) => string
 
@@ -52,12 +52,16 @@ function Largest({
   trade,
   formatCurrency,
   none,
+  onSelect,
 }: {
   trade: TradeRef | null | undefined
   formatCurrency: Money
   none: string
+  onSelect?: (trade: TradeRef) => void
 }) {
   if (!trade) return <Unavailable reason={none} />
+  if (onSelect)
+    return <TradeButton trade={trade} formatCurrency={formatCurrency} onSelect={onSelect} />
   const amount = trade.net_pnl ?? trade.realized_pnl
   return (
     <span
@@ -79,26 +83,28 @@ function Largest({
 }
 
 /**
- * The first screen of the page: one verdict sentence, the single biggest weakness, three large
- * figures (net P&L, completed trades, win rate) and one dense row of supporting figures. Every
- * value comes from the summary the rest of the page uses; nothing is computed here.
+ * The first screen of the page: three large figures (net P&L, completed trades, win rate) and one
+ * dense row of supporting figures, which is the one place for the largest winner / loser, the
+ * maximum drawdown, gross and charges. Every value comes from the summary the rest of the page
+ * uses; nothing is computed here.
  */
 export function DiscretionaryHeader({
   summary,
   formatCurrency,
   chargesHint,
+  onSelectTrade,
   children,
 }: {
   summary: Summary
   formatCurrency: Money
   chargesHint: string
+  /** Opens the fills of the largest winner / loser. */
+  onSelectTrade?: (trade: TradeRef) => void
   children?: React.ReactNode
 }) {
   const m = summary.metrics
   const noTrades = m.trades_count === 0
   const net = summary.realized_net_of_charges
-  const verdict = verdictLine(summary, formatCurrency)
-  const weakness = weaknessLine(summary, formatCurrency)
   const c = summary.consistency
   const risk = summary.risk
   const charges = summary.costs?.total_charges ?? summary.charges
@@ -131,26 +137,9 @@ export function DiscretionaryHeader({
 
   return (
     <section className="space-y-3" data-testid="discretionary-summary" aria-label="Summary">
-      <div
-        className={cn(
-          'rounded-lg border-l-4 bg-muted/40 px-4 py-3',
-          verdict.tone === 'profit' && 'border-l-green-600',
-          verdict.tone === 'loss' && 'border-l-red-600',
-          (verdict.tone === 'flat' || verdict.tone === 'none') && 'border-l-muted-foreground'
-        )}
-      >
-        <p className="text-base font-medium" data-testid="summary-verdict">
-          {verdict.text}
-        </p>
-        {weakness && (
-          <p className="mt-1 text-sm text-muted-foreground" data-testid="summary-weakness">
-            Biggest weakness: {weakness}
-          </p>
-        )}
-        <p className="mt-1 text-xs">
-          <JumpLink to="discretionary-ledger">Jump to closed positions</JumpLink>
-        </p>
-      </div>
+      <p className="text-xs">
+        <JumpLink to="discretionary-ledger">Jump to closed trades</JumpLink>
+      </p>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Primary
@@ -220,10 +209,20 @@ export function DiscretionaryHeader({
           {formatCurrency(charges)}
         </StripTile>
         <StripTile label="Largest winner" testId="summary-largest-win">
-          <Largest trade={c?.largest_win} formatCurrency={formatCurrency} none="no winning trade" />
+          <Largest
+            trade={c?.largest_win}
+            formatCurrency={formatCurrency}
+            none="no winning trade"
+            onSelect={onSelectTrade}
+          />
         </StripTile>
         <StripTile label="Largest loser" testId="summary-largest-loss">
-          <Largest trade={c?.largest_loss} formatCurrency={formatCurrency} none="no losing trade" />
+          <Largest
+            trade={c?.largest_loss}
+            formatCurrency={formatCurrency}
+            none="no losing trade"
+            onSelect={onSelectTrade}
+          />
         </StripTile>
       </div>
       {children}
@@ -254,17 +253,56 @@ export function TodayLine({
         {same ? (
           <span>
             Today&apos;s session ({today.session_date}) is the range shown above. Show today&apos;s
-            figures and closed positions.
+            figures and closed trades.
           </span>
         ) : (
           <span>
             Today ({today.session_date}): net {formatCurrency(today.net)} after estimated charges,{' '}
             {today.completed_positions} closed, {today.open_positions} open. Show today&apos;s
-            figures and closed positions.
+            figures and closed trades.
           </span>
         )}
       </summary>
       <div className="border-t p-3">{children}</div>
     </details>
+  )
+}
+
+/**
+ * Trading insights: the verdict sentence and the one thing to look at, both taken from numbers
+ * the server already sends. Factual only: no inference about discipline or decision quality.
+ */
+export function TradingInsights({
+  summary,
+  formatCurrency,
+}: {
+  summary: Summary
+  formatCurrency: Money
+}) {
+  const verdict = verdictLine(summary, formatCurrency)
+  const weakness = weaknessLine(summary, formatCurrency)
+  return (
+    <section
+      className={cn(
+        'rounded-lg border-l-4 bg-muted/40 px-4 py-3',
+        verdict.tone === 'profit' && 'border-l-green-600',
+        verdict.tone === 'loss' && 'border-l-red-600',
+        (verdict.tone === 'flat' || verdict.tone === 'none') && 'border-l-muted-foreground'
+      )}
+      data-testid="trading-insights"
+      aria-label="Trading insights"
+    >
+      <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        Trading insights
+      </h2>
+      <p className="text-base font-medium" data-testid="summary-verdict">
+        {verdict.text}
+      </p>
+      {weakness && (
+        <p className="mt-1 text-sm text-muted-foreground" data-testid="summary-weakness">
+          Needs attention: {weakness}
+        </p>
+      )}
+    </section>
   )
 }
