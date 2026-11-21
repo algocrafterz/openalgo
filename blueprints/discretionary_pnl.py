@@ -10,10 +10,12 @@ Nothing here writes ledger_fills, reconciles or calls a broker. The only broker 
 quote fetch of /summary?quotes=1.
 """
 
+import csv
+import io
 import os
 from datetime import date
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, Response, jsonify, request, session
 
 from limiter import limiter
 from services import discretionary_pnl_service as disc
@@ -112,6 +114,45 @@ def _iso_date(name: str):
     return value, None
 
 
+def _category():
+    """(category, error response): all (default) | intraday | swing. Anything else is a 400,
+    never a silent default; ``unclassified`` is not a filter (it is part of ``all``)."""
+    value, error = _text("category")
+    if error:
+        return None, error
+    if value is None:
+        return "all", None
+    if value not in disc.an.CATEGORY_FILTERS:
+        return None, _error(
+            f"Invalid category: {_echo(value)}. Use one of {', '.join(disc.an.CATEGORY_FILTERS)}."
+        )
+    return value, None
+
+
+def _scope_args():
+    """(period, start, end, broker, symbol, account, category, error response) shared by the
+    summary, excursion and export routes."""
+    period = request.args.get("period", "30d").strip()
+    if period not in VALID_PERIODS:
+        return (
+            *(None,) * 7,
+            _error(f"Invalid period: {_echo(period)}. Use one of {', '.join(VALID_PERIODS)}."),
+        )
+    start, error = _iso_date("start")
+    if error:
+        return (*(None,) * 7, error)
+    end, error = _iso_date("end")
+    if error:
+        return (*(None,) * 7, error)
+    broker, symbol, account, error = _filters()
+    if error:
+        return (*(None,) * 7, error)
+    category, error = _category()
+    if error:
+        return (*(None,) * 7, error)
+    return period, start, end, broker, symbol, account, category, None
+
+
 def _quotes_flag():
     raw = request.args.get("quotes")
     if raw is None or not raw.strip():
@@ -133,31 +174,36 @@ def discretionary_status():
 @limiter.limit(DISCRETIONARY_PNL_READ_LIMIT)
 def discretionary_summary():
     """Headline metrics, breakdowns, trade and position tables for the chosen period and
-    filters (broker, symbol, account). ``quotes=1`` fetches live quotes for the unrealized
-    P&L of open positions; the default makes no broker call."""
+    filters (broker, symbol, account, category = all | intraday | swing, else 400).
+    ``quotes=1`` fetches live quotes for the unrealized P&L of open positions; the default
+    makes no broker call. MAE / MFE are not here: see /excursions."""
     if not discretionary_enabled():
         return _disabled()
-    period = request.args.get("period", "30d").strip()
-    if period not in VALID_PERIODS:
-        return _error(f"Invalid period: {_echo(period)}. Use one of {', '.join(VALID_PERIODS)}.")
-    start, error = _iso_date("start")
-    if error:
-        return error
-    end, error = _iso_date("end")
-    if error:
-        return error
-    broker, symbol, account, error = _filters()
+    period, start, end, broker, symbol, account, category, error = _scope_args()
     if error:
         return error
     quotes, error = _quotes_flag()
     if error:
         return error
-    key = ("summary", session["user"], period, start, end, broker, symbol, account, quotes)
+    key = (
+        "summary",
+        session["user"],
+        period,
+        start,
+        end,
+        broker,
+        symbol,
+        account,
+        quotes,
+        category,
+    )
 
     def fetch():
         try:
-            body = disc.get_performance(period, start, end, broker, symbol, account, quotes)
-        except ValueError as exc:
+            body = disc.get_performance(
+                period, start, end, broker, symbol, account, quotes, category
+            )
+        except disc.FilterError as exc:
             return False, {"status": "error", "message": str(exc)}, 400
         except Exception:
             logger.exception("Discretionary summary failed")
@@ -266,3 +312,89 @@ def discretionary_unresolved():
 
     _ok, response, status_code = _disc_flights.do(key, fetch, ttl=_READ_TTL_S)
     return jsonify(response), status_code
+
+
+@discretionary_pnl_bp.route("/api/discretionary-pnl/excursions", methods=["GET"])
+@check_session_validity
+@limiter.limit(DISCRETIONARY_PNL_READ_LIMIT)
+def discretionary_excursions():
+    """MAE / MFE of the closed positions of the same scope as /summary (period, start, end,
+    broker, symbol, account, category). Lazy and separate from the summary: it reads
+    one-minute Historify bars (SELECT only), is single-flighted and capped at
+    ``EXCURSION_MAX_POSITIONS`` positions per request. Per position available / unavailable
+    with a reason; plus aggregates, coverage and a note."""
+    if not discretionary_enabled():
+        return _disabled()
+    period, start, end, broker, symbol, account, category, error = _scope_args()
+    if error:
+        return error
+    key = ("excursions", session["user"], period, start, end, broker, symbol, account, category)
+
+    def fetch():
+        try:
+            body = disc.get_excursions(period, start, end, broker, symbol, account, category)
+        except disc.FilterError as exc:
+            return False, {"status": "error", "message": str(exc)}, 400
+        except Exception:
+            logger.exception("Discretionary excursions failed")
+            return False, {"status": "error", "message": "Could not compute MAE / MFE."}, 500
+        return True, {"status": "success", **body}, 200
+
+    _ok, response, status_code = _disc_flights.do(key, fetch, ttl=_READ_TTL_S)
+    return jsonify(response), status_code
+
+
+def _csv_cell(column: str, value):
+    """None becomes an empty cell (unknown is not zero). A TEXT cell that starts with = + - @
+    (or a tab / carriage return) gets a leading quote so a spreadsheet cannot run it as a
+    formula; numeric columns are written as they are."""
+    if value is None:
+        return ""
+    if column in disc.EXPORT_NUMERIC:
+        return value
+    text = str(value)
+    if text and text[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + text
+    return text
+
+
+@discretionary_pnl_bp.route("/api/discretionary-pnl/export.csv", methods=["GET"])
+@check_session_validity
+@limiter.limit(DISCRETIONARY_PNL_READ_LIMIT)
+def discretionary_export():
+    """Every closed position of the scope (same filters as /summary, incl. category; no table
+    limit) as a CSV download, newest close first. Money in INR, points per unit, times
+    ISO 8601 with +05:30. An empty cell means unknown (MAE / MFE unavailable, no charge
+    estimate), never zero; ``excursion_status`` / ``excursion_reason`` say why. MAE / MFE are
+    the same minute-bar lower bounds as /excursions."""
+    if not discretionary_enabled():
+        return _disabled()
+    period, start, end, broker, symbol, account, category, error = _scope_args()
+    if error:
+        return error
+    key = ("export", session["user"], period, start, end, broker, symbol, account, category)
+
+    def fetch():
+        try:
+            body = disc.get_export(period, start, end, broker, symbol, account, category)
+        except disc.FilterError as exc:
+            return False, {"status": "error", "message": str(exc)}, 400
+        except Exception:
+            logger.exception("Discretionary export failed")
+            return False, {"status": "error", "message": "Could not build the export."}, 500
+        return True, body, 200
+
+    ok, body, status_code = _disc_flights.do(key, fetch, ttl=_READ_TTL_S)
+    if not ok:
+        return jsonify(body), status_code
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(body["columns"])
+    for row in body["rows"]:
+        writer.writerow([_csv_cell(c, row.get(c)) for c in body["columns"]])
+    filename = f"discretionary-positions-{body['category']}-{body['start']}_{body['end']}.csv"
+    return Response(
+        buf.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

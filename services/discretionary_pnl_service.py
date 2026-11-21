@@ -96,7 +96,15 @@ Metrics
 Closing legs go to ``strategy_metrics_service.compute_metrics`` with GROSS realized P&L by
 close date (no unrealized, no charges in the equity curve or drawdown); the trade-count
 figures (``COUNT_METRICS``) are then replaced by those of a second call on the completed
-trades, so money and counts each use their own basis. Discretionary has no
+trades, so money and counts each use their own basis. The completed-trade call is on NET P&L
+after estimated charges (a win is net > 0); a trade without a net is left out of those ratios
+and counted in ``net_unavailable_trades`` (``trades_count`` stays the total).
+
+Phase 2A additions: a ``category`` filter (all / intraday / swing, see ``_scope``), the
+blocks ``points_by_instrument``, ``risk``, ``monthly``, ``weekday``, ``trade_management``,
+``costs``, ``classification``, ``unresolved_in_range`` and ``reconciliation`` in
+``get_performance``, the lazy MAE / MFE (``get_excursions``) and the CSV rows
+(``get_export``). Formulas live in ``discretionary_analytics``. Discretionary has no
 capital basis, so Sharpe, Sortino, the capital they assume and any return-on-capital are
 withheld with the reason ``no capital basis`` (compute_metrics would otherwise quietly use
 its 100,000 reference capital). Its start date is DISCRETIONARY_RELIABLE_SINCE, else the
@@ -139,13 +147,15 @@ Known limits (documented, not fixed)
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import hashlib
 import json
 import os
 import threading
 import uuid
 from dataclasses import asdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import select
 
@@ -163,6 +173,7 @@ from services.discretionary_reconstruction import (
 )
 from utils.env_config import env_float
 from utils.logging import get_logger
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
@@ -192,6 +203,7 @@ _quote_cache: dict[tuple[str, str, str], tuple[float, datetime]] = {}
 _calendar_cache: dict[tuple[date, str], tuple[int, int] | None] = {}
 _CALENDAR_EXCHANGES = frozenset({"NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX", "NCO"})
 _IST_OFFSET_MS = 19_800_000
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 
 class ReconcileError(Exception):
@@ -252,6 +264,14 @@ def _calendar_window(day: date, exchange: str):
     return int(window["start_ms"]), int(window["end_ms"])
 
 
+def _calendar_window_info(day: date, exchange: str) -> dict | None:
+    """The calendar's session window dict ({start_ms, end_ms, is_special}) or None. Read only.
+    Tests replace this. None means "closed OR failure" (see ``_calendar_window``)."""
+    from database import market_calendar_db as cal
+
+    return cal.get_effective_session_window(day, exchange)
+
+
 def _confirmed_closed(day: date, exchange: str) -> bool:
     """True when the calendar says the exchange is closed that day (holiday or weekend).
     Tests replace this."""
@@ -288,6 +308,53 @@ def market_status(exchange: str, now: datetime) -> tuple[bool, str]:
         except Exception as e:
             logger.warning("Discretionary market calendar unavailable: %s", type(e).__name__)
     return _clock_open(ex, now), "clock"
+
+
+def _ms_to_naive_ist(ms: int) -> datetime:
+    return datetime(1970, 1, 1) + timedelta(milliseconds=int(ms) + _IST_OFFSET_MS)
+
+
+def session_provider():
+    """A memoising ``SessionProvider`` (day, exchange) -> an.SessionWindow | None for the
+    pure classifier and excursion code, over the existing market calendar
+    (``get_effective_session_window``, special sessions and per-exchange timings included).
+
+    The calendar returns None for both "closed" and an internal failure, so a None answer is
+    a CONFIRMED closed day only when ``_confirmed_closed`` agrees (holiday or weekend);
+    otherwise, and for an exchange the calendar does not model, or when any call raises, it
+    raises ``an.SessionCalendarUnavailable``. The result is memoised per provider instance
+    only (one request), never across requests. Nothing is written.
+    """
+    memo: dict[tuple[date, str], an.SessionWindow | None] = {}
+
+    def provider(day: date, exchange: str):
+        ex = (exchange or "").upper()
+        key = (day, ex)
+        if key in memo:
+            return memo[key]
+        if ex not in _CALENDAR_EXCHANGES:
+            raise an.SessionCalendarUnavailable(ex)
+        try:
+            info = _calendar_window_info(day, ex)
+            if info is None:
+                if not _confirmed_closed(day, ex):
+                    raise an.SessionCalendarUnavailable(ex)
+                window = None
+            else:
+                window = an.SessionWindow(
+                    _ms_to_naive_ist(info["start_ms"]),
+                    _ms_to_naive_ist(info["end_ms"]),
+                    bool(info.get("is_special")),
+                )
+        except an.SessionCalendarUnavailable:
+            raise
+        except Exception as e:
+            logger.warning("Discretionary session calendar failed: %s", type(e).__name__)
+            raise an.SessionCalendarUnavailable(ex) from e
+        memo[key] = window
+        return window
+
+    return provider
 
 
 def market_open(exchange: str, now: datetime) -> bool:
@@ -910,12 +977,38 @@ def leg_and_trade_metrics(legs: list[dict], completed: list[dict], s: str, e: st
     metrics = metrics_svc.compute_metrics(
         to_metric_trades(legs), s, e, costs=[t["charges"] for t in legs], capital=None
     )
+    # Win / loss basis is NET of estimated charges: the completed trades go to compute_metrics
+    # with their net P&L as ``realized_pnl``. A trade without a net is never measured on gross:
+    # it is left out of these figures and counted in ``net_unavailable_trades``.
+    net_rows = [
+        dict(t, realized_pnl=an.net_value(t)) for t in completed if an.net_value(t) is not None
+    ]
     counted = metrics_svc.compute_metrics(
-        to_metric_trades(completed), s, e, costs=[t["charges"] for t in completed], capital=None
+        to_metric_trades(net_rows), s, e, costs=[t["charges"] for t in net_rows], capital=None
     )
     for name in COUNT_METRICS:
         metrics[name] = counted[name]
-    metrics["count_basis"] = "completed trades (a position from flat to flat)"
+    metrics["count_unavailable_reason"] = None
+    if not net_rows:
+        # No completed trade has a net P&L: the ratios are unknown, not 0.
+        for name in (
+            "win_rate",
+            "profit_factor",
+            "expectancy",
+            "avg_win",
+            "avg_loss",
+            "payoff_ratio",
+        ):
+            metrics[name] = None
+        metrics["count_unavailable_reason"] = "no completed trades with a net P&L"
+    metrics["trades_count"] = len(completed)
+    metrics["net_basis_trades"] = len(net_rows)
+    metrics["net_unavailable_trades"] = len(completed) - len(net_rows)
+    metrics["count_basis"] = (
+        "completed trades (a position from flat to flat); wins, losses, win rate, profit "
+        "factor, expectancy and average win / loss use NET P&L after estimated charges "
+        "(gross_profit / gross_loss here are sums of net wins / losses)"
+    )
     return metrics
 
 
@@ -1061,11 +1154,13 @@ def get_summary(
     end: str | None = None,
     filters: dict | None = None,
     with_quotes: bool = True,
+    category: str = "all",
 ) -> dict:
     """Metrics, realized/charges/net and unrealized for the period (see ``_summary_parts``)."""
+    check_category(category)
     filters = _clean_filters(**{k: (filters or {}).get(k) for k in ("broker", "account", "symbol")})
     snap = _snapshot(filters, trades=True, positions=True, orphans=True, links=True)
-    return _summary_parts(snap, period, start, end, filters, with_quotes)["summary"]
+    return _summary_parts(snap, period, start, end, filters, with_quotes, category)["summary"]
 
 
 def _safe_block(name: str, build, warnings: list[str]):
@@ -1080,6 +1175,214 @@ def _safe_block(name: str, build, warnings: list[str]):
         return None
 
 
+class FilterError(ValueError):
+    """A request filter / parameter (category, period, custom range) is invalid. The ONLY
+    exception the routes turn into a 400 with its text; any other error is a 500 with a
+    generic message, so an internal ValueError never leaks its text."""
+
+
+def check_category(category) -> str:
+    """The category filter value; ValueError (a 400 for the route) when it is not one of
+    all / intraday / swing. ``unclassified`` is not a filter: it is in ``all`` only."""
+    if category not in an.CATEGORY_FILTERS:
+        raise FilterError(f"category must be one of {', '.join(an.CATEGORY_FILTERS)}")
+    return category
+
+
+CLASSIFICATION_FAILED = "classification_failed"
+
+
+def classify_positions(snap: dict, floor: date, now: datetime, completed: list[dict]) -> dict:
+    """{position_key: (category, reason)} for every completed position (``completed``) and
+    every open position of the snapshot, by the exchange session windows (see
+    ``an.classify_with_reason``; the calendar is the service's ``session_provider``)."""
+    provider = session_provider()
+    opens = snap.get("positions") or []
+    open_orphans = an.orphan_fill_counts(snap.get("orphans"), opens) if opens else {}
+    out: dict[tuple, tuple[str, str | None]] = {}
+    for t in completed:
+        out[an.position_key(t)] = an.classify_with_reason(
+            t, provider, reliable_since=floor, now=now
+        )
+    for p in opens:
+        key = an.position_key(p)
+        row = dict(p, closed_at=None, orphan_fills=open_orphans.get(key, 0))
+        out[key] = an.classify_with_reason(row, provider, reliable_since=floor, now=now)
+    return out
+
+
+def _scope(snap: dict, period: str, start, end, category: str) -> dict:
+    """The rows of one reporting scope from ONE snapshot: the period, the classification of
+    every position and the closing legs / completed positions selected by ``category``.
+
+    Period basis. The period is resolved on ALL closing legs (so it does not move with the
+    category). A completed position is in the period when its FINAL close (``trade_date``)
+    is in it; a leg when its OWN close date is. Headline money sums the legs, position
+    statistics the whole positions, so they differ only for positions whose legs straddle
+    the period or that are still open (see ``reconciliation_block``); for intraday
+    positions (one session) they are identical.
+
+    Category. Positions are classified once (``classify_positions``); ``all`` keeps
+    everything, including unclassified positions and the legs of open positions, while
+    intraday / swing keep only positions of that category, their closing legs and (open)
+    positions by the position key. Unclassified rows are in ``all`` only.
+    """
+    check_category(category)
+    all_trades = snap["trades"]
+    floor = reliable_since(snap["fills"])
+    now = _now()
+    today = session_date(now)
+    try:
+        s, e = metrics_svc.resolve_period(
+            period, to_metric_trades(all_trades), today, start, end, floor=floor
+        )
+    except ValueError as exc:  # resolve_period validates only the period / custom range
+        raise FilterError(str(exc)) from None
+    completed_all = an.group_completed(
+        all_trades, snap.get("flat_positions") or [], snap.get("orphans")
+    )
+    classification_failed = False
+    try:
+        classes = classify_positions(snap, floor, now, completed_all)
+    except Exception as exc:
+        # Never guess: every position becomes unclassified (in the 'all' view only).
+        logger.error("Discretionary classification failed: %s", type(exc).__name__)
+        classification_failed = True
+        classes = {
+            an.position_key(row): ("unclassified", CLASSIFICATION_FAILED)
+            for row in list(completed_all) + list(snap.get("positions") or [])
+        }
+    for t in completed_all:
+        t["category"], t["category_reason"] = classes[an.position_key(t)]
+
+    def keep(row: dict) -> bool:
+        return (
+            category == "all" or classes.get(an.position_key(row), ("unclassified",))[0] == category
+        )
+
+    legs_period = [t for t in all_trades if s <= t["trade_date"] <= e]
+    trades_period = [t for t in completed_all if s <= t["trade_date"] <= e]
+    return {
+        "s": s,
+        "e": e,
+        "floor": floor,
+        "now": now,
+        "today": today,
+        "all_trades": all_trades,
+        "completed_all": completed_all,
+        "classes": classes,
+        "keep": keep,
+        "legs_period": legs_period,
+        "trades_period": trades_period,
+        "legs": [t for t in legs_period if keep(t)],
+        "trades": [t for t in trades_period if keep(t)],
+        "category": category,
+        "classification_failed": classification_failed,
+    }
+
+
+def classification_block(scope: dict) -> dict:
+    """Classification counts of the closed positions in the period (every category, whatever
+    the filter) and of the open positions, with the unclassified reasons."""
+    closed = [(t["category"], t["category_reason"]) for t in scope["trades_period"]]
+    closed_keys = {an.position_key(t) for t in scope["completed_all"]}
+    return {
+        "selected": scope["category"],
+        "closed": an.category_counts(closed),
+        "open": an.category_counts(
+            [v for k, v in scope["classes"].items() if k not in closed_keys]
+        ),
+        "note": (
+            "intraday = opened and closed in the same exchange session; swing = still open after "
+            "the opening session ended; unclassified (reason shown) is never guessed and is in "
+            "the 'all' view only. Product (MIS / CNC) is not used."
+        ),
+    }
+
+
+def unresolved_in_range(snap: dict, filters: dict, start: str, end: str) -> dict:
+    """Unresolved ledger fills and orphan fills (fills the engine could not place) whose
+    session date lies in [start, end], for the broker / account / symbol filters. Both are
+    excluded from every figure. ``/unresolved`` lists them; this is the count only."""
+    unresolved = execution_counts(snap["fills"], filters, start, end)["executions_unresolved"]
+    orphans = 0
+    for o in snap.get("orphans") or []:
+        moment = an.parse_time(o.get("fill_time"))  # the book returns ISO strings
+        if moment is not None and start <= session_date(moment).isoformat() <= end:
+            orphans += 1
+    return {
+        "unresolved_fills": unresolved,
+        "orphan_fills": orphans,
+        "total": unresolved + orphans,
+        "start": start,
+        "end": end,
+    }
+
+
+def _leg_net0(leg: dict) -> float:
+    """Net of one closing leg on the headline basis: an unavailable charge counts as 0."""
+    return float(leg["realized_pnl"]) - float(leg["charges"] or 0.0)
+
+
+def reconciliation_block(scope: dict) -> dict:
+    """How the headline (closing LEGS by their own close date) reconciles to the closed
+    position ledger (whole POSITIONS by final close date) for the same filters.
+
+    ``headline_net`` = sum of (realized - charges) of the selected legs in the period
+    (an unavailable charge as 0) = the summary ``net``. ``closed_positions_net`` = sum of
+    ``net_pnl`` of the selected closed positions in the period that have one. The difference
+    is exactly the sum of its parts:
+
+    * ``open_position_partial_exits``: legs in the period of positions still open;
+    * ``later_closed_partial_exits``: legs in the period of positions whose final close is
+      after the period;
+    * ``earlier_legs_of_closed_positions``: legs BEFORE the period of positions closed in
+      it (subtracted: they belong to the position, not to the period's headline);
+    * ``net_unavailable_positions_legs``: legs in the period of closed positions without a
+      net (not in ``closed_positions_net``).
+
+    ``reconciled`` is True when headline - closed_positions_net equals those parts.
+    """
+    s, e = scope["s"], scope["e"]
+    final = {an.position_key(t): t for t in scope["completed_all"]}
+    selected = {an.position_key(t): t for t in scope["trades"]}
+    headline = sum(_leg_net0(t) for t in scope["legs"])
+    positions_net = sum(float(t["net_pnl"]) for t in scope["trades"] if t["net_pnl"] is not None)
+    open_partial = later = earlier = unavailable = 0.0
+    for leg in scope["all_trades"]:
+        if not scope["keep"](leg):
+            continue
+        key = an.position_key(leg)
+        pos = final.get(key)
+        in_range = s <= leg["trade_date"] <= e
+        if in_range:
+            if pos is None:
+                open_partial += _leg_net0(leg)
+            elif pos["trade_date"] > e:
+                later += _leg_net0(leg)
+            elif key in selected and selected[key]["net_pnl"] is None:
+                unavailable += _leg_net0(leg)
+        elif key in selected and leg["trade_date"] < s and selected[key]["net_pnl"] is not None:
+            earlier += _leg_net0(leg)
+    parts = open_partial + later - earlier + unavailable
+    return {
+        "basis": (
+            "headline = closing legs by their own close date; positions = whole positions by "
+            "final close date; both after estimated charges"
+        ),
+        "headline_net": _round(headline),
+        "closed_positions_net": _round(positions_net),
+        "closed_positions": len(scope["trades"]),
+        "net_unavailable_positions": sum(1 for t in scope["trades"] if t["net_pnl"] is None),
+        "open_position_partial_exits": _round(open_partial),
+        "later_closed_partial_exits": _round(later),
+        "earlier_legs_of_closed_positions": _round(earlier),
+        "net_unavailable_positions_legs": _round(unavailable),
+        "difference": _round(headline - positions_net),
+        "reconciled": abs((headline - positions_net) - parts) < 1e-6,
+    }
+
+
 def _summary_parts(
     snap: dict,
     period: str,
@@ -1087,6 +1390,7 @@ def _summary_parts(
     end: str | None,
     filters: dict,
     with_quotes: bool,
+    category: str = "all",
 ) -> dict:
     """Build the summary from ONE snapshot. Returns {"summary", "trades" (in the period),
     "positions" (priced views), "orphans", "today"} so a caller that needs more than the
@@ -1103,18 +1407,11 @@ def _summary_parts(
     estimated; top-level ``net`` == ``realized_net_of_charges`` == realized_gross - charges.
     One snapshot (one ledger load, one fingerprint, one build_id) feeds every figure.
     """
-    all_trades = snap["trades"]
-    floor = reliable_since(snap["fills"])
-    today = session_date(_now())
-    s, e = metrics_svc.resolve_period(
-        period, to_metric_trades(all_trades), today, start, end, floor=floor
-    )
-    legs = [t for t in all_trades if s <= t["trade_date"] <= e]
-    trades = [
-        t
-        for t in an.group_completed(all_trades, snap.get("flat_positions") or [])
-        if s <= t["trade_date"] <= e
-    ]
+    scope = _scope(snap, period, start, end, category)
+    all_trades, floor, today = scope["all_trades"], scope["floor"], scope["today"]
+    s, e = scope["s"], scope["e"]
+    legs, trades = scope["legs"], scope["trades"]
+    keep = scope["keep"]
 
     def _blank(t: dict) -> dict:
         return {
@@ -1145,7 +1442,8 @@ def _summary_parts(
         else:
             row["charges"] += t["charges"]
 
-    pos_view, hours_source = _price_positions(snap["positions"], with_quotes)
+    pos_view_all, hours_source = _price_positions(snap["positions"], with_quotes)
+    pos_view = [p for p in pos_view_all if keep(p)]
     for p in pos_view:
         row = per.setdefault(
             (p["broker"], p["account"], p["exchange"], p["symbol"], p["product"]), _blank(p)
@@ -1218,12 +1516,31 @@ def _summary_parts(
     sync_health, sync_warnings = _sync_health(_now(), None if period == "all" else s)
     warnings.extend(sync_warnings)
     scope_start = floor.isoformat() if period == "all" else s
+    if scope.get("classification_failed"):
+        warnings.append(
+            "classification failed: every position is shown as unclassified (in the 'all' view "
+            "only); totals are unaffected."
+        )
 
     summary = {
         "period": {"period": period, "start": s, "end": e, "reliable_since": floor.isoformat()},
         "metrics": metrics,
         "build_id": snap["build_id"],
         "market_hours_source": hours_source,
+        # category filter (all | intraday | swing) and the classification of the period; the
+        # data_quality, today, execution and source-label blocks ignore it (ledger-level)
+        "category": category,
+        "classification": _safe_block(
+            "classification", lambda: classification_block(scope), warnings
+        ),
+        "unresolved_in_range": _safe_block(
+            "unresolved_in_range",
+            lambda: unresolved_in_range(snap, filters, scope_start, e),
+            warnings,
+        ),
+        "reconciliation": _safe_block(
+            "reconciliation", lambda: reconciliation_block(scope), warnings
+        ),
         "realized_gross": _round(realized),
         "charges": _round(charges),
         "net": _round(realized - charges),
@@ -1254,9 +1571,9 @@ def _summary_parts(
                 filters,
                 scope_start,
                 e,
-                legs,
-                trades,
-                pos_view,
+                scope["legs_period"],
+                scope["trades_period"],
+                pos_view_all,
                 with_quotes,
                 sync_health,
                 sync_warnings,
@@ -1282,7 +1599,7 @@ def _summary_parts(
             lambda: today_block(
                 all_trades,
                 snap.get("flat_positions") or [],
-                pos_view,
+                pos_view_all,
                 snap["fills"],
                 filters,
                 today,
@@ -1298,6 +1615,7 @@ def _summary_parts(
         "positions": pos_view,
         "orphans": orphans,
         "today": today,
+        "scope": scope,
     }
 
 
@@ -1314,6 +1632,7 @@ TODAY_METRICS = (
     "expectancy",
     "avg_win",
     "avg_loss",
+    "count_unavailable_reason",
 )
 
 
@@ -1963,7 +2282,11 @@ LABELS = {
         "A completed trade is one position from flat to flat (a reversal ends it); partial "
         "exits are legs of it. Open positions are not trades."
     ),
-    "ratios": "Win rate, profit factor and expectancy are computed per set of completed trades, never summed.",
+    "ratios": (
+        "Win rate, profit factor, expectancy and average win / loss are computed per set of "
+        "completed trades on NET P&L after estimated charges (a win is net > 0), never summed. "
+        "A trade with no charge estimate has no net: it is left out and counted."
+    ),
     "today": (
         "The current session (session date of now, IST; before SESSION_EXPIRY_TIME the previous "
         "day). Realized counts every exit of the session, partial exits included; completed "
@@ -1976,9 +2299,30 @@ LABELS = {
         "A breakdown row shows its profit factor only when it meets that rule."
     ),
     "consistency": (
-        "Largest win / loss, streaks and daily figures are gross realized (before charges). "
-        "Streaks run over completed trades in close order; a break-even trade ends a streak. "
-        "Average daily P&L and max drawdown need at least 2 trading days."
+        "Largest win / loss and streaks are net of estimated charges; daily figures and this "
+        "max drawdown are gross realized (before charges). Streaks run over completed trades "
+        "in close order; a break-even trade ends a streak. Average daily P&L and max drawdown "
+        "need at least 2 trading days."
+    ),
+    "risk": (
+        "Drawdown is the net realised equity (after estimated charges) by position close time, "
+        "peak starting at 0, in rupees; current drawdown is peak minus latest equity. No "
+        "percentage: there is no capital basis."
+    ),
+    "points": (
+        "Points are per unit of one instrument (symbol + exchange), long: exit - entry, short: "
+        "entry - exit, never summed across instruments. A winner is net P&L > 0. Rupee net P&L "
+        "is the authoritative result."
+    ),
+    "category": (
+        "intraday = opened and closed in the same exchange session; swing = still open after the "
+        "opening session ended; unclassified (reason shown) is in 'all' only. Headline money "
+        "follows the closing legs by their own close date, position tables the whole position by "
+        "final close date; see reconciliation."
+    ),
+    "excursions": (
+        "MAE / MFE: NSE equity only, from one-minute bars along the real fills; a minute-bar "
+        "lower bound, not tick accurate; available after market close once price data is complete."
     ),
     "breakdowns": (
         "Time of day and weekday use the ENTRY time (IST) of the position; holding time the "
@@ -2091,8 +2435,17 @@ def get_performance(
     symbol: str | None = None,
     account: str | None = None,
     with_quotes: bool = False,
+    category: str = "all",
 ) -> dict:
     """Everything the Discretionary Performance page needs from ONE snapshot (one build_id).
+
+    ``category`` (all | intraday | swing, else ValueError) filters the closed positions, their
+    closing legs and the open positions by position key; every figure, table and the headline
+    then describe that category (see ``_scope``). Additive blocks: ``points_by_instrument``,
+    ``risk`` (net-realised drawdown, streaks), ``monthly`` / ``weekday`` (by position close),
+    ``trade_management``, ``costs``, ``classification``, ``unresolved_in_range``,
+    ``reconciliation``; the closed-position rows carry ``category`` and ``points_per_unit``.
+    Win / loss figures are on the NET basis. MAE / MFE are NOT here (lazy ``get_excursions``).
 
     ``get_summary`` plus: by_period {daily, weekly, monthly}, by_symbol, by_side, by_product,
     by_holding {intraday, overnight}, hold, trades (COMPLETED trades, each with ``legs``) /
@@ -2103,9 +2456,10 @@ def get_performance(
     are computed on the filtered set. ``with_quotes`` False (default) makes no broker call.
     Raises ValueError for a bad period or custom range.
     """
+    check_category(category)
     filters = _clean_filters(broker, account, symbol)
     snap = _snapshot(filters, trades=True, positions=True, orphans=True, links=True)
-    parts = _summary_parts(snap, period, start, end, filters, with_quotes)
+    parts = _summary_parts(snap, period, start, end, filters, with_quotes, category)
     out = dict(parts["summary"])
     trades, legs = parts["trades"], parts["legs"]  # completed trades / closing legs
     out["by_period"] = {g: an.period_breakdown(trades, g, legs) for g in an.GRANULARITIES}
@@ -2123,9 +2477,23 @@ def get_performance(
         trades, out["by_period"]["daily"], out["hold"], out["metrics"].get("max_drawdown")
     )
 
+    # Additive blocks; every one is computed from ALL closed positions of the scope (the
+    # table limit below only cuts what is DISPLAYED).
+    out["points_by_instrument"] = _safe_block(
+        "points_by_instrument", lambda: an.points_by_instrument(trades), out["warnings"]
+    )
+    out["risk"] = _safe_block("risk", lambda: an.risk_block(trades), out["warnings"])
+    out["monthly"] = _safe_block("monthly", lambda: an.monthly_table(trades), out["warnings"])
+    out["weekday"] = _safe_block("weekday", lambda: an.weekday_table(trades), out["warnings"])
+    out["trade_management"] = _safe_block(
+        "trade_management", lambda: an.trade_management(trades), out["warnings"]
+    )
+    out["costs"] = _safe_block("costs", lambda: an.costs_summary(trades), out["warnings"])
+
     newest = sorted(trades, key=lambda t: (t["closed_at"], t["id"]), reverse=True)
     out["trades"] = newest[:TABLE_LIMIT]
     out["trades_total"] = len(newest)
+    out["trades_shown"] = len(out["trades"])
     out["trades_truncated"] = max(0, len(newest) - TABLE_LIMIT)
     positions = parts["positions"]
     out["positions"] = positions[:TABLE_LIMIT]
@@ -2135,6 +2503,408 @@ def get_performance(
     out["labels"] = dict(LABELS)
     out["quotes_requested"] = bool(with_quotes)
     return out
+
+
+# ---------------------------------------------------------------- MAE / MFE (lazy)
+
+# Positions whose bars are read per request (the most recent ones); the rest of a larger scope
+# is reported as ``not_computed_cap``, never estimated. Each read is one short Historify
+# SELECT; every read of one computation shares ONE DuckDB connection (``_shared_connection``),
+# closed when the computation ends, on every path.
+EXCURSION_MAX_POSITIONS = 300
+_excursion_cache = LockedTTLCache(maxsize=5000, ttl=6 * 3600)
+
+
+_BARS_SQL = (
+    "SELECT timestamp, open, high, low, close, volume, oi FROM market_data "
+    "WHERE symbol = ? AND exchange = ? AND interval = '1m' "
+    "AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC"
+)
+
+
+class _LazyConnection:
+    """One Historify connection per computation, opened on the first read (a computation
+    that never reads, e.g. all cached, opens none), closed by ``close``. A failed open is
+    remembered and re-raised, so a broken database is not retried (with back-off sleeps) for
+    every position."""
+
+    def __init__(self):
+        self._stack = contextlib.ExitStack()
+        self._conn = None
+        self._error: Exception | None = None
+
+    def get(self):
+        if self._error is not None:
+            raise self._error
+        if self._conn is None:
+            from database.historify_db import get_connection
+
+            try:
+                self._conn = self._stack.enter_context(get_connection())
+            except Exception as exc:
+                self._error = exc
+                raise
+        return self._conn
+
+    def close(self) -> None:
+        self._stack.close()
+
+
+_active_connection: contextvars.ContextVar[_LazyConnection | None] = contextvars.ContextVar(
+    "discretionary_excursion_connection", default=None
+)
+
+
+@contextlib.contextmanager
+def _shared_connection():
+    """All ``_read_bars`` calls inside the block use one lazily opened connection, closed in
+    the ``finally`` (also when a read raises)."""
+    lazy = _LazyConnection()
+    token = _active_connection.set(lazy)
+    try:
+        yield lazy
+    finally:
+        _active_connection.reset(token)
+        lazy.close()
+
+
+def _read_bars(symbol: str, exchange: str, start_ts: int, end_ts: int):
+    """One-minute Historify bars (epoch seconds, inclusive) as a DataFrame with ``timestamp``
+    / ``high`` / ``low`` columns. Read only; tests replace this.
+
+    Runs the exact-window parameterised SELECT through ``get_connection`` so that a real
+    read error RAISES (``database.historify_db.get_ohlcv`` swallows errors and returns an
+    empty frame, which would be reported as missing data). Uses the shared connection of
+    the running computation, or opens (and closes) its own."""
+    params = [symbol.upper(), exchange.upper(), int(start_ts), int(end_ts)]
+    lazy = _active_connection.get()
+    if lazy is not None:
+        return lazy.get().execute(_BARS_SQL, params).fetchdf()
+    from database.historify_db import get_connection
+
+    with get_connection() as conn:
+        return conn.execute(_BARS_SQL, params).fetchdf()
+
+
+def _bars_by_minute(frame) -> dict[datetime, tuple[float, float]]:
+    """{naive IST minute: (high, low)} of a bar frame; empty for None / no rows."""
+    if frame is None or len(frame) == 0:
+        return {}
+    out = {}
+    for ts, high, low in zip(
+        frame["timestamp"].tolist(), frame["high"].tolist(), frame["low"].tolist(), strict=True
+    ):
+        moment = datetime.fromtimestamp(int(ts), tz=_IST).replace(tzinfo=None)
+        out[moment.replace(second=0, microsecond=0)] = (high, low)
+    return out
+
+
+def _epoch(moment: datetime) -> int:
+    return int(moment.replace(tzinfo=_IST).timestamp())
+
+
+def _position_fills(snap: dict, trade: dict, links_by_leg: dict, fills_by_id: dict) -> list[dict]:
+    """The fills of one completed position in processing order (an.excursion fill dicts).
+
+    Every leg's links are merged per (fill, role) (an entry consumed pro rata by several
+    legs is one fill with the summed quantity; a reversing fill contributes only its closing
+    part), priced and timed from the ledger fill, ordered by the engine's own rule
+    (fill_time, order_id, fill_id, id)."""
+    merged: dict[tuple, float] = {}
+    for leg_id in trade["leg_ids"]:
+        for link in links_by_leg.get(leg_id, []):
+            key = (link["fill_ref"], link["role"])
+            merged[key] = merged.get(key, 0.0) + float(link["qty_used"])
+    rows = []
+    for (ref, role), qty in merged.items():
+        f = fills_by_id.get(ref)
+        if f is None:
+            return []
+        rows.append(
+            {
+                "time": f["fill_time"],
+                "role": role,
+                "qty": qty,
+                "price": f["price"],
+                "_sort": (
+                    f["fill_time"],
+                    str(f.get("order_id") or ""),
+                    str(f.get("fill_id") or ""),
+                    f["id"],
+                    role,
+                ),
+            }
+        )
+    rows.sort(key=lambda r: r["_sort"])
+    for r in rows:
+        del r["_sort"]
+    return rows
+
+
+def position_excursion_result(
+    trade: dict, fills: list[dict], provider, now: datetime, reader=None
+) -> dict:
+    """MAE / MFE of one completed position (see ``an.position_excursion``) with the checks
+    that need the clock and Historify:
+
+    * unsupported segment (anything but NSE equity) => unavailable, no read;
+    * closed today and the exchange session has not ended yet => ``after_market_close``;
+    * the fills are validated BEFORE any read (``an.position_excursion`` with no bars);
+    * bars are read for [first fill minute, last fill minute] only; a missing minute makes
+      it unavailable (``missing_bars``, or ``historify_incomplete`` when the position closed
+      today: the day's data is still being processed). Nothing is estimated.
+    A past day's available result is cached (its bars are final); unavailable ones are not.
+    """
+    reader = reader or _read_bars
+    if not an.excursion_segment_supported(trade["exchange"], trade["symbol"]):
+        return an.excursion_unavailable("unsupported_segment")
+    if not fills:
+        return an.excursion_unavailable("no_fills")
+    closed = an.parse_time(trade["closed_at"])
+    if closed is None:
+        return an.excursion_unavailable("fill_times_unreliable")
+    if closed.date() >= now.date():
+        try:
+            window = provider(closed.date(), trade["exchange"])
+        except an.SessionCalendarUnavailable:
+            return an.excursion_unavailable("session_calendar_unavailable")
+        if window is not None and now < window.end:
+            return an.excursion_unavailable("after_market_close")
+    pre = an.position_excursion(trade["direction"], fills, {}, trade["exchange"], provider)
+    if pre["reason"] != "missing_bars":
+        return pre  # unavailable for a reason that needs no bars (or cannot be, with none)
+    key = (
+        trade["symbol"],
+        trade["exchange"],
+        trade["direction"],
+        tuple((f["time"].isoformat(), f["role"], f["qty"], f["price"]) for f in fills),
+    )
+    cached = _excursion_cache.get(key)
+    if cached is not None:
+        return dict(cached)
+    first = fills[0]["time"].replace(second=0, microsecond=0)
+    last = fills[-1]["time"].replace(second=0, microsecond=0)
+    try:
+        bars = _bars_by_minute(
+            reader(trade["symbol"], trade["exchange"], _epoch(first), _epoch(last))
+        )
+    except Exception as e:
+        logger.warning("Discretionary excursion bar read failed: %s", type(e).__name__)
+        return an.excursion_unavailable("bar_read_failed")
+    result = an.position_excursion(trade["direction"], fills, bars, trade["exchange"], provider)
+    if result["status"] != "available":
+        if result["reason"] == "missing_bars" and closed.date() >= now.date():
+            return an.excursion_unavailable("historify_incomplete")
+        return result
+    if closed.date() < now.date():
+        _excursion_cache[key] = dict(result)
+    return result
+
+
+def excursion_rows(snap: dict, scope: dict, reader=None) -> tuple[list[dict], int]:
+    """(rows, computed): one row per closed position of the scope, newest close first, with
+    its excursion status. At most ``EXCURSION_MAX_POSITIONS`` NSE-equity positions are
+    read (the newest); the others are ``not_computed_cap``. ``computed`` counts the reads."""
+    provider = session_provider()
+    links_by_leg: dict[int, list[dict]] = {}
+    for link in snap.get("links") or []:
+        if link.get("trade_id") is not None:
+            links_by_leg.setdefault(link["trade_id"], []).append(link)
+    fills_by_id = {f["id"]: f for f in snap["fills"]}
+    with _shared_connection():
+        return _excursion_rows_in(snap, scope, reader, provider, links_by_leg, fills_by_id)
+
+
+def _excursion_rows_in(snap, scope, reader, provider, links_by_leg, fills_by_id):
+    rows, reads = [], 0
+    for t in sorted(scope["trades"], key=lambda t: (t["closed_at"], t["id"]), reverse=True):
+        supported = an.excursion_segment_supported(t["exchange"], t["symbol"])
+        if supported and reads >= EXCURSION_MAX_POSITIONS:
+            result = an.excursion_unavailable("not_computed_cap")
+        else:
+            fills = _position_fills(snap, t, links_by_leg, fills_by_id) if supported else []
+            reads += 1 if supported else 0
+            result = position_excursion_result(t, fills, provider, scope["now"], reader)
+        net = t["net_pnl"]
+        rows.append(
+            {
+                "id": t["id"],
+                "symbol": t["symbol"],
+                "exchange": t["exchange"],
+                "direction": t["direction"],
+                "category": t["category"],
+                "opened_at": t["opened_at"],
+                "closed_at": t["closed_at"],
+                "closed_quantity": t["closed_quantity"],
+                "points_per_unit": _round(t["points_per_unit"]),
+                "net_pnl": _round(net),
+                **{
+                    k: result[k]
+                    for k in (
+                        "status",
+                        "reason",
+                        "reason_text",
+                        "mae_points",
+                        "mfe_points",
+                        "mae_amount",
+                        "mfe_amount",
+                        "minute_bar_precision",
+                    )
+                },
+                "profit_capture": _round(
+                    an.profit_capture(net, t["points_per_unit"], result["mfe_points"]), 4
+                ),
+            }
+        )
+    return rows, reads
+
+
+def get_excursions(
+    period: str = "30d",
+    start: str | None = None,
+    end: str | None = None,
+    broker: str | None = None,
+    symbol: str | None = None,
+    account: str | None = None,
+    category: str = "all",
+    reader=None,
+) -> dict:
+    """Lazy MAE / MFE of the closed positions of a scope (same filters as the summary, incl.
+    ``category``). Kept OUT of the summary so that stays fast. Per position: ``status``
+    available / unavailable with a ``reason`` code; plus ``aggregates`` (average / median
+    MAE and MFE of winners and losers, profit capture of winners, sample counts, ``N of M
+    positions available``), ``note`` and the cap. Raises ValueError for a bad period or
+    category. Read only: Historify SELECTs, no broker call."""
+    check_category(category)
+    filters = _clean_filters(broker, account, symbol)
+    snap = _snapshot(filters, trades=True, positions=True, orphans=True, links=True)
+    scope = _scope(snap, period, start, end, category)
+    rows, computed = excursion_rows(snap, scope, reader)
+    return {
+        "build_id": snap["build_id"],
+        "period": {"period": period, "start": scope["s"], "end": scope["e"]},
+        "category": category,
+        "positions": rows,
+        "positions_total": len(rows),
+        "computed": computed,
+        "cap": EXCURSION_MAX_POSITIONS,
+        "aggregates": an.excursion_aggregates(rows),
+        "note": an.EXCURSION_NOTE,
+    }
+
+
+EXPORT_COLUMNS = (
+    "trade_date",
+    "symbol",
+    "exchange",
+    "category",
+    "category_reason",
+    "direction",
+    "product",
+    "broker",
+    "opened_at",
+    "closed_at",
+    "holding_minutes",
+    "closed_quantity",
+    "avg_entry_price",
+    "avg_exit_price",
+    "points_per_unit",
+    "gross_pnl",
+    "charges",
+    "net_pnl",
+    "mae_points",
+    "mfe_points",
+    "mae_amount",
+    "mfe_amount",
+    "profit_capture",
+    "excursion_status",
+    "excursion_reason",
+)
+EXPORT_NUMERIC = frozenset(
+    {
+        "holding_minutes",
+        "closed_quantity",
+        "avg_entry_price",
+        "avg_exit_price",
+        "points_per_unit",
+        "gross_pnl",
+        "charges",
+        "net_pnl",
+        "mae_points",
+        "mfe_points",
+        "mae_amount",
+        "mfe_amount",
+        "profit_capture",
+    }
+)
+
+
+def get_export(
+    period: str = "30d",
+    start: str | None = None,
+    end: str | None = None,
+    broker: str | None = None,
+    symbol: str | None = None,
+    account: str | None = None,
+    category: str = "all",
+    reader=None,
+) -> dict:
+    """{"start", "end", "category", "columns", "rows"}: EVERY closed position of the scope
+    (the summary's table limit does not apply; ``len(rows)`` equals the summary's closed
+    positions of the same filters), newest close first. MAE / MFE come from the same
+    computation as ``get_excursions`` (``excursion_rows``); a figure that is unavailable is
+    None (an empty CSV cell), never 0. Unresolved and orphan fills are in no row."""
+    check_category(category)
+    filters = _clean_filters(broker, account, symbol)
+    snap = _snapshot(filters, trades=True, positions=True, orphans=True, links=True)
+    scope = _scope(snap, period, start, end, category)
+    excursions, _computed = excursion_rows(snap, scope, reader)
+    by_id = {r["id"]: r for r in excursions}
+    rows = []
+    for t in sorted(scope["trades"], key=lambda t: (t["closed_at"], t["id"]), reverse=True):
+        ex = by_id[t["id"]]
+        rows.append(
+            {
+                "trade_date": t["trade_date"],
+                "symbol": t["symbol"],
+                "exchange": t["exchange"],
+                "category": t["category"],
+                "category_reason": t["category_reason"],
+                "direction": t["direction"],
+                "product": t["product"],
+                "broker": t["broker"],
+                "opened_at": _iso_ist(t["opened_at"]),
+                "closed_at": _iso_ist(t["closed_at"]),
+                "holding_minutes": t["hold_minutes"],
+                "closed_quantity": t["closed_quantity"],
+                "avg_entry_price": t["entry_price"],
+                "avg_exit_price": t["exit_price"],
+                "points_per_unit": _round(t["points_per_unit"]),
+                "gross_pnl": _round(t["realized_pnl"]),
+                "charges": _round(t["charges"]),
+                "net_pnl": _round(t["net_pnl"]),
+                "mae_points": ex["mae_points"],
+                "mfe_points": ex["mfe_points"],
+                "mae_amount": ex["mae_amount"],
+                "mfe_amount": ex["mfe_amount"],
+                "profit_capture": ex["profit_capture"],
+                "excursion_status": ex["status"],
+                "excursion_reason": ex["reason"],
+            }
+        )
+    return {
+        "start": scope["s"],
+        "end": scope["e"],
+        "category": category,
+        "columns": list(EXPORT_COLUMNS),
+        "rows": rows,
+    }
+
+
+def _iso_ist(value) -> str | None:
+    """ISO 8601 with the IST offset of a naive IST time (a datetime or the book's ISO text)."""
+    moment = an.parse_time(value)
+    return None if moment is None else moment.isoformat(sep=" ") + "+05:30"
 
 
 # ---------------------------------------------------------------- PositionBook reconciliation
