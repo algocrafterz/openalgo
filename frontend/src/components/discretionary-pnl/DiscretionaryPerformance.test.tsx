@@ -191,9 +191,11 @@ describe('empty and error states', () => {
     await userEvent.click(screen.getByRole('button', { name: 'View details' }))
     expect(await screen.findByText('TCS')).toBeInTheDocument()
     expect(screen.getByText(/excluded from completed-trade statistics until/)).toBeInTheDocument()
-    expect(screen.getByTestId('discretionary-warnings')).toHaveTextContent(
-      '5 unresolved fill(s) are excluded'
+    // the range banner carries the count; the ledger-wide backend line is not repeated
+    expect(screen.getByTestId('unresolved-warning')).toHaveTextContent(
+      '5 fills in the selected range'
     )
+    expect(screen.queryByTestId('discretionary-warnings')).not.toBeInTheDocument()
   })
 
   it('fills in N from the counts', async () => {

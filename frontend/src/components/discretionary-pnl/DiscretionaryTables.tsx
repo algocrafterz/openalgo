@@ -28,10 +28,11 @@ import {
   fmtStamp,
   fmtWinRate,
   netIncomplete,
-  type PriceBadge,
+  pnlTextClass,
   priceBadge,
+  type PriceBadge,
 } from '@/lib/discretionaryPnlView'
-import { fmtDuration, pnlClass } from '@/lib/strategyPnlView'
+import { fmtDuration } from '@/lib/strategyPnlView'
 import { cn } from '@/lib/utils'
 
 type Money = (value: number) => string
@@ -40,7 +41,7 @@ type Money = (value: number) => string
 function IncompleteMark({ count }: { count: number }) {
   return (
     <span
-      className="ml-1 text-xs text-amber-600"
+      className="ml-1 text-xs text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
       title={`${count} trade(s) have no charge estimate`}
     >
       incomplete
@@ -49,9 +50,9 @@ function IncompleteMark({ count }: { count: number }) {
 }
 
 const TONE_CLASS: Record<PriceBadge['tone'], string> = {
-  ok: 'border-green-600/40 text-green-600',
-  warn: 'border-amber-500/50 text-amber-600',
-  bad: 'border-red-600/40 text-red-600',
+  ok: 'border-green-600/40 text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600',
+  warn: 'border-amber-500/50 text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500',
+  bad: 'border-red-600/40 text-red-600 dark:text-red-400',
   muted: 'text-muted-foreground',
 }
 
@@ -103,13 +104,13 @@ export function PeriodTable({
             <TableCell className="text-right font-mono">
               {row.wins} / {row.losses}
             </TableCell>
-            <TableCell className={cn('text-right font-mono', pnlClass(row.realized_gross))}>
+            <TableCell className={cn('text-right font-mono', pnlTextClass(row.realized_gross))}>
               {formatCurrency(row.realized_gross)}
             </TableCell>
             <TableCell className="text-right font-mono text-muted-foreground">
               {formatCurrency(row.charges)}
             </TableCell>
-            <TableCell className={cn('text-right font-mono', pnlClass(row.net_of_charges))}>
+            <TableCell className={cn('text-right font-mono', pnlTextClass(row.net_of_charges))}>
               {formatCurrency(row.net_of_charges)}
               {netIncomplete(row) && <IncompleteMark count={row.charges_unavailable_trades} />}
             </TableCell>
@@ -166,10 +167,10 @@ export function BreakdownTable({
                 <TableCell className="text-right font-mono">
                   {fmtDuration(row.avg_hold_minutes)}
                 </TableCell>
-                <TableCell className={cn('text-right font-mono', pnlClass(row.realized_gross))}>
+                <TableCell className={cn('text-right font-mono', pnlTextClass(row.realized_gross))}>
                   {formatCurrency(row.realized_gross)}
                 </TableCell>
-                <TableCell className={cn('text-right font-mono', pnlClass(row.net_of_charges))}>
+                <TableCell className={cn('text-right font-mono', pnlTextClass(row.net_of_charges))}>
                   {formatCurrency(row.net_of_charges)}
                   {netIncomplete(row) && <IncompleteMark count={row.charges_unavailable_trades} />}
                 </TableCell>
@@ -184,7 +185,14 @@ export function BreakdownTable({
 
 function DirectionBadge({ direction }: { direction: 'LONG' | 'SHORT' }) {
   return (
-    <Badge variant="outline" className={direction === 'LONG' ? 'text-green-600' : 'text-red-600'}>
+    <Badge
+      variant="outline"
+      className={
+        direction === 'LONG'
+          ? 'text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600'
+          : 'text-red-600 dark:text-red-400'
+      }
+    >
       {direction === 'LONG' ? 'Long' : 'Short'}
     </Badge>
   )
@@ -198,7 +206,11 @@ function CategoryBadge({ trade }: { trade: DiscretionaryTrade }) {
   return (
     <Badge
       variant="outline"
-      className={unclassified ? 'border-amber-500/50 text-amber-600' : 'text-muted-foreground'}
+      className={
+        unclassified
+          ? 'border-amber-500/50 text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500'
+          : 'text-muted-foreground'
+      }
       title={
         unclassified ? `Unclassified: ${categoryReasonText(trade.category_reason)}` : undefined
       }
@@ -314,7 +326,7 @@ export function ClosedTradesTable({
                 {t.opening_unknown && (
                   <Badge
                     variant="outline"
-                    className="ml-1 border-amber-500/50 text-[10px] text-amber-600"
+                    className="ml-1 border-amber-500/50 text-[10px] text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
                     title="The fill that opened this position is not in the ledger, so the entry price may be off."
                   >
                     opening unknown
@@ -323,7 +335,7 @@ export function ClosedTradesTable({
                 {t.has_orphan_fills && (
                   <Badge
                     variant="outline"
-                    className="ml-1 border-amber-500/50 text-[10px] text-amber-600"
+                    className="ml-1 border-amber-500/50 text-[10px] text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
                     title={`${t.orphan_fills ?? 'Some'} fill(s) of this position could not be placed and are not in its figures.`}
                   >
                     unplaced fills
@@ -357,12 +369,12 @@ export function ClosedTradesTable({
                 )}
               </TableCell>
               <TableCell
-                className={cn('text-right font-mono', pnlClass(t.points_per_unit ?? 0))}
+                className={cn('text-right font-mono', pnlTextClass(t.points_per_unit ?? 0))}
                 title="Exit minus entry for a long, entry minus exit for a short, per unit"
               >
                 {fmtPoints(t.points_per_unit)}
               </TableCell>
-              <TableCell className={cn('text-right font-mono', pnlClass(t.realized_pnl))}>
+              <TableCell className={cn('text-right font-mono', pnlTextClass(t.realized_pnl))}>
                 {formatCurrency(t.realized_pnl)}
               </TableCell>
               <TableCell className="text-right">
@@ -376,7 +388,7 @@ export function ClosedTradesTable({
                     variant="outline"
                     className={
                       badge.tone === 'warn'
-                        ? 'border-amber-500/50 text-amber-600'
+                        ? 'border-amber-500/50 text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500'
                         : 'text-muted-foreground'
                     }
                     title={badge.title}
@@ -385,7 +397,7 @@ export function ClosedTradesTable({
                   </Badge>
                 </div>
               </TableCell>
-              <TableCell className={cn('text-right font-mono', pnlClass(t.net_pnl ?? 0))}>
+              <TableCell className={cn('text-right font-mono', pnlTextClass(t.net_pnl ?? 0))}>
                 {t.net_pnl == null ? '—' : formatCurrency(t.net_pnl)}
               </TableCell>
               <TableCell className="text-right font-mono">
@@ -476,12 +488,12 @@ export function OpenPositionsTable({
               <PriceStatusBadge status={p.price_status} ageSeconds={p.age_s} />
             </TableCell>
             <TableCell
-              className={cn('text-right font-mono', pnlClass(p.realized_so_far ?? 0))}
+              className={cn('text-right font-mono', pnlTextClass(p.realized_so_far ?? 0))}
               title="Gross P&L of the partial exits of this position, already in realized"
             >
               {p.realized_so_far ? formatCurrency(p.realized_so_far) : '—'}
             </TableCell>
-            <TableCell className={cn('text-right font-mono', pnlClass(p.unrealized ?? 0))}>
+            <TableCell className={cn('text-right font-mono', pnlTextClass(p.unrealized ?? 0))}>
               {p.unrealized == null ? '—' : formatCurrency(p.unrealized)}
             </TableCell>
             <TableCell>
@@ -490,7 +502,7 @@ export function OpenPositionsTable({
                 {p.opening_unknown && (
                   <Badge
                     variant="outline"
-                    className="border-amber-500/50 text-amber-600"
+                    className="border-amber-500/50 text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
                     title="The fill that opened this position is not in the ledger, so the entry price may be off."
                   >
                     opening position unknown

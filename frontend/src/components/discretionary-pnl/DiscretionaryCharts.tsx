@@ -65,8 +65,9 @@ export function NetBarChart({
                 <span
                   className={cn(
                     'text-right font-mono',
-                    b.value > 0 && 'text-green-600',
-                    b.value < 0 && 'text-red-600'
+                    b.value > 0 &&
+                      'text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600',
+                    b.value < 0 && 'text-red-600 dark:text-red-400'
                   )}
                 >
                   {signedMoney(b.value, formatCurrency)}
@@ -308,10 +309,14 @@ export function MaeMfeScatter({
         data-testid="scatter-legend"
       >
         <li>
-          <span className="text-green-600">Green circle</span>: winner ({counts.winner})
+          <span className="text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600">
+            Green circle
+          </span>
+          : winner ({counts.winner})
         </li>
         <li>
-          <span className="text-red-600">Red diamond</span>: loser ({counts.loser})
+          <span className="text-red-600 dark:text-red-400">Red diamond</span>: loser ({counts.loser}
+          )
         </li>
         {counts.even > 0 && <li>Grey square: break-even or no net ({counts.even})</li>}
       </ul>

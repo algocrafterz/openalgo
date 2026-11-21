@@ -31,15 +31,16 @@ import {
   fmtStamp,
   fmtWinRate,
   HOW_YOU_TRADE_OPTIONS,
-  type HowYouTradeKey,
   NET_DRAWDOWN_BASIS,
   netIncomplete,
+  pnlTextClass,
   rowProfitFactor,
   sampleNote,
   streakText,
   syncSummary,
+  type HowYouTradeKey,
 } from '@/lib/discretionaryPnlView'
-import { fmtDuration, pnlClass } from '@/lib/strategyPnlView'
+import { fmtDuration } from '@/lib/strategyPnlView'
 import { cn } from '@/lib/utils'
 
 type Money = (value: number) => string
@@ -69,7 +70,12 @@ export function SampleNote({ sample }: { sample: SampleContext | undefined }) {
   if (!note) return null
   return (
     <p
-      className={cn('text-xs', note.low ? 'text-amber-600' : 'text-muted-foreground')}
+      className={cn(
+        'text-xs',
+        note.low
+          ? 'text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500'
+          : 'text-muted-foreground'
+      )}
       data-testid="discretionary-sample-note"
     >
       {note.text}
@@ -95,9 +101,11 @@ export function DailyPnlChart({
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
         <div className="text-sm font-medium">Daily P&amp;L (gross)</div>
         <div className="text-xs text-muted-foreground" data-testid="daily-pnl-days">
-          <span className="text-green-600">{profitable} profitable</span>
+          <span className="text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600">
+            {profitable} profitable
+          </span>
           {' / '}
-          <span className="text-red-600">{losing} losing</span>
+          <span className="text-red-600 dark:text-red-400">{losing} losing</span>
           {flat > 0 ? ` / ${flat} flat` : ''} day(s)
         </div>
       </div>
@@ -192,7 +200,7 @@ function TradeButton({
       type="button"
       className={cn(
         'max-w-full break-words text-left underline-offset-2 hover:underline',
-        pnlClass(amount)
+        pnlTextClass(amount)
       )}
       onClick={() => onSelect(trade)}
       aria-label={`Show fills of the ${amount >= 0 ? 'largest win' : 'largest loss'}, ${trade.symbol}`}
@@ -285,7 +293,9 @@ export function RiskStrip({
             {c.avg_daily_pnl == null ? (
               <Unavailable reason={c.avg_daily_unavailable_reason} />
             ) : (
-              <span className={pnlClass(c.avg_daily_pnl)}>{formatCurrency(c.avg_daily_pnl)}</span>
+              <span className={pnlTextClass(c.avg_daily_pnl)}>
+                {formatCurrency(c.avg_daily_pnl)}
+              </span>
             )}
           </StripTile>
           <StripTile
@@ -293,9 +303,11 @@ export function RiskStrip({
             testId="risk-days"
             hint={c.flat_days > 0 ? `${c.flat_days} flat` : `${c.trading_days} trading day(s)`}
           >
-            <span className="text-green-600">{c.profitable_days}</span>
+            <span className="text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600">
+              {c.profitable_days}
+            </span>
             {' / '}
-            <span className="text-red-600">{c.losing_days}</span>
+            <span className="text-red-600 dark:text-red-400">{c.losing_days}</span>
           </StripTile>
           <StripTile
             label="Max consecutive winning trades"
@@ -350,7 +362,9 @@ export function RiskStrip({
                   risk.max_drawdown_at ? `at ${fmtStamp(risk.max_drawdown_at)}` : NET_DRAWDOWN_BASIS
                 }
               >
-                <span className={risk.max_drawdown > 0 ? 'text-red-600' : undefined}>
+                <span
+                  className={risk.max_drawdown > 0 ? 'text-red-600 dark:text-red-400' : undefined}
+                >
                   {risk.max_drawdown > 0 ? '-' : ''}
                   {formatCurrency(Math.abs(risk.max_drawdown))}
                 </span>
@@ -360,7 +374,11 @@ export function RiskStrip({
                 testId="risk-current-drawdown"
                 hint="below the best net equity so far"
               >
-                <span className={risk.current_drawdown > 0 ? 'text-red-600' : undefined}>
+                <span
+                  className={
+                    risk.current_drawdown > 0 ? 'text-red-600 dark:text-red-400' : undefined
+                  }
+                >
                   {risk.current_drawdown > 0 ? '-' : ''}
                   {formatCurrency(Math.abs(risk.current_drawdown))}
                 </span>
@@ -375,7 +393,7 @@ export function RiskStrip({
               {c.max_drawdown == null ? (
                 <Unavailable reason={c.max_drawdown_unavailable_reason} />
               ) : (
-                <span className={c.max_drawdown < 0 ? 'text-red-600' : undefined}>
+                <span className={c.max_drawdown < 0 ? 'text-red-600 dark:text-red-400' : undefined}>
                   {formatCurrency(Math.abs(c.max_drawdown))}
                 </span>
               )}
@@ -402,7 +420,7 @@ export function LowSampleMark() {
 function IncompleteMark({ count }: { count: number }) {
   return (
     <span
-      className="ml-1 text-xs text-amber-600"
+      className="ml-1 text-xs text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
       title={`${count} trade(s) have no charge estimate`}
     >
       incomplete
@@ -453,7 +471,7 @@ export function HowYouTradeTable({
                 <TableCell
                   className={cn(
                     'text-right font-mono',
-                    row.trades > 0 && pnlClass(row.expectancy ?? 0)
+                    row.trades > 0 && pnlTextClass(row.expectancy ?? 0)
                   )}
                 >
                   {row.trades === 0 ? '—' : fmtNetMoney(row.expectancy, formatCurrency)}
@@ -462,13 +480,13 @@ export function HowYouTradeTable({
                   {pf.value}
                   {pf.low && <LowSampleMark />}
                 </TableCell>
-                <TableCell className={cn('text-right font-mono', pnlClass(row.realized_gross))}>
+                <TableCell className={cn('text-right font-mono', pnlTextClass(row.realized_gross))}>
                   {formatCurrency(row.realized_gross)}
                 </TableCell>
                 <TableCell className="text-right font-mono text-muted-foreground">
                   {formatCurrency(row.charges)}
                 </TableCell>
-                <TableCell className={cn('text-right font-mono', pnlClass(row.net_of_charges))}>
+                <TableCell className={cn('text-right font-mono', pnlTextClass(row.net_of_charges))}>
                   {formatCurrency(row.net_of_charges)}
                   {netIncomplete(row) && <IncompleteMark count={row.charges_unavailable_trades} />}
                 </TableCell>
@@ -551,7 +569,7 @@ export function DataQualityStrip({ dq }: { dq: DataQuality }) {
         <span className="font-medium">Data quality</span>
         <span className="text-xs text-muted-foreground">executions of this period and filters</span>
         {!dq.reconciles && (
-          <Badge variant="outline" className="border-red-600/40 text-red-600">
+          <Badge variant="outline" className="border-red-600/40 text-red-600 dark:text-red-400">
             counts do not add up
           </Badge>
         )}
@@ -575,7 +593,7 @@ export function DataQualityStrip({ dq }: { dq: DataQuality }) {
       <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <li data-testid="dq-charges">
           {dq.charges_incomplete_trades > 0 || dq.charges_incomplete_legs > 0 ? (
-            <span className="text-amber-600">
+            <span className="text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500">
               Charges: {dq.charges_incomplete_trades} trade(s) / {dq.charges_incomplete_legs}{' '}
               exit(s) without an estimate
             </span>
@@ -584,7 +602,12 @@ export function DataQualityStrip({ dq }: { dq: DataQuality }) {
           )}
         </li>
         <li data-testid="dq-prices">{dataQualityPrices(dq)}</li>
-        <li data-testid="dq-sync" className={cn(sync.problem && 'text-amber-600')}>
+        <li
+          data-testid="dq-sync"
+          className={cn(
+            sync.problem && 'text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500'
+          )}
+        >
           {sync.text}
         </li>
         {dq.earliest_attributable_at && dq.awaiting_grace > 0 && (
@@ -593,7 +616,10 @@ export function DataQualityStrip({ dq }: { dq: DataQuality }) {
       </ul>
       {problems.length > 0 && (
         // the lines themselves are in the warnings banner above; not repeated here
-        <p className="mt-1 text-xs text-amber-600" data-testid="dq-sync-problems">
+        <p
+          className="mt-1 text-xs text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
+          data-testid="dq-sync-problems"
+        >
           {problems.length} sync problem(s): see the warnings above.
         </p>
       )}

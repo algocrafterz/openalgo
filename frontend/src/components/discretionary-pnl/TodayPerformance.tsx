@@ -18,9 +18,10 @@ import {
   fmtQty,
   fmtStamp,
   pendingAttributionLines,
+  pnlTextClass,
   todayUnrealized,
 } from '@/lib/discretionaryPnlView'
-import { fmtDate, pnlClass } from '@/lib/strategyPnlView'
+import { fmtDate } from '@/lib/strategyPnlView'
 import { cn } from '@/lib/utils'
 
 type Money = (value: number) => string
@@ -97,17 +98,19 @@ export function TodayClosedTable({
                 <TableCell className="text-right font-mono">{fmtPrice(r.exit_price)}</TableCell>
                 <TableCell className="whitespace-nowrap">{entryTime(r, session)}</TableCell>
                 <TableCell className="whitespace-nowrap">{fmtClock(r.closed_at)}</TableCell>
-                <TableCell className={cn('text-right font-mono', pnlClass(r.gross_pnl))}>
+                <TableCell className={cn('text-right font-mono', pnlTextClass(r.gross_pnl))}>
                   {formatCurrency(r.gross_pnl)}
                 </TableCell>
                 <TableCell className="text-right font-mono" title={charges.title}>
                   {r.charges == null ? (
-                    <span className="text-amber-600">unavailable</span>
+                    <span className="text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500">
+                      unavailable
+                    </span>
                   ) : (
                     formatCurrency(r.charges)
                   )}
                 </TableCell>
-                <TableCell className={cn('text-right font-mono', pnlClass(r.net_pnl ?? 0))}>
+                <TableCell className={cn('text-right font-mono', pnlTextClass(r.net_pnl ?? 0))}>
                   {r.net_pnl == null ? '—' : formatCurrency(r.net_pnl)}
                 </TableCell>
                 <TableCell>
@@ -182,7 +185,10 @@ export function TodayPerformance({
             <CardContent className="py-4">
               <div className="text-xs text-muted-foreground">Net after est. charges</div>
               <div
-                className={cn('text-xl font-bold font-mono mt-1 break-words', pnlClass(today.net))}
+                className={cn(
+                  'text-xl font-bold font-mono mt-1 break-words',
+                  pnlTextClass(today.net)
+                )}
               >
                 {formatCurrency(today.net)}
               </div>
@@ -194,7 +200,7 @@ export function TodayPerformance({
                 ) : (
                   <Badge
                     variant="outline"
-                    className="text-[11px] border-amber-500/50 text-amber-600"
+                    className="text-[11px] border-amber-500/50 text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
                     title={`${today.charges_unavailable_legs} exit(s) have no charge estimate: counted as 0`}
                     data-testid="today-charges-incomplete"
                   >
@@ -211,7 +217,7 @@ export function TodayPerformance({
                 className={cn(
                   'text-xl font-bold font-mono mt-1 break-words',
                   (unrealized.kind === 'complete' || unrealized.kind === 'partial') &&
-                    pnlClass(unrealized.value)
+                    pnlTextClass(unrealized.value)
                 )}
               >
                 {unrealizedValue}

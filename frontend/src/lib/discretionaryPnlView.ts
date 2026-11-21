@@ -35,6 +35,13 @@ export const NET_EQUITY_CAPTION =
 export const DRAWDOWN_BASIS = 'gross realized, excludes charges and unrealized'
 export const NET_DRAWDOWN_BASIS = 'net realised, after estimated charges, by close time'
 
+// Small-text colours. Light theme needs the 700 shades for AA on white; dark theme keeps the
+// existing green and uses a lighter red. `.analyzer` is a dark palette that does not carry the
+// `.dark` class (the theme store swaps one for the other), so it gets its own partner for green;
+// its red is already remapped in index.css.
+export const POSITIVE_TEXT = 'text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600'
+export const NEGATIVE_TEXT = 'text-red-600 dark:text-red-400'
+
 /** The source asked for by the URL, ignoring whether the backend allows it. */
 export function parseSourceParam(raw: string | null | undefined): PageSource {
   return raw === DISCRETIONARY_SOURCE ? 'discretionary' : 'strategies'
@@ -314,11 +321,33 @@ const INFORMATIONAL_WARNING_PREFIXES = [
   'unrealized P&L not requested',
 ]
 
-/** Backend warnings worth a banner: informational lines are left to the cards and the sync line. */
-export function actionableWarnings(warnings: string[] | undefined): string[] {
+/**
+ * The backend's ledger-wide line ("N unresolved fill(s) are excluded from P&L until
+ * attributed."). It counts the whole ledger, not the selected range.
+ */
+const LEDGER_UNRESOLVED_WARNING = /^\d+ unresolved fill\(s\) are excluded from P&L/
+
+/**
+ * Backend warnings worth a banner: informational lines are left to the cards and the sync line.
+ * When the server reports the in-range unresolved count (``unresolvedInRange`` present) the
+ * ledger-wide unresolved line is dropped: the range banner says the same thing for the selected
+ * range, and the ledger-wide count misleads on a narrow range. An older server (no
+ * ``unresolved_in_range``) keeps the line. Every other warning is kept as is.
+ */
+export function actionableWarnings(
+  warnings: string[] | undefined,
+  unresolvedInRange?: UnresolvedInRange | null
+): string[] {
   return (warnings ?? []).filter(
-    (w) => !INFORMATIONAL_WARNING_PREFIXES.some((prefix) => w.startsWith(prefix))
+    (w) =>
+      !INFORMATIONAL_WARNING_PREFIXES.some((prefix) => w.startsWith(prefix)) &&
+      !(unresolvedInRange != null && LEDGER_UNRESOLVED_WARNING.test(w))
   )
+}
+
+/** Text colour for a P&L figure: darker green in light theme (AA), lighter red in dark theme. */
+export function pnlTextClass(value: number): string {
+  return value > 0 ? POSITIVE_TEXT : value < 0 ? NEGATIVE_TEXT : ''
 }
 
 /** Plain words for the reason codes the backend attaches to fills it could not use. */

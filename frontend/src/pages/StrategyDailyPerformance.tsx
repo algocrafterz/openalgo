@@ -66,6 +66,7 @@ import {
   type SourceAvailability,
   resolveSource,
 } from '@/lib/discretionaryPnlView'
+import { isEffectiveDark } from '@/lib/effectiveTheme'
 import {
   onlyStrategy,
   parseStrategyFilter,
@@ -424,8 +425,8 @@ function CapitalViewBlock({
 export default function StrategyDailyPerformance() {
   const { user } = useAuthStore()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
-  const { mode: themeMode } = useThemeStore()
-  const isDarkMode = themeMode === 'dark'
+  const { mode: themeMode, appMode: themeAppMode } = useThemeStore()
+  const isDarkMode = isEffectiveDark(themeMode, themeAppMode)
   const queryClient = useQueryClient()
 
   // Period, range and strategy live in the URL, so a refresh or a shared link

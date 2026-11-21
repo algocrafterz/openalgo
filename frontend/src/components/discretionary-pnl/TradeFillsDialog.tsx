@@ -19,8 +19,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { fmtPrice, fmtQty, fmtStamp } from '@/lib/discretionaryPnlView'
-import { fmtDuration, pnlClass } from '@/lib/strategyPnlView'
+import { fmtPrice, fmtQty, fmtStamp, pnlTextClass } from '@/lib/discretionaryPnlView'
+import { fmtDuration } from '@/lib/strategyPnlView'
 import { cn } from '@/lib/utils'
 
 /** A trade picked in the table, with the build of the summary it came from. */
@@ -119,11 +119,11 @@ export function TradeFillsDialog({
                 </span>
                 <span>{trade.product}</span>
                 <span>Held {fmtDuration(trade.hold_minutes)}</span>
-                <span className={cn('font-mono', pnlClass(trade.realized_pnl))}>
+                <span className={cn('font-mono', pnlTextClass(trade.realized_pnl))}>
                   Gross {formatCurrency(trade.realized_pnl)}
                 </span>
                 {trade.net_pnl != null && (
-                  <span className={cn('font-mono', pnlClass(trade.net_pnl))}>
+                  <span className={cn('font-mono', pnlTextClass(trade.net_pnl))}>
                     Net {formatCurrency(trade.net_pnl)}
                   </span>
                 )}

@@ -15,8 +15,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { fmtPct, fmtPoints, fmtWinRate } from '@/lib/discretionaryPnlView'
-import { fmtDuration, pnlClass } from '@/lib/strategyPnlView'
+import { fmtPct, fmtPoints, fmtWinRate, pnlTextClass } from '@/lib/discretionaryPnlView'
+import { fmtDuration } from '@/lib/strategyPnlView'
 import { cn } from '@/lib/utils'
 import { LowSampleMark, StripTile, Unavailable } from './DiscretionaryInsights'
 
@@ -93,7 +93,9 @@ export function PointsByInstrumentTable({ rows }: { rows: PointsByInstrumentRow[
               <TableCell
                 className={cn(
                   'text-right font-mono',
-                  r.gross_points_gained > 0 ? 'text-green-600' : 'text-muted-foreground'
+                  r.gross_points_gained > 0
+                    ? 'text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600'
+                    : 'text-muted-foreground'
                 )}
               >
                 {fmtPoints(r.gross_points_gained)}
@@ -101,16 +103,18 @@ export function PointsByInstrumentTable({ rows }: { rows: PointsByInstrumentRow[
               <TableCell
                 className={cn(
                   'text-right font-mono',
-                  r.gross_points_lost > 0 ? 'text-red-600' : 'text-muted-foreground'
+                  r.gross_points_lost > 0
+                    ? 'text-red-600 dark:text-red-400'
+                    : 'text-muted-foreground'
                 )}
               >
                 {r.gross_points_lost > 0 ? `-${r.gross_points_lost.toFixed(2)}` : '0.00'}
               </TableCell>
-              <TableCell className={cn('text-right font-mono', pnlClass(r.net_points))}>
+              <TableCell className={cn('text-right font-mono', pnlTextClass(r.net_points))}>
                 {fmtPoints(r.net_points)}
               </TableCell>
               <TableCell
-                className={cn('text-right font-mono', pnlClass(r.avg_points_per_position ?? 0))}
+                className={cn('text-right font-mono', pnlTextClass(r.avg_points_per_position ?? 0))}
               >
                 {fmtPoints(r.avg_points_per_position)}
               </TableCell>
@@ -166,21 +170,21 @@ export function CalendarTable({
               <TableCell className="text-right font-mono">
                 {r.win_rate == null ? '—' : fmtWinRate(r.win_rate)}
               </TableCell>
-              <TableCell className={cn('text-right font-mono', pnlClass(r.realized_gross))}>
+              <TableCell className={cn('text-right font-mono', pnlTextClass(r.realized_gross))}>
                 {formatCurrency(r.realized_gross)}
               </TableCell>
               <TableCell className="text-right font-mono text-muted-foreground">
                 {formatCurrency(r.charges)}
                 {r.charges_unavailable_positions > 0 && (
                   <span
-                    className="ml-0.5 text-xs text-amber-600"
+                    className="ml-0.5 text-xs text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
                     title={`${r.charges_unavailable_positions} position(s) have no charge estimate, so charges and net are not complete`}
                   >
                     *<span className="sr-only"> charges incomplete</span>
                   </span>
                 )}
               </TableCell>
-              <TableCell className={cn('text-right font-mono', pnlClass(r.net_of_charges))}>
+              <TableCell className={cn('text-right font-mono', pnlTextClass(r.net_of_charges))}>
                 {r.positions === 0 ? '—' : formatCurrency(r.net_of_charges)}
               </TableCell>
             </TableRow>
@@ -255,7 +259,7 @@ export function TradeManagementStrip({
               {management.median_net_pnl == null ? (
                 <Unavailable reason="no position with a net" />
               ) : (
-                <span className={pnlClass(management.median_net_pnl)}>
+                <span className={pnlTextClass(management.median_net_pnl)}>
                   {formatCurrency(management.median_net_pnl)}
                 </span>
               )}

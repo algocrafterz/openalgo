@@ -60,7 +60,15 @@ function Largest({
   if (!trade) return <Unavailable reason={none} />
   const amount = trade.net_pnl ?? trade.realized_pnl
   return (
-    <span className={amount > 0 ? 'text-green-600' : amount < 0 ? 'text-red-600' : undefined}>
+    <span
+      className={
+        amount > 0
+          ? 'text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600'
+          : amount < 0
+            ? 'text-red-600 dark:text-red-400'
+            : undefined
+      }
+    >
       {formatCurrency(amount)}
       <span className="block break-words font-sans text-[11px] font-normal text-muted-foreground">
         {trade.symbol} {trade.trade_date}
@@ -100,7 +108,7 @@ export function DiscretionaryHeader({
   let drawdownHint: string | undefined
   if (risk) {
     drawdown = (
-      <span className={risk.max_drawdown > 0 ? 'text-red-600' : undefined}>
+      <span className={risk.max_drawdown > 0 ? 'text-red-600 dark:text-red-400' : undefined}>
         {risk.max_drawdown > 0 ? '-' : ''}
         {formatCurrency(Math.abs(risk.max_drawdown))}
       </span>
@@ -113,7 +121,11 @@ export function DiscretionaryHeader({
     drawdown = '—'
     drawdownHint = `${c.max_drawdown_unavailable_reason}; basis: ${DRAWDOWN_BASIS}`
   } else {
-    drawdown = <span className="text-red-600">{formatCurrency(Math.abs(m.max_drawdown ?? 0))}</span>
+    drawdown = (
+      <span className="text-red-600 dark:text-red-400">
+        {formatCurrency(Math.abs(m.max_drawdown ?? 0))}
+      </span>
+    )
     drawdownHint = `basis: ${DRAWDOWN_BASIS}`
   }
 
@@ -184,7 +196,15 @@ export function DiscretionaryHeader({
           {drawdown}
         </StripTile>
         <StripTile label="Gross realized" hint="before charges">
-          <span className={gross > 0 ? 'text-green-600' : gross < 0 ? 'text-red-600' : undefined}>
+          <span
+            className={
+              gross > 0
+                ? 'text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600'
+                : gross < 0
+                  ? 'text-red-600 dark:text-red-400'
+                  : undefined
+            }
+          >
             {formatCurrency(gross)}
           </span>
         </StripTile>

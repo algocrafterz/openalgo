@@ -6,10 +6,11 @@ import {
   fmtNetMoney,
   fmtPct,
   netDefinitionText,
+  pnlTextClass,
   type TotalCard,
   type UnrealizedSummary,
 } from '@/lib/discretionaryPnlView'
-import { fmtDuration, pnlClass } from '@/lib/strategyPnlView'
+import { fmtDuration } from '@/lib/strategyPnlView'
 import { cn } from '@/lib/utils'
 import { TradeManagementStrip } from './DiscretionaryBlocks'
 import { JumpLink, RiskStrip, SampleNote, StripTile } from './DiscretionaryInsights'
@@ -63,7 +64,7 @@ export function DiscretionaryGroups({
               <div
                 className={cn(
                   'mt-1 break-words font-mono text-sm font-semibold',
-                  priced && pnlClass(unrealized.value)
+                  priced && pnlTextClass(unrealized.value)
                 )}
               >
                 {priced ? formatCurrency(unrealized.value) : '—'}
@@ -85,7 +86,7 @@ export function DiscretionaryGroups({
               </div>
             </div>
             <StripTile label={total.label} hint={total.hint}>
-              <span className={pnlClass(total.value)}>{formatCurrency(total.value)}</span>
+              <span className={pnlTextClass(total.value)}>{formatCurrency(total.value)}</span>
             </StripTile>
             <StripTile label="Total won (net)" hint="winning trades, after charges">
               {formatCurrency(m.gross_profit)}
@@ -102,7 +103,10 @@ export function DiscretionaryGroups({
           </div>
           <SampleNote sample={summary.sample} />
           {(m.net_unavailable_trades ?? 0) > 0 && (
-            <p className="text-xs text-amber-600" data-testid="net-unavailable-note">
+            <p
+              className="text-xs text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
+              data-testid="net-unavailable-note"
+            >
               {m.net_unavailable_trades} completed trade(s) have no net P&amp;L (no charge estimate)
               and are left out of win rate, profit factor, expectancy and the averages.
             </p>

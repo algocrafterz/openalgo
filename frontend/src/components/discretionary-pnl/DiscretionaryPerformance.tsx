@@ -236,7 +236,7 @@ export function DiscretionaryPerformance({
   }
 
   const unrealized = useMemo(() => (summary ? summarizeUnrealized(summary) : null), [summary])
-  const warnings = actionableWarnings(summary?.warnings)
+  const warnings = actionableWarnings(summary?.warnings, summary?.unresolved_in_range)
   const sync = syncSummary(summary?.sync_health)
   const metrics = summary?.metrics
   // Executions exist but none is attributable yet (all await attribution): a specific message
@@ -727,7 +727,7 @@ export function DiscretionaryPerformance({
             )}
           </p>
           {unclassifiedScopeNote(summary.classification, category) && (
-            <p className="text-amber-600">
+            <p className="text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500">
               {unclassifiedScopeNote(summary.classification, category)}
             </p>
           )}

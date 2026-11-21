@@ -144,7 +144,9 @@ export function DiscretionaryEquityChart({
       <p
         className={cn(
           'mt-1 text-xs',
-          reconciliation.kind === 'match' ? 'text-muted-foreground' : 'text-amber-600'
+          reconciliation.kind === 'match'
+            ? 'text-muted-foreground'
+            : 'text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500'
         )}
         data-testid="equity-reconciliation"
         data-kind={reconciliation.kind}

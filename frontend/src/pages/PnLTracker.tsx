@@ -2,6 +2,7 @@ import { AlertTriangle, Camera, RefreshCw, TrendingDown, TrendingUp } from 'luci
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { isEffectiveDark } from '@/lib/effectiveTheme'
 import { makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
@@ -63,8 +64,8 @@ interface PnLData {
 }
 
 export default function PnLTracker() {
-  const { mode } = useThemeStore()
-  const isDarkMode = mode === 'dark'
+  const { mode, appMode } = useThemeStore()
+  const isDarkMode = isEffectiveDark(mode, appMode)
   const { user } = useAuthStore()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
 
