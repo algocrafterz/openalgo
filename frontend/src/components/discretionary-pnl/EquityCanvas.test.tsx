@@ -76,7 +76,7 @@ function renderChart(nets: (number | null)[]) {
         curve={curve}
         mode="position"
         reconciliation={reconciliation}
-        basis="Net realised P&L per closed position."
+        basis="Net realised P&L per closed trade."
         isDarkMode={false}
         formatCurrency={money}
       />
@@ -140,7 +140,7 @@ describe('discretionary equity chart', () => {
     renderChart([-50, 30, -20, 80])
     const text = screen.getByTestId('equity-text-summary')
     expect(text).toHaveAttribute('tabindex', '0')
-    expect(text).toHaveTextContent('4 closed positions')
+    expect(text).toHaveTextContent('4 closed trades')
     expect(text).toHaveTextContent(
       'first Rs -50.00, last Rs 40.00, lowest Rs -50.00, highest Rs 40.00'
     )
@@ -149,7 +149,7 @@ describe('discretionary equity chart', () => {
     expect(table.tagName).toBe('DETAILS')
     expect(table.querySelectorAll('tbody tr')).toHaveLength(4)
     expect(screen.getByRole('img').getAttribute('aria-label')).toContain(
-      'Equity per closed position'
+      'Equity per closed trade'
     )
   })
 

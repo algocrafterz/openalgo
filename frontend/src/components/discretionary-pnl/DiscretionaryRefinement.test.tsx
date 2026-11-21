@@ -413,7 +413,7 @@ describe('equity captions on the page', () => {
     )
     renderIt({ period: '1d' })
     expect(await screen.findByTestId('equity-reconciliation')).toHaveTextContent(
-      'Curve shows the newest 500 of 640 closed positions'
+      'Curve shows the newest 500 of 640 closed trades'
     )
     expect(screen.getByTestId('equity-reconciliation')).toHaveTextContent(
       'the Risk card covers all 640'

@@ -1218,7 +1218,7 @@ describe("today's performance", () => {
     )
     renderIt()
     const section = await screen.findByTestId('discretionary-today')
-    expect(within(section).getByText("Today's closed positions")).toBeInTheDocument()
+    expect(within(section).getByText("Today's closed trades")).toBeInTheDocument()
     // Today's figures sit in the summary header, right after the headline figures and before the groups
     const cards = screen.getByText('Net realized (after est. charges)')
     expect(cards.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
@@ -1264,7 +1264,7 @@ describe("today's performance", () => {
     expect(within(section).getByTestId('today-pending')).toHaveTextContent(
       'Earliest attribution at 11:20 IST'
     )
-    expect(within(section).getByText('No positions closed today yet')).toBeInTheDocument()
+    expect(within(section).getByText('No trades closed today yet')).toBeInTheDocument()
   })
 
   it('is absent when an older server sends no today block', async () => {
@@ -1925,7 +1925,33 @@ describe('MAE / MFE', () => {
   })
 })
 
-describe('closed positions table', () => {
+describe('Advanced analysis jump links', () => {
+  it('opens the collapsed section, then reaches the target', async () => {
+    renderIt()
+    const toggle = await screen.findByTestId('advanced-analysis-toggle')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByTestId('excursion-card')).not.toBeInTheDocument()
+    const scroll = vi.fn()
+    window.HTMLElement.prototype.scrollIntoView = scroll
+    await userEvent.click(
+      within(screen.getByTestId('advanced-jump-links')).getByRole('link', { name: 'MAE / MFE' })
+    )
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    const card = await screen.findByTestId('excursion-card')
+    await waitFor(() => expect(scroll).toHaveBeenCalled())
+    expect(scroll.mock.contexts[0]).toBe(card)
+  })
+
+  it('has a Points by instrument link when the server sent points', async () => {
+    summaryFn.mockResolvedValue(summary({ points_by_instrument: [pointsRow()] }))
+    renderIt()
+    await screen.findByTestId('advanced-analysis-toggle')
+    const links = within(screen.getByTestId('advanced-jump-links')).getAllByRole('link')
+    expect(links.map((l) => l.textContent)).toContain('Points by instrument')
+  })
+})
+
+describe('closed trades table', () => {
   it('has the eleven primary columns and moves the secondary ones to the detail row', async () => {
     renderIt()
     const table = (await screen.findByText('Closed trades')).closest(

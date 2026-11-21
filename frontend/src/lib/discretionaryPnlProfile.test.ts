@@ -468,7 +468,7 @@ describe('drawdownReconciliation', () => {
   it('names the cut list and the basis of each when the trades are truncated', () => {
     const r = drawdownReconciliation({ ...base, tradesShown: 7, tradesTotal: 640, risk: risk() })
     expect(r.kind).toBe('truncated')
-    expect(r.text).toContain('Curve shows the newest 7 of 640 closed positions')
+    expect(r.text).toContain('Curve shows the newest 7 of 640 closed trades')
     expect(r.text).toContain('the Risk card covers all 640')
   })
 

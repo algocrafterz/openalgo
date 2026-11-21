@@ -55,7 +55,7 @@ import { CalendarTable, CategorySelector, PointsByInstrumentTable } from './Disc
 import { NetBarChart } from './DiscretionaryCharts'
 import { DiscretionaryEquityChart } from './DiscretionaryEquityChart'
 import { DiscretionaryGroups } from './DiscretionaryGroups'
-import { DailyPnlChart, DataQualityStrip, HowYouTradeCard } from './DiscretionaryInsights'
+import { DailyPnlChart, DataQualityStrip, HowYouTradeCard, JumpLink } from './DiscretionaryInsights'
 import { DiscretionaryHeader, TodayLine, TradingInsights } from './DiscretionarySummary'
 import {
   BreakdownTable,
@@ -559,6 +559,20 @@ export function DiscretionaryPerformance({
               </span>
             </Button>
           </CollapsibleTrigger>
+          <p className="px-4 pb-3 text-xs text-muted-foreground" data-testid="advanced-jump-links">
+            Jump to:{' '}
+            {summary.points_by_instrument && (
+              <>
+                <JumpLink to="discretionary-points" beforeJump={() => setAdvancedOpen(true)}>
+                  Points by instrument
+                </JumpLink>
+                {' · '}
+              </>
+            )}
+            <JumpLink to="discretionary-excursion" beforeJump={() => setAdvancedOpen(true)}>
+              MAE / MFE
+            </JumpLink>
+          </p>
           <CollapsibleContent className="space-y-6 border-t p-4">
             <DiscretionaryGroups
               summary={summary}

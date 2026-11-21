@@ -846,7 +846,7 @@ export function unclassifiedReasonsText(reasons: Record<string, number> | undefi
 export function classificationLine(c: ClassificationBlock | null | undefined): string | null {
   if (!c) return null
   const k = c.closed
-  return `Closed positions in this range: ${k.intraday} intraday, ${k.swing} swing, ${k.unclassified} unclassified.`
+  return `Closed trades in this range: ${k.intraday} intraday, ${k.swing} swing, ${k.unclassified} unclassified.`
 }
 
 /** Unclassified positions count only in All trades; say so when a category is chosen. */
@@ -1202,13 +1202,13 @@ export function drawdownReconciliation(args: {
   if (!risk) {
     return {
       kind: 'no_risk',
-      text: `Maximum drawdown on this curve: ${curveDd} (net, per closed position by close time, peak starts at 0). The server sent no Risk card to compare with.`,
+      text: `Maximum drawdown on this curve: ${curveDd} (net, per closed trade by close time, peak starts at 0). The server sent no Risk card to compare with.`,
     }
   }
   if (tradesTotal > tradesShown) {
     return {
       kind: 'truncated',
-      text: `Curve shows the newest ${tradesShown} of ${tradesTotal} closed positions and starts from 0 at the first of them (maximum drawdown ${curveDd}); the Risk card covers all ${tradesTotal} (maximum drawdown ${money(risk.max_drawdown)}).`,
+      text: `Curve shows the newest ${tradesShown} of ${tradesTotal} closed trades and starts from 0 at the first of them (maximum drawdown ${curveDd}); the Risk card covers all ${tradesTotal} (maximum drawdown ${money(risk.max_drawdown)}).`,
     }
   }
   const same =

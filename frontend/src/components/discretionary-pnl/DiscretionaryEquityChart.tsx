@@ -15,7 +15,7 @@ export function curveSummaryText(curve: NetCurve, mode: 'position' | 'day', mone
   const pts = curve.points
   if (pts.length === 0) return 'No points.'
   const eq = pts.map((p) => p.equity)
-  const unit = mode === 'position' ? 'closed position' : 'day'
+  const unit = mode === 'position' ? 'closed trade' : 'day'
   return `${pts.length} ${unit}${pts.length === 1 ? '' : 's'}. Cumulative net P&L: first ${money(eq[0])}, last ${money(eq[eq.length - 1])}, lowest ${money(Math.min(...eq))}, highest ${money(Math.max(...eq))}. Maximum drawdown ${money(curve.maxDrawdown)}, current drawdown ${money(curve.currentDrawdown)}.`
 }
 
@@ -115,7 +115,7 @@ export function DiscretionaryEquityChart({
       </div>
       <div
         role="img"
-        aria-label={`${mode === 'position' ? 'Equity per closed position' : 'End-of-day equity'}. ${summaryText}`}
+        aria-label={`${mode === 'position' ? 'Equity per closed trade' : 'End-of-day equity'}. ${summaryText}`}
       >
         <EquityCanvas
           points={curve.points}
@@ -126,7 +126,7 @@ export function DiscretionaryEquityChart({
       </div>
       <p className="mt-1 text-[11px] text-muted-foreground" data-testid="equity-axis-note">
         {mode === 'position'
-          ? 'Horizontal axis: closed position number in close order. Close times are in the hover and the table; positions closed in the same second keep their order.'
+          ? 'Horizontal axis: closed trade number in close order. Close times are in the hover and the table; trades closed in the same second keep their order.'
           : 'Horizontal axis: close date.'}
       </p>
       {n <= 3 && (

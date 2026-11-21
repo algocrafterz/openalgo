@@ -46,18 +46,38 @@ import { cn } from '@/lib/utils'
 
 type Money = (value: number) => string
 
-/** In-page link that scrolls to a section and keeps the page URL (and its filters) as it is. */
-export function JumpLink({ to, children }: { to: string; children: React.ReactNode }) {
+/**
+ * In-page link that scrolls to a section and keeps the page URL (and its filters) as it is.
+ * `beforeJump` runs first for targets inside a collapsed section; the jump then waits for the
+ * target to render.
+ */
+export function JumpLink({
+  to,
+  children,
+  beforeJump,
+}: {
+  to: string
+  children: React.ReactNode
+  beforeJump?: () => void
+}) {
+  const go = (tries: number) => {
+    const el = document.getElementById(to)
+    if (!el) {
+      if (tries > 0) requestAnimationFrame(() => go(tries - 1))
+      return
+    }
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    el.focus?.({ preventScroll: true })
+  }
   return (
     <a
       className="underline underline-offset-2"
       href={`#${to}`}
       onClick={(e) => {
-        const el = document.getElementById(to)
-        if (!el) return
+        if (!beforeJump && !document.getElementById(to)) return
         e.preventDefault()
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        el.focus?.({ preventScroll: true })
+        beforeJump?.()
+        go(beforeJump ? 30 : 0)
       }}
     >
       {children}

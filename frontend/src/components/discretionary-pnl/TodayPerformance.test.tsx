@@ -40,7 +40,7 @@ describe('TodayPerformance', () => {
     expect(cardValue('Open positions')).toBe('0')
     expect(cardValue('Partially closed')).toBe('0')
     expect(screen.getByTestId('today-closed-empty')).toHaveTextContent(
-      'No positions closed today yet'
+      'No trades closed today yet'
     )
     expect(screen.queryByTestId('today-pending')).not.toBeInTheDocument()
     expect(screen.queryByTestId('today-charges-incomplete')).not.toBeInTheDocument()

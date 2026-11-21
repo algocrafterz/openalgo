@@ -47,7 +47,7 @@ export function TodayClosedTable({
   if (rows.length === 0) {
     return (
       <p className="text-sm text-muted-foreground" data-testid="today-closed-empty">
-        No positions closed today yet
+        No trades closed today yet
       </p>
     )
   }
@@ -269,7 +269,7 @@ export function TodayPerformance({
         )}
 
         <div>
-          <div className="text-sm font-medium mb-2">Today&apos;s closed positions</div>
+          <div className="text-sm font-medium mb-2">Today&apos;s closed trades</div>
           <TodayClosedTable
             rows={today.closed_positions}
             session={today.session_date}
