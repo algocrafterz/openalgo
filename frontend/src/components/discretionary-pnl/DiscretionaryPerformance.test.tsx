@@ -68,9 +68,13 @@ const sock = vi.hoisted(() => {
 vi.mock('@/components/socket/SocketProvider', () => ({
   useSocketContext: () => ({ socket: sock.socket, playAlertSound: () => {} }),
 }))
-vi.mock('@/components/strategy-pnl/EquityDrawdownChart', () => ({
-  EquityDrawdownChart: ({ equityCurve }: { equityCurve: unknown[] }) => (
-    <div data-testid="equity-chart">{equityCurve.length} points</div>
+// The canvas of the new per-position equity chart (lightweight-charts needs a real canvas).
+vi.mock('./EquityCanvas', () => ({
+  DRAWDOWN_COLOR: '#d97706',
+  EquityCanvas: ({ points, mode }: { points: unknown[]; mode: string }) => (
+    <div data-testid="equity-chart" data-mode={mode}>
+      {points.length} points
+    </div>
   ),
 }))
 
@@ -83,6 +87,23 @@ const money = (v: number) => `Rs ${v.toFixed(2)}`
 function cardValue(label: string): string {
   const el = screen.getByText(label, { selector: 'div' })
   return el.parentElement?.querySelector('.font-mono')?.textContent ?? ''
+}
+
+/** Server daily rows for `n` consecutive close dates, so the page profile is not the session one. */
+function dailyRows(n: number) {
+  const base = summary().by_period.daily[0]
+  return Array.from({ length: n }, (_, i) => {
+    const date = `2026-11-${String(i + 1).padStart(2, '0')}`
+    return { ...base, period: date, label: date, start: date, end: date }
+  })
+}
+
+function withDays(n: number, extra: Partial<ReturnType<typeof summary>> = {}) {
+  const base = summary()
+  return summary({
+    ...extra,
+    by_period: { ...(extra.by_period ?? base.by_period), daily: dailyRows(n) },
+  })
 }
 
 let lastClient: QueryClient
@@ -333,9 +354,12 @@ describe('populated view', () => {
   })
 
   it('switches the period table between daily, weekly and monthly', async () => {
+    // 10 close dates over 2 months: the medium profile offers all three tabs
+    summaryFn.mockResolvedValue(withDays(10, { monthly: monthRows() }))
     renderIt()
     await screen.findByRole('tab', { name: 'Daily' })
-    expect(screen.getByText('incomplete')).toBeInTheDocument()
+    // every one of the 10 fixture days is flagged incomplete
+    expect(screen.getAllByText('incomplete')).toHaveLength(10)
     await userEvent.click(screen.getByRole('tab', { name: 'Weekly' }))
     expect(await screen.findByText('2026-W47')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('tab', { name: 'Monthly' }))
@@ -948,9 +972,11 @@ describe("today's performance", () => {
     renderIt()
     const section = await screen.findByTestId('discretionary-today')
     expect(within(section).getByText("Today's closed positions")).toBeInTheDocument()
-    // the section comes before the period cards
+    // Today's figures sit in the summary header, right after the headline figures and before the groups
     const cards = screen.getByText('Net realized (after est. charges)')
-    expect(section.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(cards.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const groups = screen.getByTestId('discretionary-groups')
+    expect(section.compareDocumentPosition(groups) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     await userEvent.click(within(section).getByTestId('today-closed-row'))
     await waitFor(() => expect(fillsFn).toHaveBeenCalledWith(11, 'b1'))
   })
@@ -1018,7 +1044,8 @@ describe('dashboard additions', () => {
   }
 
   it('renders every new section in page order with sample context', async () => {
-    summaryFn.mockResolvedValue(full())
+    // three close dates: the daily bars are part of this profile (they are hidden for one day)
+    summaryFn.mockResolvedValue(withDays(3, full()))
     renderIt()
     const dq = await screen.findByTestId('data-quality')
     const risk = screen.getByTestId('risk-strip')
@@ -1360,7 +1387,9 @@ describe('new analysis blocks', () => {
   })
 
   it('shows the monthly and weekday tables and bars, with signs and the close-date basis', async () => {
-    summaryFn.mockResolvedValue(withBlocks())
+    // 10 close dates over 2 months: monthly and weekday tables are part of this profile
+    const base = withBlocks()
+    summaryFn.mockResolvedValue({ ...base, by_period: { ...base.by_period, daily: dailyRows(10) } })
     renderIt()
     const card = await screen.findByTestId('calendar-card')
     const rows = within(card).getAllByTestId('calendar-row')
@@ -1565,8 +1594,8 @@ describe('MAE / MFE', () => {
     const scatter = await screen.findByTestId('mae-mfe-scatter')
     expect(within(scatter).getAllByTestId('scatter-winner')).toHaveLength(1)
     expect(within(scatter).getAllByTestId('scatter-loser')).toHaveLength(1)
-    expect(scatter).toHaveTextContent('MAE: worst move against you (points per unit)')
-    expect(scatter).toHaveTextContent('MFE: best move for you (points)')
+    expect(scatter).toHaveTextContent('MAE (points per unit)')
+    expect(scatter).toHaveTextContent('MFE (points per unit)')
     expect(scatter).toHaveTextContent('winner (1)')
     expect(scatter).toHaveTextContent('loser (1)')
   })
