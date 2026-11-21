@@ -1,15 +1,21 @@
 import type {
   BreakdownRow,
+  CalendarRow,
+  ClassificationBlock,
   DataQuality,
+  DiscretionaryCategory,
   DiscretionaryPosition,
   DiscretionarySummary,
   DiscretionaryToday,
   DiscretionaryTrade,
+  ExcursionPosition,
+  ExcursionsResponse,
   PendingAttribution,
   PeriodRow,
   PriceStatus,
   SampleContext,
   SyncHealth,
+  UnresolvedInRange,
 } from '@/api/discretionaryPnl'
 
 /** The Performance page source: current-mode strategies (unchanged) or discretionary trading. */
@@ -23,8 +29,10 @@ export const DISCRETIONARY_SOURCE = 'discretionary'
 /** Mirrors the Performance page's poll interval; quotes=1 polls at the same pace. */
 export const DISCRETIONARY_POLL_MS = 60_000
 
-export const EQUITY_CAPTION = 'Gross realized P&L, excludes charges and unrealized'
+export const NET_EQUITY_CAPTION =
+  'Net realised P&L after estimated charges, end-of-day value by close date; excludes unrealized P&L. The drawdown strip is end-of-day too, so it can differ from the per-trade drawdown in Risk and consistency'
 export const DRAWDOWN_BASIS = 'gross realized, excludes charges and unrealized'
+export const NET_DRAWDOWN_BASIS = 'net realised, after estimated charges, by close time'
 
 /** The source asked for by the URL, ignoring whether the backend allows it. */
 export function parseSourceParam(raw: string | null | undefined): PageSource {
@@ -131,6 +139,18 @@ export function fmtWinRate(percent: number | null | undefined): string {
   return `${percent.toFixed(1)}%`
 }
 
+/**
+ * A net-basis money figure (average win / loss, expectancy): a dash when null, i.e. when no
+ * position has a net P&L. Never a 0 that would read as a real result.
+ */
+export function fmtNetMoney(
+  value: number | null | undefined,
+  formatCurrency: (v: number) => string
+): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return formatCurrency(value)
+}
+
 /** Profit factor: null means profit with no loss when there are wins, otherwise nothing to show. */
 export function fmtProfitFactor(
   value: number | null | undefined,
@@ -158,47 +178,6 @@ export function fmtPrice(price: number | null | undefined): string {
 export function fmtStamp(value: string | null | undefined): string {
   if (!value) return '—'
   return value.replace('T', ' ').slice(0, 16)
-}
-
-/** Capital-derived figures the page never shows without a capital basis (ratio_capital is not shown at all). */
-export const WITHHELD_LABELS: Record<string, string> = {
-  sharpe_ratio: 'Sharpe',
-  sortino_ratio: 'Sortino',
-  return_pct: 'Return %',
-}
-
-export interface RatioCell {
-  /** '--' when withheld. */
-  value: string
-  /** 'Not shown: no capital basis' when withheld. */
-  hint?: string
-  withheld: boolean
-}
-
-/** What to show for a ratio the backend may withhold: '--' plus the reason, never a made-up number. */
-export function ratioCell(
-  key: string,
-  value: number | null | undefined,
-  withheld: Record<string, string> | undefined,
-  format: (v: number) => string = (v) => v.toFixed(2)
-): RatioCell {
-  const reason = withheld?.[key]
-  if (reason !== undefined) return { value: '--', hint: `Not shown: ${reason}`, withheld: true }
-  if (value == null || Number.isNaN(value)) return { value: '--', withheld: false }
-  return { value: format(value), withheld: false }
-}
-
-/** One sentence naming every withheld metric and why, or '' when nothing is withheld. */
-export function withheldSentence(withheld: Record<string, string> | undefined): string {
-  const entries = Object.entries(withheld ?? {}).filter(([k]) => k in WITHHELD_LABELS)
-  if (entries.length === 0) return ''
-  const byReason = new Map<string, string[]>()
-  for (const [key, reason] of entries) {
-    byReason.set(reason, [...(byReason.get(reason) ?? []), WITHHELD_LABELS[key]])
-  }
-  return [...byReason.entries()]
-    .map(([reason, names]) => `${names.join(', ')}: not shown: ${reason}`)
-    .join('; ')
 }
 
 export type UnrealizedKind = 'none' | 'not_requested' | 'partial' | 'complete'
@@ -362,7 +341,7 @@ export function reasonText(code: string | null | undefined): string {
 /** Plain-text net definition (the server sends field names; the page shows what they mean). */
 export function netDefinitionText(raw: string | undefined): string {
   if (!raw) return ''
-  return 'Net = gross realized minus estimated charges. Gross realized and the gross metrics are before charges.'
+  return 'Net = gross realized minus estimated charges. Gross realized is before charges; win rate, profit factor, expectancy and the averages are measured on net P&L.'
 }
 
 /** True when a net figure leaves out charges it could not estimate. */
@@ -540,7 +519,7 @@ export function pendingAttributionLines(pending: PendingAttribution | undefined)
   }
   if ((pending.other_today ?? 0) > 0) {
     lines.push(
-      `${pending.other_today} execution(s) of today stay unresolved for another reason and are excluded from P&L; see Unresolved fills.`
+      `${pending.other_today} execution(s) of today stay unresolved for another reason and are excluded from P&L; see the unresolved fills warning.`
     )
   }
   return lines
@@ -781,7 +760,207 @@ export function dataQualityPrices(dq: DataQuality): string {
   return parts.length > 0 ? `Prices: ${parts.join(', ')}` : 'Prices: all live'
 }
 
-export const PROVISIONAL_TITLE =
-  'Pending attribution: provisional figures (not included in any total above)'
-export const PROVISIONAL_EXPLANATION =
-  'These executions are excluded from your P&L until classified as manual. Figures are computed from the broker fills as if they were yours; if any of them were placed by a strategy they would be removed.'
+// ---------------------------------------------------------------- category, points, charts
+
+export const CATEGORY_LABEL: Record<string, string> = {
+  intraday: 'Intraday',
+  swing: 'Swing',
+  unclassified: 'Unclassified',
+}
+
+/** Why a position could not be called intraday or swing, in trader language. */
+const CATEGORY_REASON_TEXT: Record<string, string> = {
+  opening_unknown: 'the fill that opened it is not in the ledger',
+  orphan_fills: 'some of its fills could not be placed',
+  before_reliable_since: 'opened before the ledger became reliable',
+  invalid_times: 'fill times are missing or out of order',
+  fill_outside_session: 'a fill is outside the exchange trading hours',
+  special_session: 'opened in a special trading session',
+  still_open_in_session: 'still open in its opening session',
+  fallback_boundary: 'the exchange calendar was not available to check the session end',
+}
+
+export function categoryReasonText(code: string | null | undefined): string {
+  if (!code) return 'not classified'
+  return CATEGORY_REASON_TEXT[code] ?? code.replace(/_/g, ' ')
+}
+
+/** Tooltip of an unclassified count: every reason with its count. */
+export function unclassifiedReasonsText(reasons: Record<string, number> | undefined): string {
+  const entries = Object.entries(reasons ?? {})
+  if (entries.length === 0) return 'No reason recorded'
+  return entries.map(([code, n]) => `${n}: ${categoryReasonText(code)}`).join('; ')
+}
+
+/** One line under the category selector: closed positions of the range per category. */
+export function classificationLine(c: ClassificationBlock | null | undefined): string | null {
+  if (!c) return null
+  const k = c.closed
+  return `Closed positions in this range: ${k.intraday} intraday, ${k.swing} swing, ${k.unclassified} unclassified.`
+}
+
+/** Unclassified positions count only in All trades; say so when a category is chosen. */
+export function unclassifiedScopeNote(
+  c: ClassificationBlock | null | undefined,
+  category: DiscretionaryCategory
+): string | null {
+  if (!c || c.closed.unclassified <= 0) return null
+  return category === 'all'
+    ? `${c.closed.unclassified} unclassified position(s) are included in All trades only.`
+    : `${c.closed.unclassified} unclassified position(s) are left out of this view; they appear in All trades only.`
+}
+
+/** Text of the one-line warning about fills left out of the completed-trade statistics. */
+export function unresolvedWarningText(u: UnresolvedInRange | null | undefined): string | null {
+  if (!u || !(u.total > 0)) return null
+  const noun = u.total === 1 ? 'fill' : 'fills'
+  return `${u.total} ${noun} in the selected range could not be attributed and ${u.total === 1 ? 'is' : 'are'} excluded from completed-trade statistics.`
+}
+
+/** Points per unit with an explicit sign ("+12.50"); an em dash when unknown. */
+export function fmtPoints(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '—'
+  const text = Math.abs(value).toFixed(2)
+  return value > 0 ? `+${text}` : value < 0 ? `-${text}` : text
+}
+
+/** Unsigned points (MAE / MFE are distances); an em dash when unknown. */
+export function fmtDistance(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '—'
+  return value.toFixed(2)
+}
+
+/** Rupees with an explicit sign, whatever the page's currency formatter does with negatives. */
+export function signedMoney(value: number, formatCurrency: (v: number) => string): string {
+  if (value > 0) return `+${formatCurrency(value)}`
+  if (value < 0) return `-${formatCurrency(Math.abs(value))}`
+  return formatCurrency(0)
+}
+
+/** A percentage as "12.3%"; an em dash when unknown. */
+export function fmtPct(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '—'
+  return `${value.toFixed(1)}%`
+}
+
+/** Win / loss streak, e.g. "3 wins"; "none" when the last trade was break-even or there is none. */
+export function streakText(streak: { type: 'win' | 'loss' | null; length: number } | undefined) {
+  if (!streak || !streak.type || streak.length <= 0) return 'none'
+  const noun = streak.type === 'win' ? 'win' : 'loss'
+  return `${streak.length} ${noun}${streak.length === 1 ? '' : streak.type === 'win' ? 's' : 'es'}`
+}
+
+export interface NetEquity {
+  points: { date: string; value: number }[]
+  /** Trades that went into the curve, and those left out for want of a net P&L. */
+  used: number
+  skipped: number
+}
+
+/**
+ * NET realised equity of the closed trades: cumulative net P&L (after estimated charges) in close
+ * order (closed_at, then id), one point per close date holding the end-of-day value. A trade
+ * without a net is skipped, never counted as zero.
+ */
+export function netEquitySeries(
+  trades: Pick<DiscretionaryTrade, 'id' | 'closed_at' | 'trade_date' | 'net_pnl'>[]
+): NetEquity {
+  const ordered = [...trades].sort((a, b) =>
+    a.closed_at === b.closed_at ? a.id - b.id : a.closed_at < b.closed_at ? -1 : 1
+  )
+  let equity = 0
+  let used = 0
+  let skipped = 0
+  const byDate = new Map<string, number>()
+  for (const t of ordered) {
+    if (t.net_pnl == null || Number.isNaN(t.net_pnl)) {
+      skipped += 1
+      continue
+    }
+    used += 1
+    equity += t.net_pnl
+    byDate.set((t.trade_date || t.closed_at).slice(0, 10), Math.round(equity * 100) / 100)
+  }
+  return { points: [...byDate.entries()].map(([date, value]) => ({ date, value })), used, skipped }
+}
+
+export interface NetBar {
+  key: string
+  label: string
+  value: number
+  count: number
+  /** Share of the largest absolute value, 0-100. */
+  pct: number
+}
+
+function toBars(rows: { key: string; label: string; value: number; count: number }[]): NetBar[] {
+  const max = rows.reduce((m, r) => Math.max(m, Math.abs(r.value)), 0)
+  return rows.map((r) => ({ ...r, pct: max > 0 ? (Math.abs(r.value) / max) * 100 : 0 }))
+}
+
+/** Monthly or weekday rows as net P&L bars (positions with a net are counted in `count`). */
+export function calendarBars(rows: CalendarRow[] | null | undefined): NetBar[] {
+  return toBars(
+    (rows ?? []).map((r) => ({
+      key: r.key,
+      label: r.key,
+      value: r.net_of_charges,
+      count: r.positions - r.net_unavailable_positions,
+    }))
+  )
+}
+
+/** The by-symbol breakdown as net P&L bars, best first. */
+export function symbolBars(rows: BreakdownRow[] | null | undefined): NetBar[] {
+  return toBars(
+    [...(rows ?? [])]
+      .sort((a, b) => b.net_of_charges - a.net_of_charges)
+      .map((r) => ({
+        key: r.key ?? '',
+        label: r.key ?? '',
+        value: r.net_of_charges,
+        count: r.trades,
+      }))
+  )
+}
+
+export type ScatterKind = 'winner' | 'loser' | 'even'
+
+export interface ScatterPoint {
+  id: number
+  symbol: string
+  mae: number
+  mfe: number
+  kind: ScatterKind
+  net: number | null
+}
+
+/** Available positions with both MAE and MFE; unavailable ones are never plotted (never at 0). */
+export function scatterPoints(positions: ExcursionPosition[] | undefined): ScatterPoint[] {
+  const out: ScatterPoint[] = []
+  for (const p of positions ?? []) {
+    if (p.status !== 'available' || p.mae_points == null || p.mfe_points == null) continue
+    const kind: ScatterKind =
+      p.net_pnl == null || p.net_pnl === 0 ? 'even' : p.net_pnl > 0 ? 'winner' : 'loser'
+    out.push({
+      id: p.id,
+      symbol: p.symbol,
+      mae: p.mae_points,
+      mfe: p.mfe_points,
+      kind,
+      net: p.net_pnl,
+    })
+  }
+  return out
+}
+
+/** Excursions by position id, only when they come from the same build as the summary rows. */
+export function excursionIndex(
+  excursions: ExcursionsResponse | undefined,
+  summaryBuildId: string | null | undefined
+): Map<number, ExcursionPosition> {
+  const map = new Map<number, ExcursionPosition>()
+  if (!excursions || (summaryBuildId && excursions.build_id !== summaryBuildId)) return map
+  for (const p of excursions.positions) map.set(p.id, p)
+  return map
+}

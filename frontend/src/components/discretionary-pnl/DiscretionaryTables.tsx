@@ -2,6 +2,7 @@ import type {
   BreakdownRow,
   DiscretionaryPosition,
   DiscretionaryTrade,
+  ExcursionPosition,
   PeriodRow,
 } from '@/api/discretionaryPnl'
 import { Badge } from '@/components/ui/badge'
@@ -15,11 +16,16 @@ import {
 } from '@/components/ui/table'
 import {
   breakdownLabel,
+  CATEGORY_LABEL,
+  categoryReasonText,
   chargesBadge,
+  fmtDistance,
+  fmtPoints,
   fmtPositionAge,
   fmtPrice,
   fmtProfitFactor,
   fmtQty,
+  fmtStamp,
   fmtWinRate,
   netIncomplete,
   type PriceBadge,
@@ -184,42 +190,104 @@ function DirectionBadge({ direction }: { direction: 'LONG' | 'SHORT' }) {
   )
 }
 
+/** Category of a position; an unclassified one carries its reason as a tooltip. */
+function CategoryBadge({ trade }: { trade: DiscretionaryTrade }) {
+  const category = trade.category
+  if (!category) return <span className="text-muted-foreground">—</span>
+  const unclassified = category === 'unclassified'
+  return (
+    <Badge
+      variant="outline"
+      className={unclassified ? 'border-amber-500/50 text-amber-600' : 'text-muted-foreground'}
+      title={
+        unclassified ? `Unclassified: ${categoryReasonText(trade.category_reason)}` : undefined
+      }
+      data-testid="category-badge"
+    >
+      {CATEGORY_LABEL[category] ?? category}
+    </Badge>
+  )
+}
+
+/** MAE or MFE of a closed row: points per unit, a dash (with the reason) when not available. */
+function ExcursionCell({
+  position,
+  field,
+  loaded,
+  formatCurrency,
+}: {
+  position: ExcursionPosition | undefined
+  field: 'mae' | 'mfe'
+  loaded: boolean
+  formatCurrency: Money
+}) {
+  const points = position?.status === 'available' ? position[`${field}_points`] : null
+  if (points == null) {
+    const reason = position
+      ? (position.reason_text ?? 'not available')
+      : loaded
+        ? 'not available for this position'
+        : 'MAE / MFE is not loaded yet'
+    return (
+      <span className="text-muted-foreground" title={reason} data-testid={`${field}-unavailable`}>
+        —
+      </span>
+    )
+  }
+  const amount = position?.[`${field}_amount`]
+  return (
+    <span title={amount != null ? `${formatCurrency(amount)} on the full size` : undefined}>
+      {fmtDistance(points)}
+    </span>
+  )
+}
+
 /**
  * Completed trades (a position from flat to flat), newest first. A row opens the fills of all
- * its legs; a trade closed in parts shows a legs badge.
+ * its legs; a trade closed in parts shows a legs badge. MAE / MFE come from the lazy excursions
+ * call, joined by position id; the table scrolls sideways inside its card.
  */
 export function ClosedTradesTable({
   trades,
   formatCurrency,
   onSelect,
+  excursions,
+  excursionsLoaded = false,
 }: {
   trades: DiscretionaryTrade[]
   formatCurrency: Money
   onSelect: (id: number) => void
+  excursions?: Map<number, ExcursionPosition>
+  excursionsLoaded?: boolean
 }) {
   return (
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Date</TableHead>
-          <TableHead>Broker</TableHead>
-          <TableHead>Account</TableHead>
           <TableHead>Symbol</TableHead>
+          <TableHead>Category</TableHead>
           <TableHead>Direction</TableHead>
-          <TableHead>Product</TableHead>
-          <TableHead className="text-right">Entry</TableHead>
-          <TableHead className="text-right">Exit</TableHead>
+          <TableHead>Entry time</TableHead>
+          <TableHead>Exit time</TableHead>
+          <TableHead className="text-right">Avg entry</TableHead>
+          <TableHead className="text-right">Avg exit</TableHead>
           <TableHead className="text-right">Qty</TableHead>
+          <TableHead className="text-right">Points / unit</TableHead>
           <TableHead className="text-right">Gross P&amp;L</TableHead>
           <TableHead className="text-right">Charges</TableHead>
           <TableHead className="text-right">Net P&amp;L</TableHead>
+          <TableHead className="text-right">MAE</TableHead>
+          <TableHead className="text-right">MFE</TableHead>
           <TableHead className="text-right">Held</TableHead>
-          <TableHead>Status</TableHead>
+          <TableHead>Product</TableHead>
+          <TableHead>Broker</TableHead>
+          <TableHead>Account</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {trades.map((t) => {
           const badge = chargesBadge(t)
+          const ex = excursions?.get(t.id)
           return (
             <TableRow
               key={t.id}
@@ -235,26 +303,48 @@ export function ClosedTradesTable({
                 }
               }}
             >
-              <TableCell className="font-mono" title={t.closed_at}>
-                {t.trade_date}
-              </TableCell>
-              <TableCell>{t.broker}</TableCell>
-              <TableCell>{t.account || '—'}</TableCell>
-              <TableCell className="font-medium">
+              <TableCell className="whitespace-nowrap font-medium">
                 {t.symbol}
+                <span className="ml-1 text-xs font-normal text-muted-foreground">{t.exchange}</span>
                 {t.overnight && (
                   <span className="ml-1 text-xs text-muted-foreground" title="Held overnight">
                     overnight
                   </span>
                 )}
+                {t.opening_unknown && (
+                  <Badge
+                    variant="outline"
+                    className="ml-1 border-amber-500/50 text-[10px] text-amber-600"
+                    title="The fill that opened this position is not in the ledger, so the entry price may be off."
+                  >
+                    opening unknown
+                  </Badge>
+                )}
+                {t.has_orphan_fills && (
+                  <Badge
+                    variant="outline"
+                    className="ml-1 border-amber-500/50 text-[10px] text-amber-600"
+                    title={`${t.orphan_fills ?? 'Some'} fill(s) of this position could not be placed and are not in its figures.`}
+                  >
+                    unplaced fills
+                  </Badge>
+                )}
+              </TableCell>
+              <TableCell>
+                <CategoryBadge trade={t} />
               </TableCell>
               <TableCell>
                 <DirectionBadge direction={t.direction} />
               </TableCell>
-              <TableCell>{t.product}</TableCell>
+              <TableCell className="whitespace-nowrap font-mono" title={t.opened_at}>
+                {fmtStamp(t.opened_at)}
+              </TableCell>
+              <TableCell className="whitespace-nowrap font-mono" title={t.closed_at}>
+                {fmtStamp(t.closed_at)}
+              </TableCell>
               <TableCell className="text-right font-mono">{fmtPrice(t.entry_price)}</TableCell>
               <TableCell className="text-right font-mono">{fmtPrice(t.exit_price)}</TableCell>
-              <TableCell className="text-right font-mono">
+              <TableCell className="whitespace-nowrap text-right font-mono">
                 {fmtQty(t.closed_quantity)}
                 {t.legs > 1 && (
                   <Badge
@@ -265,6 +355,12 @@ export function ClosedTradesTable({
                     {t.legs} legs
                   </Badge>
                 )}
+              </TableCell>
+              <TableCell
+                className={cn('text-right font-mono', pnlClass(t.points_per_unit ?? 0))}
+                title="Exit minus entry for a long, entry minus exit for a short, per unit"
+              >
+                {fmtPoints(t.points_per_unit)}
               </TableCell>
               <TableCell className={cn('text-right font-mono', pnlClass(t.realized_pnl))}>
                 {formatCurrency(t.realized_pnl)}
@@ -292,10 +388,28 @@ export function ClosedTradesTable({
               <TableCell className={cn('text-right font-mono', pnlClass(t.net_pnl ?? 0))}>
                 {t.net_pnl == null ? '—' : formatCurrency(t.net_pnl)}
               </TableCell>
-              <TableCell className="text-right font-mono">{fmtDuration(t.hold_minutes)}</TableCell>
-              <TableCell>
-                <Badge variant="secondary">Closed</Badge>
+              <TableCell className="text-right font-mono">
+                <ExcursionCell
+                  position={ex}
+                  field="mae"
+                  loaded={excursionsLoaded}
+                  formatCurrency={formatCurrency}
+                />
               </TableCell>
+              <TableCell className="text-right font-mono">
+                <ExcursionCell
+                  position={ex}
+                  field="mfe"
+                  loaded={excursionsLoaded}
+                  formatCurrency={formatCurrency}
+                />
+              </TableCell>
+              <TableCell className="whitespace-nowrap text-right font-mono">
+                {fmtDuration(t.hold_minutes)}
+              </TableCell>
+              <TableCell>{t.product}</TableCell>
+              <TableCell>{t.broker}</TableCell>
+              <TableCell>{t.account || '—'}</TableCell>
             </TableRow>
           )
         })}

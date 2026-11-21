@@ -1,7 +1,12 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Gauge, Loader2 } from 'lucide-react'
+import { AlertTriangle, Download, Gauge, Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { type DiscretionaryFilters, discretionaryPnlApi } from '@/api/discretionaryPnl'
+import {
+  type DiscretionaryCategory,
+  type DiscretionaryFilters,
+  discretionaryPnlApi,
+  exportCsvUrl,
+} from '@/api/discretionaryPnl'
 import type { PerformancePeriod } from '@/api/strategyPnl'
 import { EquityDrawdownChart } from '@/components/strategy-pnl/EquityDrawdownChart'
 import { MetricCard } from '@/components/strategy-pnl/MetricCard'
@@ -25,23 +30,37 @@ import {
   actionableWarnings,
   awaitingAttribution,
   awaitingAttributionText,
+  calendarBars,
+  classificationLine,
   DISCRETIONARY_POLL_MS,
   DRAWDOWN_BASIS,
-  EQUITY_CAPTION,
+  excursionIndex,
   filterChoices,
+  fmtNetMoney,
   fmtProfitFactor,
   fmtWinRate,
   holdingRows,
   isEmptyBook,
+  NET_EQUITY_CAPTION,
   netDefinitionText,
-  ratioCell,
+  netEquitySeries,
   summarizeUnrealized,
+  symbolBars,
   syncSummary,
   totalCard,
-  withheldSentence,
+  unclassifiedReasonsText,
+  unclassifiedScopeNote,
+  unresolvedWarningText,
 } from '@/lib/discretionaryPnlView'
 import { fmtDate, fmtDuration, pnlClass } from '@/lib/strategyPnlView'
 import { cn } from '@/lib/utils'
+import {
+  CalendarTable,
+  CategorySelector,
+  PointsByInstrumentTable,
+  TradeManagementStrip,
+} from './DiscretionaryBlocks'
+import { NetBarChart } from './DiscretionaryCharts'
 import {
   DailyPnlChart,
   DataQualityStrip,
@@ -55,10 +74,10 @@ import {
   OpenPositionsTable,
   PeriodTable,
 } from './DiscretionaryTables'
-import { ProvisionalPanel } from './ProvisionalPanel'
+import { ExcursionPanel } from './ExcursionPanel'
 import { TodayPerformance } from './TodayPerformance'
 import { type SelectedTrade, TradeFillsDialog } from './TradeFillsDialog'
-import { UnresolvedSection } from './UnresolvedSection'
+import { UnresolvedDialog } from './UnresolvedDialog'
 import { useLedgerFillRefresh } from './useLedgerFillRefresh'
 
 const ALL = 'all'
@@ -119,8 +138,9 @@ function ChoiceSelect({
 
 /**
  * The Discretionary view of the Performance page: trades placed by hand at the broker, rebuilt
- * from the fill ledger. Everything here is gross or "net of estimated charges"; ratios that need
- * a capital basis are withheld by the server and shown as '--'.
+ * from the fill ledger. Win rate, profit factor, expectancy and the averages are net of estimated
+ * charges; money cards say gross or net. There is no capital basis, so no Sharpe, Sortino or
+ * return percentage is shown.
  */
 export function DiscretionaryPerformance({
   period,
@@ -139,6 +159,8 @@ export function DiscretionaryPerformance({
   const [filters, setFilters] = useState<FilterState>(NO_FILTERS)
   const [symbolText, setSymbolText] = useState('')
   const [quotes, setQuotes] = useState(false)
+  const [category, setCategory] = useState<DiscretionaryCategory>('all')
+  const [unresolvedOpen, setUnresolvedOpen] = useState(false)
   const [selectedTrade, setSelectedTrade] = useState<SelectedTrade | null>(null)
   const [knownBrokers, setKnownBrokers] = useState<string[]>([])
   const [knownAccounts, setKnownAccounts] = useState<string[]>([])
@@ -153,14 +175,38 @@ export function DiscretionaryPerformance({
       range?.start,
       range?.end,
       quotes,
+      category,
     ],
-    queryFn: () => discretionaryPnlApi.summary(period, range, queryFilters, quotes),
+    queryFn: () => discretionaryPnlApi.summary(period, range, queryFilters, quotes, category),
     enabled: rangeReady,
     refetchInterval: DISCRETIONARY_POLL_MS,
     placeholderData: keepPreviousData,
     retry: false,
   })
   const summary = summaryQuery.data
+
+  // MAE / MFE reads price bars, so it loads on its own, after the summary, and never blocks it.
+  const excursionsQuery = useQuery({
+    queryKey: [
+      'discretionary-pnl',
+      'excursions',
+      queryFilters,
+      period,
+      range?.start,
+      range?.end,
+      category,
+    ],
+    queryFn: () => discretionaryPnlApi.excursions(period, range, queryFilters, category),
+    enabled: rangeReady && !!summary && summary.trades_total > 0,
+    refetchInterval: DISCRETIONARY_POLL_MS,
+    retry: false,
+  })
+  const excursionMap = useMemo(
+    () => excursionIndex(excursionsQuery.data, summary?.build_id),
+    [excursionsQuery.data, summary?.build_id]
+  )
+  const netEquity = useMemo(() => netEquitySeries(summary?.trades ?? []), [summary?.trades])
+  const exportHref = exportCsvUrl(period, range, queryFilters, category)
 
   // Fills arrive on order events; the poll covers a missed event.
   // This component is the only place that invalidates these queries on order events (the page
@@ -193,19 +239,9 @@ export function DiscretionaryPerformance({
   const unrealized = useMemo(() => (summary ? summarizeUnrealized(summary) : null), [summary])
   const warnings = actionableWarnings(summary?.warnings)
   const sync = syncSummary(summary?.sync_health)
-  const withheld = summary?.withheld ?? {}
   const metrics = summary?.metrics
   // No completed trade (e.g. only a partial exit): the ratios have nothing to rate.
   const noTrades = (metrics?.trades_count ?? 0) === 0
-  const sharpe = ratioCell('sharpe_ratio', metrics?.sharpe_ratio, withheld)
-  const sortino = ratioCell('sortino_ratio', metrics?.sortino_ratio, withheld)
-  const returnPct = ratioCell(
-    'return_pct',
-    metrics?.return_pct,
-    withheld,
-    (v) => `${v.toFixed(2)}%`
-  )
-  const withheldNote = withheldSentence(withheld)
   // Executions exist but none is attributable yet (all await attribution): a specific message
   // instead of the generic empty state, and the Unresolved fills list opens.
   const awaiting = awaitingAttribution(summary)
@@ -216,6 +252,7 @@ export function DiscretionaryPerformance({
 
   const toolbar = (
     <div className="flex flex-wrap items-center gap-2" data-testid="discretionary-filters">
+      <CategorySelector value={category} onChange={setCategory} />
       <ChoiceSelect
         label="Broker"
         value={filters.broker}
@@ -325,21 +362,23 @@ export function DiscretionaryPerformance({
         <p className="text-base font-medium max-w-2xl">
           {awaitingAttributionText(awaiting.collected, awaiting.unresolved)}
         </p>
-        <p className="text-sm text-muted-foreground mt-1">
-          They are listed under Unresolved fills below.
-        </p>
+        {(summary.unresolved_in_range?.total ?? 0) > 0 && (
+          <p className="text-sm text-muted-foreground mt-1">
+            Use View details in the warning above to list them.
+          </p>
+        )}
       </div>
     ) : empty ? (
       <EmptyState
         icon={Gauge}
         title={
-          filtersActive
+          filtersActive || category !== 'all'
             ? 'No discretionary trades match these filters'
             : 'No discretionary trades yet'
         }
         description={
-          filtersActive
-            ? 'Clear the filters or widen the period.'
+          filtersActive || category !== 'all'
+            ? 'Clear the filters, choose All trades or widen the period.'
             : 'Closed trades and open positions appear here once the broker fills have been synced into the ledger. The ledger sync has to be running for this view to fill.'
         }
       />
@@ -396,11 +435,27 @@ export function DiscretionaryPerformance({
             negative={total.value < 0}
             hint={total.hint}
           />
-          <MetricCard label="Gross profit" value={formatCurrency(metrics.gross_profit)} />
-          <MetricCard label="Gross loss" value={formatCurrency(metrics.gross_loss)} />
-          <MetricCard label="Win rate" value={noTrades ? '—' : fmtWinRate(metrics.win_rate)} />
           <MetricCard
-            label="Profit factor"
+            label="Total won (net)"
+            value={formatCurrency(metrics.gross_profit)}
+            hint="winning trades, after charges"
+          />
+          <MetricCard
+            label="Total lost (net)"
+            value={formatCurrency(metrics.gross_loss)}
+            hint="losing trades, after charges"
+          />
+          <MetricCard
+            label="Win rate (net)"
+            value={noTrades ? '—' : fmtWinRate(metrics.win_rate)}
+            hint={
+              metrics.count_unavailable_reason
+                ? 'no completed trade has a net P&L'
+                : 'a win is a profit after charges'
+            }
+          />
+          <MetricCard
+            label="Profit factor (net)"
             value={
               noTrades
                 ? '—'
@@ -410,6 +465,7 @@ export function DiscretionaryPerformance({
                     metrics.losing_trades
                   )
             }
+            hint="total won / total lost"
           />
           <MetricCard
             label="Completed trades"
@@ -417,58 +473,74 @@ export function DiscretionaryPerformance({
             hint={`${metrics.winning_trades} wins / ${metrics.losing_trades} losses`}
           />
           <MetricCard
-            label="Avg win (gross)"
-            value={noTrades ? '—' : formatCurrency(metrics.avg_win)}
+            label="Avg win (net)"
+            value={noTrades ? '—' : fmtNetMoney(metrics.avg_win, formatCurrency)}
           />
           <MetricCard
-            label="Avg loss (gross)"
-            value={noTrades ? '—' : formatCurrency(metrics.avg_loss)}
+            label="Avg loss (net)"
+            value={noTrades ? '—' : fmtNetMoney(metrics.avg_loss, formatCurrency)}
           />
           <MetricCard
-            label="Expectancy"
-            value={noTrades ? '—' : formatCurrency(metrics.expectancy)}
-            hint="gross, per trade"
+            label="Expectancy (net)"
+            value={noTrades ? '—' : fmtNetMoney(metrics.expectancy, formatCurrency)}
+            hint="net, per trade"
           />
-          {summary.consistency?.max_drawdown_unavailable_reason ? (
-            // one trading day has no peak to fall from: say so instead of showing 0
-            <MetricCard
-              label="Max drawdown"
-              value="—"
-              hint={`${summary.consistency.max_drawdown_unavailable_reason}; basis: ${DRAWDOWN_BASIS}`}
-            />
-          ) : (
-            <MetricCard
-              label="Max drawdown"
-              value={formatCurrency(Math.abs(metrics.max_drawdown ?? 0))}
-              negative
-              hint={`basis: ${DRAWDOWN_BASIS}`}
-            />
-          )}
-          <MetricCard label="Sharpe" value={sharpe.value} />
-          <MetricCard label="Sortino" value={sortino.value} />
-          <MetricCard label="Return %" value={returnPct.value} />
+          {!summary.risk &&
+            (summary.consistency?.max_drawdown_unavailable_reason ? (
+              // one trading day has no peak to fall from: say so instead of showing 0
+              <MetricCard
+                label="Max drawdown"
+                value="—"
+                hint={`${summary.consistency.max_drawdown_unavailable_reason}; basis: ${DRAWDOWN_BASIS}`}
+              />
+            ) : (
+              <MetricCard
+                label="Max drawdown"
+                value={formatCurrency(Math.abs(metrics.max_drawdown ?? 0))}
+                negative
+                hint={`basis: ${DRAWDOWN_BASIS}`}
+              />
+            ))}
         </div>
         <SampleNote sample={summary.sample} />
-        {withheldNote && <p className="text-xs text-muted-foreground">{withheldNote}</p>}
+        {(metrics.net_unavailable_trades ?? 0) > 0 && (
+          <p className="text-xs text-amber-600" data-testid="net-unavailable-note">
+            {metrics.net_unavailable_trades} completed trade(s) have no net P&amp;L (no charge
+            estimate) and are left out of win rate, profit factor, expectancy and the averages.
+          </p>
+        )}
         {summary.net_definition && (
           <p className="text-xs text-muted-foreground">
             {netDefinitionText(summary.net_definition)}
           </p>
         )}
 
-        {(metrics.equity_curve ?? []).length > 0 && (
+        {(summary.trades.length > 0 || (summary.by_period?.daily ?? []).length > 0) && (
           <Card>
             <CardHeader>
-              <CardTitle>Equity Curve &amp; Drawdown</CardTitle>
+              <CardTitle>Equity Curve &amp; Drawdown (net)</CardTitle>
             </CardHeader>
             <CardContent>
-              <EquityDrawdownChart
-                equityCurve={metrics.equity_curve ?? []}
-                equityCurveNet={[]}
-                isDarkMode={isDarkMode}
-                formatCurrency={formatCurrency}
-              />
-              <p className="mt-2 text-xs text-muted-foreground">{EQUITY_CAPTION}</p>
+              {netEquity.points.length > 0 ? (
+                <EquityDrawdownChart
+                  equityCurve={netEquity.points}
+                  equityCurveNet={[]}
+                  isDarkMode={isDarkMode}
+                  formatCurrency={formatCurrency}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground" data-testid="net-equity-empty">
+                  No completed trade with a net P&amp;L yet, so there is no equity curve.
+                </p>
+              )}
+              <p className="mt-2 text-xs text-muted-foreground" data-testid="net-equity-caption">
+                {NET_EQUITY_CAPTION}. Based on {netEquity.used} completed trade(s)
+                {netEquity.skipped > 0 &&
+                  `; ${netEquity.skipped} without a net P&L (no charge estimate) are left out`}
+                {summary.trades_truncated > 0 &&
+                  `; only the newest ${summary.trades.length} of ${summary.trades_total} trades are included`}
+                .
+              </p>
               {(summary.by_period?.daily ?? []).length > 0 && (
                 <div className="mt-6">
                   <DailyPnlChart
@@ -484,9 +556,77 @@ export function DiscretionaryPerformance({
         {summary.consistency && (
           <RiskStrip
             consistency={summary.consistency}
+            risk={summary.risk}
             formatCurrency={formatCurrency}
             onSelectTrade={(t) => openTrade(t.id, t.build_id)}
           />
+        )}
+
+        {(summary.trade_management || summary.costs) && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Trade management and costs</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <TradeManagementStrip
+                management={summary.trade_management}
+                costs={summary.costs}
+                formatCurrency={formatCurrency}
+              />
+            </CardContent>
+          </Card>
+        )}
+
+        {(summary.monthly || summary.weekday) && (
+          <Card data-testid="calendar-card">
+            <CardHeader>
+              <CardTitle>Net P&amp;L by month and weekday</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Each position counts once, on the date of its final close. * means some positions
+                have no charge estimate, so charges and net are not complete.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                {summary.monthly && (
+                  <div className="min-w-0 space-y-3">
+                    <NetBarChart
+                      title="Net P&L by month"
+                      bars={calendarBars(summary.monthly)}
+                      formatCurrency={formatCurrency}
+                      samples="position(s)"
+                      emptyText="No closed positions in this range."
+                      testId="monthly-chart"
+                    />
+                    <CalendarTable
+                      rows={summary.monthly}
+                      first="Month"
+                      label={(r) => r.period ?? r.key}
+                      formatCurrency={formatCurrency}
+                    />
+                  </div>
+                )}
+                {summary.weekday && (
+                  <div className="min-w-0 space-y-3">
+                    <NetBarChart
+                      title="Net P&L by weekday (close date)"
+                      bars={calendarBars(summary.weekday)}
+                      formatCurrency={formatCurrency}
+                      samples="position(s)"
+                      emptyText="No closed positions in this range."
+                      testId="weekday-chart"
+                    />
+                    <CalendarTable
+                      rows={summary.weekday}
+                      first="Weekday"
+                      label={(r) => r.weekday ?? r.key}
+                      formatCurrency={formatCurrency}
+                    />
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         <Card>
@@ -512,11 +652,36 @@ export function DiscretionaryPerformance({
           </CardContent>
         </Card>
 
+        {summary.points_by_instrument && (
+          <Card data-testid="points-card">
+            <CardHeader>
+              <CardTitle>Points by instrument</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Points per unit (not per lot or rupee), one row per symbol and exchange. Points are
+                never added across instruments.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <PointsByInstrumentTable rows={summary.points_by_instrument} />
+            </CardContent>
+          </Card>
+        )}
+
         <Card>
           <CardHeader>
             <CardTitle>Breakdowns</CardTitle>
           </CardHeader>
           <CardContent>
+            <div className="mb-6">
+              <NetBarChart
+                title="Net P&L by symbol"
+                bars={symbolBars(summary.by_symbol)}
+                formatCurrency={formatCurrency}
+                samples="trade(s)"
+                emptyText="No closed trades in this range."
+                testId="symbol-chart"
+              />
+            </div>
             <div className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
               <BreakdownTable
                 title="By symbol"
@@ -577,9 +742,30 @@ export function DiscretionaryPerformance({
           />
         )}
 
-        <Card>
+        <Card data-testid="excursion-card">
           <CardHeader>
+            <CardTitle>MAE / MFE</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ExcursionPanel
+              data={excursionsQuery.data}
+              loading={excursionsQuery.isLoading}
+              failed={excursionsQuery.isError}
+              onRetry={() => excursionsQuery.refetch()}
+              formatCurrency={formatCurrency}
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
             <CardTitle>Closed trades</CardTitle>
+            <Button asChild variant="outline" size="sm">
+              <a href={exportHref} download data-testid="export-csv">
+                <Download className="mr-1 h-4 w-4" />
+                Export CSV
+              </a>
+            </Button>
           </CardHeader>
           <CardContent>
             {summary.trades.length === 0 ? (
@@ -589,12 +775,14 @@ export function DiscretionaryPerformance({
                 trades={summary.trades}
                 formatCurrency={formatCurrency}
                 onSelect={(id) => openTrade(id)}
+                excursions={excursionMap}
+                excursionsLoaded={!!excursionsQuery.data}
               />
             )}
             {summary.trades_truncated > 0 && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                Showing the newest {summary.trades.length} of {summary.trades_total} trades. Totals
-                above cover all of them.
+              <p className="mt-2 text-xs text-muted-foreground" data-testid="trades-truncated">
+                Showing {summary.trades_shown ?? summary.trades.length} of {summary.trades_total}{' '}
+                trades (the newest). Totals above and the CSV export cover all of them.
               </p>
             )}
           </CardContent>
@@ -624,6 +812,29 @@ export function DiscretionaryPerformance({
   return (
     <div className="space-y-6" data-testid="discretionary-performance">
       {toolbar}
+
+      {summary?.classification && (
+        <div className="space-y-0.5 text-xs text-muted-foreground" data-testid="classification">
+          <p>
+            {classificationLine(summary.classification)}{' '}
+            {summary.classification.closed.unclassified > 0 && (
+              <span
+                className="cursor-help underline decoration-dotted"
+                title={unclassifiedReasonsText(summary.classification.closed.unclassified_reasons)}
+                data-testid="unclassified-count"
+              >
+                Why unclassified?
+              </span>
+            )}
+          </p>
+          {unclassifiedScopeNote(summary.classification, category) && (
+            <p className="text-amber-600">
+              {unclassifiedScopeNote(summary.classification, category)}
+            </p>
+          )}
+          <p>{summary.classification.note}</p>
+        </div>
+      )}
 
       {summary && (
         <p className="text-sm">
@@ -664,6 +875,21 @@ export function DiscretionaryPerformance({
         </Alert>
       )}
 
+      {summary && unresolvedWarningText(summary.unresolved_in_range) && (
+        <output
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm"
+          data-testid="unresolved-warning"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
+          <span className="min-w-0 flex-1">
+            {unresolvedWarningText(summary.unresolved_in_range)}
+          </span>
+          <Button type="button" size="sm" variant="outline" onClick={() => setUnresolvedOpen(true)}>
+            View details
+          </Button>
+        </output>
+      )}
+
       {summary && (warnings.length > 0 || sync.problem) && (
         <Alert variant="warning" data-testid="discretionary-warnings">
           <AlertTriangle className="h-4 w-4" />
@@ -700,19 +926,11 @@ export function DiscretionaryPerformance({
 
       {body}
 
-      {summary?.provisional && (
-        // unresolved fills as if they were yours: shown even in the empty state, in no total
-        <ProvisionalPanel provisional={summary.provisional} formatCurrency={formatCurrency} />
-      )}
-
-      {summary && (
-        // keyed on the awaiting state so it opens when the page switches into that state
-        <UnresolvedSection
-          key={awaiting ? 'awaiting' : 'normal'}
-          filters={queryFilters}
-          defaultOpen={awaiting !== null}
-        />
-      )}
+      <UnresolvedDialog
+        open={unresolvedOpen}
+        onClose={() => setUnresolvedOpen(false)}
+        filters={queryFilters}
+      />
 
       <TradeFillsDialog
         selected={selectedTrade}

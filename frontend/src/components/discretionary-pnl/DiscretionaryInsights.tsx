@@ -5,6 +5,7 @@ import type {
   ConsistencyBlock,
   DataQuality,
   PeriodRow,
+  RiskBlock,
   SampleContext,
   TradeRef,
   TradingBreakdowns,
@@ -26,13 +27,16 @@ import {
   dailyBars,
   dataQualityPrices,
   dataQualityStates,
+  fmtNetMoney,
   fmtStamp,
   fmtWinRate,
   HOW_YOU_TRADE_OPTIONS,
   type HowYouTradeKey,
+  NET_DRAWDOWN_BASIS,
   netIncomplete,
   rowProfitFactor,
   sampleNote,
+  streakText,
   syncSummary,
 } from '@/lib/discretionaryPnlView'
 import { fmtDuration, pnlClass } from '@/lib/strategyPnlView'
@@ -125,7 +129,7 @@ export function DailyPnlChart({
   )
 }
 
-function StripTile({
+export function StripTile({
   label,
   children,
   hint,
@@ -145,7 +149,7 @@ function StripTile({
   )
 }
 
-function Unavailable({ reason }: { reason: string | null | undefined }) {
+export function Unavailable({ reason }: { reason: string | null | undefined }) {
   return (
     <span className="font-sans font-normal text-muted-foreground" title={reason ?? undefined}>
       — <span className="text-[11px]">{reason ?? 'not available'}</span>
@@ -162,16 +166,27 @@ function TradeButton({
   formatCurrency: Money
   onSelect: (trade: TradeRef) => void
 }) {
+  // The server picks the largest win / loss on net P&L; a trade without a net shows its gross.
+  const amount = trade.net_pnl ?? trade.realized_pnl
   return (
     <button
       type="button"
-      className={cn('text-left underline-offset-2 hover:underline', pnlClass(trade.realized_pnl))}
+      className={cn(
+        'max-w-full break-words text-left underline-offset-2 hover:underline',
+        pnlClass(amount)
+      )}
       onClick={() => onSelect(trade)}
-      aria-label={`Show fills of the ${trade.realized_pnl >= 0 ? 'largest win' : 'largest loss'}, ${trade.symbol}`}
+      aria-label={`Show fills of the ${amount >= 0 ? 'largest win' : 'largest loss'}, ${trade.symbol}`}
+      title={
+        trade.net_pnl != null
+          ? `Net of estimated charges; gross ${formatCurrency(trade.realized_pnl)}`
+          : 'Gross: no charge estimate for this trade'
+      }
     >
-      {formatCurrency(trade.realized_pnl)}
-      <span className="ml-1 font-sans text-[11px] font-normal text-muted-foreground">
+      {formatCurrency(amount)}
+      <span className="block break-words font-sans text-[11px] font-normal text-muted-foreground">
         {trade.symbol} {trade.trade_date}
+        {trade.net_pnl != null ? ' (net)' : ' (gross)'}
       </span>
     </button>
   )
@@ -183,10 +198,13 @@ function TradeButton({
  */
 export function RiskStrip({
   consistency: c,
+  risk,
   formatCurrency,
   onSelectTrade,
 }: {
   consistency: ConsistencyBlock
+  /** Net realised drawdown and streaks; when given they replace the gross drawdown and streak tiles. */
+  risk?: RiskBlock | null
   formatCurrency: Money
   onSelectTrade: (trade: TradeRef) => void
 }) {
@@ -194,9 +212,17 @@ export function RiskStrip({
     <Card data-testid="risk-strip">
       <CardHeader className="pb-2">
         <CardTitle className="text-base">Risk and consistency</CardTitle>
+        {risk && (
+          <p className="text-xs text-muted-foreground" data-testid="risk-basis">
+            Drawdown and streaks: {NET_DRAWDOWN_BASIS}, in rupees (no percentage: there is no
+            capital basis).
+            {risk.net_unavailable_positions > 0 &&
+              ` ${risk.net_unavailable_positions} position(s) without a net P&L are left out.`}
+          </p>
+        )}
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-9">
           <StripTile label="Largest win" testId="risk-largest-win">
             {c.largest_win ? (
               <TradeButton
@@ -246,17 +272,32 @@ export function RiskStrip({
           <StripTile
             label="Max consecutive winning trades"
             testId="risk-win-streak"
-            hint={c.completed_trades === 0 ? 'no completed trades' : undefined}
+            hint={
+              risk
+                ? 'net of charges; break-even ends a streak'
+                : c.completed_trades === 0
+                  ? 'no completed trades'
+                  : undefined
+            }
           >
-            <span title={c.streak_rule}>{c.max_consecutive_wins}</span>
+            <span title={c.streak_rule}>
+              {risk ? risk.max_consecutive_wins : c.max_consecutive_wins}
+            </span>
           </StripTile>
           <StripTile
             label="Max consecutive losing trades"
             testId="risk-loss-streak"
             hint="break-even ends a streak"
           >
-            <span title={c.streak_rule}>{c.max_consecutive_losses}</span>
+            <span title={c.streak_rule}>
+              {risk ? risk.max_consecutive_losses : c.max_consecutive_losses}
+            </span>
           </StripTile>
+          {risk && (
+            <StripTile label="Current streak" testId="risk-current-streak">
+              {streakText(risk.current_streak)}
+            </StripTile>
+          )}
           <StripTile
             label="Avg holding time"
             testId="risk-hold"
@@ -272,19 +313,46 @@ export function RiskStrip({
               fmtDuration(c.avg_hold_minutes)
             )}
           </StripTile>
-          <StripTile
-            label="Max drawdown"
-            testId="risk-drawdown"
-            hint="gross realized; excludes charges and unrealized"
-          >
-            {c.max_drawdown == null ? (
-              <Unavailable reason={c.max_drawdown_unavailable_reason} />
-            ) : (
-              <span className={c.max_drawdown < 0 ? 'text-red-600' : undefined}>
-                {formatCurrency(Math.abs(c.max_drawdown))}
-              </span>
-            )}
-          </StripTile>
+          {risk ? (
+            <>
+              <StripTile
+                label="Max drawdown"
+                testId="risk-drawdown"
+                hint={
+                  risk.max_drawdown_at ? `at ${fmtStamp(risk.max_drawdown_at)}` : NET_DRAWDOWN_BASIS
+                }
+              >
+                <span className={risk.max_drawdown > 0 ? 'text-red-600' : undefined}>
+                  {risk.max_drawdown > 0 ? '-' : ''}
+                  {formatCurrency(Math.abs(risk.max_drawdown))}
+                </span>
+              </StripTile>
+              <StripTile
+                label="Current drawdown"
+                testId="risk-current-drawdown"
+                hint="below the best net equity so far"
+              >
+                <span className={risk.current_drawdown > 0 ? 'text-red-600' : undefined}>
+                  {risk.current_drawdown > 0 ? '-' : ''}
+                  {formatCurrency(Math.abs(risk.current_drawdown))}
+                </span>
+              </StripTile>
+            </>
+          ) : (
+            <StripTile
+              label="Max drawdown"
+              testId="risk-drawdown"
+              hint="gross realized; excludes charges and unrealized"
+            >
+              {c.max_drawdown == null ? (
+                <Unavailable reason={c.max_drawdown_unavailable_reason} />
+              ) : (
+                <span className={c.max_drawdown < 0 ? 'text-red-600' : undefined}>
+                  {formatCurrency(Math.abs(c.max_drawdown))}
+                </span>
+              )}
+            </StripTile>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -355,9 +423,12 @@ export function HowYouTradeTable({
                   {row.trades === 0 ? '—' : fmtWinRate(row.win_rate)}
                 </TableCell>
                 <TableCell
-                  className={cn('text-right font-mono', row.trades > 0 && pnlClass(row.expectancy))}
+                  className={cn(
+                    'text-right font-mono',
+                    row.trades > 0 && pnlClass(row.expectancy ?? 0)
+                  )}
                 >
-                  {row.trades === 0 ? '—' : formatCurrency(row.expectancy)}
+                  {row.trades === 0 ? '—' : fmtNetMoney(row.expectancy, formatCurrency)}
                 </TableCell>
                 <TableCell className="text-right font-mono" title={pf.title}>
                   {pf.value}

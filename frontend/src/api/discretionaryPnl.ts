@@ -1,6 +1,15 @@
 import type { PerformancePeriod } from '@/api/strategyPnl'
 import { webClient } from './client'
 
+/** Trade category filter; unclassified positions are part of 'all' only. */
+export type DiscretionaryCategory = 'all' | 'intraday' | 'swing'
+
+export const CATEGORY_CHOICES: { value: DiscretionaryCategory; label: string }[] = [
+  { value: 'all', label: 'All trades' },
+  { value: 'intraday', label: 'Intraday' },
+  { value: 'swing', label: 'Swing' },
+]
+
 /** Query-string value for a filter; blank or absent means "all". */
 export interface DiscretionaryFilters {
   broker?: string
@@ -34,18 +43,23 @@ export interface DiscretionaryMetrics {
   end_date?: string
   /** Completed trades (a position from flat to flat), not closing legs. */
   trades_count: number
+  /** Completed trades with a net P&L (the win / loss basis) and those without one. */
+  net_basis_trades?: number
+  net_unavailable_trades?: number
   winning_trades: number
   losing_trades: number
-  /** Percent, 0-100. */
-  win_rate: number
+  /** Percent, 0-100. Null (with `count_unavailable_reason`) when no completed trade has a net P&L. */
+  win_rate: number | null
   gross_profit: number
   gross_loss: number
   /** GROSS realized P&L (before charges); not the net figure. */
   net_profit: number
   profit_factor: number | null
-  expectancy: number
-  avg_win: number
-  avg_loss: number
+  expectancy: number | null
+  avg_win: number | null
+  avg_loss: number | null
+  /** Why the ratios above are null (no completed trade has a net P&L); null otherwise. */
+  count_unavailable_reason?: string | null
   sharpe_ratio?: number | null
   sortino_ratio?: number | null
   return_pct?: number | null
@@ -86,13 +100,15 @@ export interface BreakdownRow {
   trades: number
   wins: number
   losses: number
-  /** Percent, 0-100. */
-  win_rate: number
+  /** Percent, 0-100. Null when no position of the group has a net P&L. */
+  win_rate: number | null
   /** Null when there is profit and no loss (or nothing to divide). */
   profit_factor: number | null
-  expectancy: number
-  avg_win: number
-  avg_loss: number
+  expectancy: number | null
+  avg_win: number | null
+  avg_loss: number | null
+  /** Why the ratios are null (no position with a net P&L); null otherwise. */
+  stats_unavailable_reason?: string | null
   realized_gross: number
   charges: number
   charges_unavailable_trades: number
@@ -268,11 +284,12 @@ export interface ProvisionalBlock {
     trades: number
     wins: number
     losses: number
-    win_rate: number
+    win_rate: number | null
     profit_factor: number | null
-    expectancy: number
-    avg_win: number
-    avg_loss: number
+    expectancy: number | null
+    avg_win: number | null
+    avg_loss: number | null
+    stats_unavailable_reason?: string | null
     realized_gross: number
     charges: number
     net_of_charges: number
@@ -326,6 +343,14 @@ export interface DiscretionaryTrade {
   /** Number of closing legs (partial exits) in this trade. */
   legs: number
   position_seq?: number
+  category?: 'intraday' | 'swing' | 'unclassified'
+  /** Why the position is unclassified (a reason code); null otherwise. */
+  category_reason?: string | null
+  /** Exit minus entry for a long, entry minus exit for a short, per unit. */
+  points_per_unit?: number | null
+  opening_unknown?: boolean
+  has_orphan_fills?: boolean
+  orphan_fills?: number
 }
 
 export interface DiscretionaryPosition {
@@ -485,6 +510,7 @@ export interface DiscretionaryToday {
       | 'expectancy'
       | 'avg_win'
       | 'avg_loss'
+      | 'count_unavailable_reason'
     >
   >
   closed_positions: TodayClosedPosition[]
@@ -492,9 +518,137 @@ export interface DiscretionaryToday {
   pending_attribution: PendingAttribution
 }
 
+/** Counts of positions per category; `unclassified_reasons` maps a reason code to a count. */
+export interface CategoryCounts {
+  intraday: number
+  swing: number
+  unclassified: number
+  unclassified_reasons: Record<string, number>
+}
+
+export interface ClassificationBlock {
+  selected: DiscretionaryCategory
+  closed: CategoryCounts
+  open: CategoryCounts
+  note: string
+}
+
+/** Unresolved and orphan fills whose session date is in the selected range (never in any figure). */
+export interface UnresolvedInRange {
+  unresolved_fills: number
+  orphan_fills: number
+  total: number
+  start: string
+  end: string
+}
+
+export interface ReconciliationBlock {
+  basis?: string
+  headline_net: number
+  closed_positions_net: number
+  difference: number
+  reconciled: boolean
+  [key: string]: unknown
+}
+
+/** Points are per unit (not per lot) and are never summed across instruments. */
+export interface PointsByInstrumentRow {
+  symbol: string
+  exchange: string
+  positions: number
+  winners: number
+  losers: number
+  gross_points_gained: number
+  gross_points_lost: number
+  net_points: number
+  avg_points_per_position: number | null
+  avg_win_points: number | null
+  avg_loss_points: number | null
+  largest_win_points: number | null
+  largest_loss_points: number | null
+}
+
+export interface StreakNow {
+  type: 'win' | 'loss' | null
+  length: number
+}
+
+/** Net realised drawdown of the closed positions, in rupees (percent fields are always null). */
+export interface RiskBlock {
+  basis?: string
+  positions: number
+  net_unavailable_positions: number
+  max_drawdown: number
+  current_drawdown: number
+  peak_equity: number
+  latest_equity: number
+  max_drawdown_at: string | null
+  max_drawdown_pct: number | null
+  current_drawdown_pct: number | null
+  percent_unavailable_reason?: string | null
+  max_consecutive_wins: number
+  max_consecutive_losses: number
+  current_streak: StreakNow
+}
+
+/** One close month or close weekday of the closed positions. */
+export interface CalendarRow {
+  /** Monthly rows: YYYY-MM. */
+  period?: string
+  /** Weekday rows: Mon .. Sun. */
+  weekday?: string
+  key: string
+  positions: number
+  wins: number
+  losses: number
+  /** Percent, 0-100; null when no position has a net. */
+  win_rate: number | null
+  realized_gross: number
+  charges: number
+  net_of_charges: number
+  charges_unavailable_positions: number
+  net_unavailable_positions: number
+}
+
+export interface DurationStat {
+  count: number
+  mean_minutes: number | null
+  median_minutes: number | null
+}
+
+export interface TradeManagementBlock {
+  net_basis_positions: number
+  net_unavailable_positions: number
+  break_even_excluded: number
+  median_net_pnl: number | null
+  avg_net_pnl: number | null
+  winners: DurationStat
+  losers: DurationStat
+}
+
+export interface CostsBlock {
+  total_charges: number
+  gross_profit: number
+  charges_pct_of_gross_profit: number | null
+  reason: string | null
+  charges_unavailable_positions: number
+}
+
 export interface DiscretionarySummary {
   /** The current session; absent from older servers. */
   today?: DiscretionaryToday | null
+  /** The category the figures are for; absent from older servers. */
+  category?: DiscretionaryCategory
+  /** Null when the server could not compute it (a warning says so); absent from older servers. */
+  classification?: ClassificationBlock | null
+  unresolved_in_range?: UnresolvedInRange | null
+  reconciliation?: ReconciliationBlock | null
+  points_by_instrument?: PointsByInstrumentRow[] | null
+  risk?: RiskBlock | null
+  monthly?: CalendarRow[] | null
+  weekday?: CalendarRow[] | null
+  trade_management?: TradeManagementBlock | null
+  costs?: CostsBlock | null
   period: { period: string; start: string; end: string; reliable_since?: string }
   metrics: DiscretionaryMetrics
   build_id: string | null
@@ -540,6 +694,8 @@ export interface DiscretionarySummary {
   consistency?: ConsistencyBlock | null
   trades: DiscretionaryTrade[]
   trades_total: number
+  /** Rows in `trades` (the table is cut at a limit; every total covers all trades). */
+  trades_shown?: number
   trades_truncated: number
   positions: DiscretionaryPosition[]
   positions_total: number
@@ -602,6 +758,67 @@ export interface UnresolvedResponse {
   orphans_count: number
 }
 
+export interface ExcursionPosition {
+  id: number
+  symbol: string
+  exchange: string
+  direction: 'LONG' | 'SHORT'
+  category: 'intraday' | 'swing' | 'unclassified'
+  opened_at: string
+  closed_at: string
+  closed_quantity: number
+  points_per_unit: number | null
+  net_pnl: number | null
+  status: 'available' | 'unavailable'
+  reason: string | null
+  reason_text: string | null
+  mae_points: number | null
+  mfe_points: number | null
+  mae_amount: number | null
+  mfe_amount: number | null
+  minute_bar_precision: boolean
+  profit_capture: number | null
+}
+
+export interface ExcursionDist {
+  count: number
+  average: number | null
+  median: number | null
+}
+
+export interface ExcursionGroup {
+  mae_points: ExcursionDist
+  mfe_points: ExcursionDist
+  mae_amount: ExcursionDist
+  mfe_amount: ExcursionDist
+}
+
+export interface ExcursionAggregates {
+  winners: ExcursionGroup & { profit_capture: ExcursionDist }
+  losers: ExcursionGroup
+  coverage: {
+    available: number
+    total: number
+    label: string
+    unavailable_reasons: Record<string, number>
+  }
+  minute_bar_precision: boolean
+  precision_note: string
+}
+
+/** MAE / MFE of the closed positions of a scope (lazy, separate from the summary). */
+export interface ExcursionsResponse {
+  build_id: string | null
+  period: { period: string; start: string; end: string }
+  category: DiscretionaryCategory
+  positions: ExcursionPosition[]
+  positions_total: number
+  computed: number
+  cap: number
+  aggregates: ExcursionAggregates
+  note: string
+}
+
 /** An error from the Discretionary API, with the backend's machine code when it sent one. */
 export class DiscretionaryApiError extends Error {
   code?: string
@@ -627,18 +844,44 @@ function buildParams(
   return params
 }
 
-export function summaryParams(
+/**
+ * The query shared by the summary, the excursions and the CSV export, so they cannot drift:
+ * period (and the custom range), the broker / account / symbol filters and the category.
+ */
+export function scopeParams(
   period: PerformancePeriod,
   range: DiscretionaryRange | undefined,
   filters: DiscretionaryFilters,
-  quotes: boolean
+  category: DiscretionaryCategory = 'all'
 ): URLSearchParams {
-  const params = buildParams(filters, { period, quotes: quotes ? '1' : '0' })
+  const params = buildParams(filters, { period, category })
   if (period === 'custom' && range) {
     params.set('start', range.start)
     params.set('end', range.end)
   }
   return params
+}
+
+export function summaryParams(
+  period: PerformancePeriod,
+  range: DiscretionaryRange | undefined,
+  filters: DiscretionaryFilters,
+  quotes: boolean,
+  category: DiscretionaryCategory = 'all'
+): URLSearchParams {
+  const params = scopeParams(period, range, filters, category)
+  params.set('quotes', quotes ? '1' : '0')
+  return params
+}
+
+/** Link of the CSV download: the summary's scope (same params function), no quotes. */
+export function exportCsvUrl(
+  period: PerformancePeriod,
+  range: DiscretionaryRange | undefined,
+  filters: DiscretionaryFilters,
+  category: DiscretionaryCategory = 'all'
+): string {
+  return `/api/discretionary-pnl/export.csv?${scopeParams(period, range, filters, category).toString()}`
 }
 
 async function read<T extends { status?: string }>(
@@ -688,13 +931,28 @@ export const discretionaryPnlApi = {
     period: PerformancePeriod,
     range: DiscretionaryRange | undefined,
     filters: DiscretionaryFilters,
-    quotes: boolean
+    quotes: boolean,
+    category: DiscretionaryCategory = 'all'
   ): Promise<DiscretionarySummary> =>
     read(
       webClient.get<DiscretionarySummary & { status?: string }>(
-        `/api/discretionary-pnl/summary?${summaryParams(period, range, filters, quotes).toString()}`
+        `/api/discretionary-pnl/summary?${summaryParams(period, range, filters, quotes, category).toString()}`
       ),
       'Could not load the discretionary P&L'
+    ),
+
+  /** MAE / MFE of the closed positions of the same scope; slow, so it is a separate call. */
+  excursions: (
+    period: PerformancePeriod,
+    range: DiscretionaryRange | undefined,
+    filters: DiscretionaryFilters,
+    category: DiscretionaryCategory = 'all'
+  ): Promise<ExcursionsResponse> =>
+    read(
+      webClient.get<ExcursionsResponse & { status?: string }>(
+        `/api/discretionary-pnl/excursions?${scopeParams(period, range, filters, category).toString()}`
+      ),
+      'Could not load MAE / MFE'
     ),
 
   /**
