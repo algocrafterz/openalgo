@@ -49,10 +49,21 @@ def test_three_known_trades_metrics_and_consistency(env):
     out = perf()
     m = out["metrics"]
     assert m["trades_count"] == 3
+    # Win / loss basis is NET of estimated charges (was gross: PF 4.0, avg win 80, avg loss 40,
+    # expectancy 40). Reference from the per-trade net P&L of the table.
+    nets = [row["net_pnl"] for row in out["trades"]]
+    for row in out["trades"]:  # net = gross less the estimated charges of the position
+        assert 0 < row["charges"] < 5
+        assert row["net_pnl"] == approx(row["realized_pnl"] - row["charges"])
+    assert sorted(round(row["realized_pnl"]) for row in out["trades"]) == [-40, 60, 100]
+    wins = [v for v in nets if v > 0]
+    losses = [v for v in nets if v < 0]
     assert m["win_rate"] == approx(66.67, 0.01)
-    assert m["profit_factor"] == approx(4.0)
-    assert m["avg_win"] == approx(80) and m["avg_loss"] == approx(40)
-    assert m["expectancy"] == approx(40)
+    assert m["profit_factor"] == approx(sum(wins) / -sum(losses), 0.01)
+    assert m["avg_win"] == approx(sum(wins) / len(wins), 0.01)
+    assert m["avg_loss"] == approx(-sum(losses) / len(losses), 0.01)
+    assert m["expectancy"] == approx(sum(nets) / len(nets), 0.01)
+    assert (m["net_basis_trades"], m["net_unavailable_trades"]) == (3, 0)
     c = out["consistency"]
     assert c["largest_win"]["realized_pnl"] == approx(100)
     assert c["largest_loss"]["realized_pnl"] == approx(-40)
@@ -112,7 +123,8 @@ def test_empty_book_blocks(env):
 
 
 def _tr(i, pnl_value, closed="2026-11-17 10:00:00"):
-    return {"id": i, "realized_pnl": pnl_value, "closed_at": closed}
+    # streaks / largest win are NET basis: a row with no charges has net == gross here
+    return {"id": i, "realized_pnl": pnl_value, "net_pnl": pnl_value, "closed_at": closed}
 
 
 def test_streaks_break_even_ends_a_streak():
@@ -121,6 +133,16 @@ def test_streaks_break_even_ends_a_streak():
     assert an.trade_streaks(trades) == (2, 3)
     assert an.trade_streaks([_tr(1, 5, "a"), _tr(2, 0, "b"), _tr(3, 5, "c")]) == (1, 0)
     assert an.trade_streaks([]) == (0, 0)
+
+
+def test_streaks_use_net_and_skip_trades_without_a_net():
+    # gross +1 with 2.0 charges is a net LOSS; a trade with no net neither extends nor ends
+    rows = [
+        {"id": 1, "realized_pnl": 1.0, "net_pnl": -1.0, "closed_at": "2026-11-17 10:01:00"},
+        {"id": 2, "realized_pnl": 9.0, "net_pnl": None, "closed_at": "2026-11-17 10:02:00"},
+        {"id": 3, "realized_pnl": 1.0, "net_pnl": -1.0, "closed_at": "2026-11-17 10:03:00"},
+    ]
+    assert an.trade_streaks(rows) == (0, 2)
 
 
 def test_streak_ties_on_close_time_are_ordered_by_id():
@@ -249,10 +271,13 @@ def test_partial_exit_money_follows_its_leg_bucket(env):
     hold = {r["key"]: r for r in out["breakdowns"]["hold_bucket"]}
     assert hold["<5m"]["trades"] == 0 and hold["<5m"]["realized_gross"] == approx(50)
     assert hold["1-4h"]["trades"] == 1 and hold["1-4h"]["realized_gross"] == approx(-50)
-    # break-even completed trade: no streak, no largest win / loss
+    # gross break-even, but on the NET basis it paid charges: a net loser (was a break-even
+    # trade with no streak and no largest loss on the gross basis)
     c = out["consistency"]
-    assert c["largest_win"] is None and c["largest_loss"] is None
-    assert (c["max_consecutive_wins"], c["max_consecutive_losses"]) == (0, 0)
+    assert c["largest_win"] is None
+    assert c["largest_loss"]["realized_pnl"] == approx(0)
+    assert c["largest_loss"]["net_pnl"] < 0
+    assert (c["max_consecutive_wins"], c["max_consecutive_losses"]) == (0, 1)
 
 
 def test_charges_unavailable_marks_net_incomplete_everywhere(env):
@@ -262,8 +287,13 @@ def test_charges_unavailable_marks_net_incomplete_everywhere(env):
     for rows in out["breakdowns"].values():
         assert rows[0]["net_charges_complete"] is False
         assert rows[0]["charges_unavailable_trades"] == 1
-    assert out["consistency"]["largest_win"]["charges_status"] == "unavailable"
-    assert out["consistency"]["largest_win"]["net_pnl"] is None
+    # no net => never measured on gross: not a win, not a loss, counted as unavailable
+    assert out["consistency"]["largest_win"] is None
+    assert out["metrics"]["net_unavailable_trades"] == 1 and out["metrics"]["net_basis_trades"] == 0
+    assert out["metrics"]["winning_trades"] == 0 and out["metrics"]["trades_count"] == 1
+    assert out["trades"][0]["net_pnl"] is None and out["trades"][0]["realized_pnl"] > 0
+    for rows in out["breakdowns"].values():
+        assert rows[0]["net_unavailable_trades"] == 1 and rows[0]["wins"] == 0
     assert out["by_period"]["daily"][0]["net_charges_complete"] is False
     assert out["consistency"]["avg_daily_net_complete"] is False
     dq = out["data_quality"]
@@ -454,7 +484,8 @@ def test_provisional_tcs_round_trip_numbers(env):
     assert sum(f["charge_allocated"] for f in tr["fills"]) == approx(tr["charges"])
     pm = p["metrics"]
     assert (pm["trades"], pm["wins"], pm["losses"], pm["win_rate"]) == (1, 0, 1, 0.0)
-    assert pm["avg_loss"] == approx(54.4) and pm["expectancy"] == approx(-54.4)
+    # net basis: the gross -54.4 plus 38.25 charges (was avg loss 54.4 on the gross basis)
+    assert pm["avg_loss"] == approx(92.65, 0.05) and pm["expectancy"] == approx(-92.65, 0.05)
     assert pm["realized_gross"] == approx(-54.4) and pm["net_charges_complete"] is True
     assert p["sample"]["sufficient"] is False
     # nothing of it reaches any figure

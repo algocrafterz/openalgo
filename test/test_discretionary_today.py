@@ -150,7 +150,15 @@ def test_c_partial_exit_then_final_exit(env):
     assert row["exit_price"] == approx((20 * 110 + 25 * 80) / 45)
     m = t["metrics"]
     assert (m["trades_count"], m["winning_trades"], m["losing_trades"]) == (1, 0, 1)
-    assert m["avg_loss"] == approx(300) and m["win_rate"] == 0
+    # net basis (was avg_loss 300 on gross). The expected net is derived independently of the
+    # module's row['net_pnl']: hand gross -300 less the charges of the ledger's closing legs
+    # (pnl.get_trades() leg rows, a different path than the position row).
+    leg_charges = sum(leg["charges"] for leg in pnl.get_trades())
+    leg_gross = sum(leg["realized_pnl"] for leg in pnl.get_trades())
+    expected_net = -300 - leg_charges
+    assert leg_gross == approx(-300) and leg_charges > 0
+    assert row["net_pnl"] == approx(expected_net) and expected_net < -300
+    assert m["avg_loss"] == approx(-expected_net) and m["win_rate"] == 0
     assert_reconciles(out)
 
 
@@ -268,9 +276,20 @@ def test_today_reconciles_with_headline_for_1d_and_ratios_match(env):
         assert t["metrics"][name] == out["metrics"][name], name
     m = t["metrics"]
     assert (m["trades_count"], m["winning_trades"], m["losing_trades"]) == (2, 1, 1)
-    assert m["win_rate"] == 50 and m["profit_factor"] == 2
-    assert m["avg_win"] == 100 and m["avg_loss"] == 50
-    assert m["expectancy"] == approx(0.5 * 100 - 0.5 * 50)
+    # net basis (was PF 2, avg win 100, avg loss 50 on gross). Expected nets are derived from
+    # the fixture (hand gross +100 SBIN, -50 ITC) less the charges of each symbol's closing
+    # legs from pnl.get_trades(), NOT from the module's own row['net_pnl'].
+    legs = pnl.get_trades()
+    charge_of = {s: sum(x["charges"] for x in legs if x["symbol"] == s) for s in ("SBIN", "ITC")}
+    win, loss = 100 - charge_of["SBIN"], 50 + charge_of["ITC"]
+    assert charge_of["SBIN"] > 0 and charge_of["ITC"] > 0 and win < 100 and loss > 50
+    table = {r["symbol"]: r["net_pnl"] for r in t["closed_positions"]}
+    assert table["SBIN"] == approx(win) and table["ITC"] == approx(-loss)
+    assert m["win_rate"] == 50 and m["profit_factor"] == pytest.approx(win / loss, abs=0.01)
+    assert m["avg_win"] == pytest.approx(win, abs=0.01) and m["avg_loss"] == pytest.approx(
+        loss, abs=0.01
+    )
+    assert m["expectancy"] == pytest.approx(0.5 * win - 0.5 * loss, abs=0.01)
     assert t["partially_closed_positions"] == 1 and t["completed_positions"] == 2
     assert_reconciles(out)
 

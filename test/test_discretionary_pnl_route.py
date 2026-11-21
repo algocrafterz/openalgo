@@ -156,6 +156,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(pnl, "_tables_ready", False)
     monkeypatch.setattr(pnl, "_quote_cache", {})
     monkeypatch.setattr(pnl, "_calendar_window", calendar_down)
+    monkeypatch.setattr(pnl, "_calendar_window_info", calendar_down)
     monkeypatch.setattr(pnl, "_confirmed_closed", lambda day, ex: False)
     monkeypatch.setattr(pnl, "_calendar_cache", {})
     monkeypatch.delenv("DISCRETIONARY_RELIABLE_SINCE", raising=False)
@@ -441,8 +442,15 @@ def test_pooled_ratios_are_computed_on_the_filtered_set(client, env, monkeypatch
     # legs as two losing trades; the profit factor is unchanged (same gross profit / loss).
     assert body["metrics"]["trades_count"] == 2
     assert body["metrics"]["win_rate"] == pytest.approx(50.0)
-    assert body["metrics"]["profit_factor"] == pytest.approx(1.43)
-    assert body["metrics"]["avg_loss"] == pytest.approx(70.0)
+    # Net basis (gross was PF 1.43 and avg loss 70.0): reference from the table's net P&L
+    nets = [row["net_pnl"] for row in body["trades"]]
+    wins = [v for v in nets if v > 0]
+    losses = [v for v in nets if v < 0]
+    assert len(wins) == 1 and len(losses) == 1
+    assert body["metrics"]["profit_factor"] == pytest.approx(
+        round(sum(wins) / -sum(losses), 2), abs=1e-9
+    )
+    assert body["metrics"]["avg_loss"] == pytest.approx(-sum(losses) / len(losses), abs=0.01)
     (row,) = body["by_symbol"]
     assert row["win_rate"] == body["metrics"]["win_rate"]
     assert row["profit_factor"] == body["metrics"]["profit_factor"]
@@ -827,3 +835,331 @@ def test_summary_carries_the_today_block_and_honours_filters(client, env, monkey
     other = summary(client, period="30d", symbol="ITC")["today"]
     assert other["open_positions"] == 0 and other["realized_gross"] == 0
     assert other["pending_attribution"]["grace_count"] == 0
+
+
+# ================================================================ Phase 2A: category, excursions, CSV
+
+import csv  # noqa: E402
+import io  # noqa: E402
+from datetime import timedelta, timezone  # noqa: E402
+
+import pandas as pd  # noqa: E402
+
+NEW_ROUTES = ("/api/discretionary-pnl/excursions", "/api/discretionary-pnl/export.csv")
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def nse_calendar(monkeypatch):
+    def info(day, exchange):
+        if exchange != "NSE" or day.weekday() >= 5:
+            return None
+
+        def ms(hh, mm):
+            naive = datetime(day.year, day.month, day.day, hh, mm) - datetime(1970, 1, 1)
+            return int(naive.total_seconds() * 1000) - 19_800_000
+
+        return {"start_ms": ms(9, 15), "end_ms": ms(15, 30), "is_special": False}
+
+    monkeypatch.setattr(pnl, "_calendar_window_info", info)
+    monkeypatch.setattr(pnl, "_confirmed_closed", lambda day, ex: day.weekday() >= 5)
+
+
+def flat_bars(monkeypatch, high=101.0, low=99.0, drop=()):
+    calls = []
+
+    def reader(symbol, exchange, start_ts, end_ts):
+        calls.append((symbol, exchange, start_ts, end_ts))
+        rows = [
+            {"timestamp": ts, "high": high, "low": low}
+            for ts in range(start_ts, end_ts + 1, 60)
+            if datetime.fromtimestamp(ts, tz=_IST).strftime("%H:%M") not in drop
+        ]
+        return pd.DataFrame(rows, columns=["timestamp", "high", "low"])
+
+    pnl._excursion_cache.clear()
+    monkeypatch.setattr(pnl, "_read_bars", reader)
+    return calls
+
+
+def csv_rows(response):
+    assert response.status_code == 200, response.get_data(as_text=True)
+    return list(csv.DictReader(io.StringIO(response.get_data(as_text=True))))
+
+
+@pytest.mark.parametrize("url", NEW_ROUTES)
+def test_new_routes_are_gated_and_need_a_login(client, env, monkeypatch, url):
+    assert get(client, url).get_json() == DISABLED_BODY and get(client, url).status_code == 404
+    with make_app().test_client() as anonymous:
+        assert anonymous.get(url).status_code in (302, 401)
+        enable(monkeypatch)
+        assert anonymous.get(url).status_code in (302, 401)
+
+
+@pytest.mark.parametrize("url", ("/api/discretionary-pnl/summary", *NEW_ROUTES))
+def test_unknown_category_is_a_400_not_a_silent_default(client, env, monkeypatch, url):
+    enable(monkeypatch)
+    seed(env)
+    for bad in ("positional", "unclassified", "ALL", "intraday,swing", "x" * 100):
+        r = get(client, url, period="all", category=bad)
+        assert r.status_code == 400, (url, bad)
+        assert r.get_json()["status"] == "error" and "category" in r.get_json()["message"]
+    for good in ("all", "intraday", "swing"):
+        assert get(client, url, period="all", category=good).status_code == 200
+    assert get(client, url, period="all").status_code == 200  # absent: all
+    assert get(client, url, period="all", category="").status_code == 200  # blank: all
+
+
+def test_summary_category_is_echoed_filters_trades_and_is_part_of_the_flight_key(
+    client, env, monkeypatch
+):
+    enable(monkeypatch)
+    nse_calendar(monkeypatch)
+    seed(env)
+    calls = []
+    real = pnl.get_performance
+
+    def spy(*args, **kwargs):
+        calls.append(args[-1])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pnl, "get_performance", spy)
+    everything = summary(client)
+    intraday = summary(client, category="intraday")
+    swing = summary(client, category="swing")
+    assert calls == ["all", "intraday", "swing"]  # three categories, three reads
+    assert (everything["category"], intraday["category"], swing["category"]) == (
+        "all",
+        "intraday",
+        "swing",
+    )
+    assert {t["symbol"] for t in swing["trades"]} == {"TCS"}
+    assert {t["category"] for t in intraday["trades"]} == {"intraday"}
+    assert (
+        intraday["metrics"]["trades_count"] == intraday["trades_total"] == len(intraday["trades"])
+    )
+    assert everything["trades_total"] == len(everything["trades"]) == everything["trades_shown"]
+    summary(client, category="swing")
+    assert len(calls) == 3  # identical read shared inside the ttl
+
+
+def test_excursion_endpoint_shape_note_aggregates_and_lazy_separation(client, env, monkeypatch):
+    enable(monkeypatch)
+    nse_calendar(monkeypatch)
+    calls = flat_bars(monkeypatch)
+    seed(env)
+    body = summary(client)
+    assert calls == []  # the summary never reads bars
+    assert "excursions" not in body and all("mae_points" not in t for t in body["trades"])
+    r = get(client, "/api/discretionary-pnl/excursions", period="all")
+    assert r.status_code == 200
+    ex = r.get_json()
+    assert ex["status"] == "success" and "after market close" in ex["note"]
+    by = {p["symbol"]: p for p in ex["positions"]}
+    assert set(by) == {"SBIN", "TCS", "INFY", "CRUDE"}
+    assert by["CRUDE"]["status"] == "unavailable" and by["CRUDE"]["reason"] == "unsupported_segment"
+    assert by["SBIN"]["status"] == "available" and by["SBIN"]["minute_bar_precision"] is True
+    assert ex["aggregates"]["coverage"]["total"] == 5  # SBIN x2, TCS, INFY, CRUDE
+    assert ex["aggregates"]["coverage"]["label"].endswith("positions available")
+    assert ex["cap"] == pnl.EXCURSION_MAX_POSITIONS and ex["category"] == "all"
+    assert not any(c[1] == "MCX" for c in calls)  # no read for an unsupported segment
+
+
+def test_excursion_endpoint_honours_category_broker_and_account(client, env, monkeypatch):
+    enable(monkeypatch)
+    nse_calendar(monkeypatch)
+    flat_bars(monkeypatch)
+    seed(env)
+    url = "/api/discretionary-pnl/excursions"
+    swing = get(client, url, period="all", category="swing").get_json()
+    assert [p["symbol"] for p in swing["positions"]] == ["TCS"]
+    z = get(client, url, period="all", broker="zerodha").get_json()
+    assert [p["symbol"] for p in z["positions"]] == ["INFY"]
+    b = get(client, url, period="all", account="B", category="intraday").get_json()
+    assert b["positions"] == []
+    custom = get(client, url, period="custom", start="2026-11-16", end="2026-11-16").get_json()
+    assert {p["symbol"] for p in custom["positions"]} == {"INFY", "CRUDE"}
+
+
+def test_csv_export_columns_rows_headers_and_row_count_equals_the_stats(client, env, monkeypatch):
+    enable(monkeypatch)
+    nse_calendar(monkeypatch)
+    flat_bars(monkeypatch)
+    monkeypatch.setattr(pnl, "TABLE_LIMIT", 2)  # the table is capped, the export is not
+    seed(env)
+    body = summary(client)
+    assert body["trades_total"] == 5 and body["trades_shown"] == 2
+    r = get(client, "/api/discretionary-pnl/export.csv", period="all")
+    assert r.status_code == 200 and r.mimetype == "text/csv"
+    assert r.headers["Content-Disposition"].startswith("attachment; filename=")
+    assert r.headers["Content-Disposition"].endswith('.csv"')
+    assert r.headers["Cache-Control"] == "no-store"
+    rows = csv_rows(r)
+    assert len(rows) == body["trades_total"] == body["metrics"]["trades_count"]
+    assert list(rows[0]) == list(pnl.EXPORT_COLUMNS)
+    for col in ("mae_points", "mfe_points", "mae_amount", "mfe_amount", "net_pnl", "category"):
+        assert col in rows[0]
+    # money reconciles: the CSV net of the positions that have a net equals the headline net
+    # less the CRUDE position (+100 gross, no charge estimate, so no net)
+    net = sum(float(x["net_pnl"]) for x in rows if x["net_pnl"] != "")
+    assert net == pytest.approx(body["net"] - 100.0, abs=0.01)
+    # unresolved and strategy fills never become rows
+    assert {x["symbol"] for x in rows} == {"SBIN", "TCS", "INFY", "CRUDE"}
+
+
+def test_csv_empty_is_unknown_not_zero(client, env, monkeypatch):
+    enable(monkeypatch)
+    nse_calendar(monkeypatch)
+    flat_bars(monkeypatch)
+    seed(env)
+    rows = {
+        (x["symbol"], x["trade_date"]): x
+        for x in csv_rows(get(client, "/api/discretionary-pnl/export.csv", period="all"))
+    }
+    crude = rows[("CRUDE", "2026-11-16")]  # MCX: no charge model, unsupported for MAE / MFE
+    assert crude["charges"] == "" and crude["net_pnl"] == ""
+    assert crude["gross_pnl"] == "100.0"
+    assert (
+        crude["mae_points"]
+        == crude["mfe_points"]
+        == crude["mae_amount"]
+        == crude["mfe_amount"]
+        == ""
+    )
+    assert crude["profit_capture"] == "" and crude["excursion_status"] == "unavailable"
+    assert crude["excursion_reason"] == "unsupported_segment"
+    sbin = rows[("SBIN", "2026-11-10")]
+    assert sbin["excursion_status"] == "available" and sbin["excursion_reason"] == ""
+    assert sbin["mae_points"] != "" and float(sbin["mae_points"]) >= 0.0
+    assert sbin["opened_at"].endswith("+05:30") and sbin["category"] == "intraday"
+    assert float(sbin["points_per_unit"]) == pytest.approx(10.0)
+
+
+def test_csv_mae_mfe_come_from_the_same_computation_as_the_endpoint(client, env, monkeypatch):
+    enable(monkeypatch)
+    nse_calendar(monkeypatch)
+    flat_bars(monkeypatch, high=112.0, low=97.0)
+    seed(env)
+    ex = get(client, "/api/discretionary-pnl/excursions", period="all").get_json()
+    sbin = next(p for p in ex["positions"] if p["symbol"] == "SBIN" and p["status"] == "available")
+    rows = csv_rows(get(client, "/api/discretionary-pnl/export.csv", period="all"))
+    row = next(
+        x for x in rows if x["symbol"] == "SBIN" and x["trade_date"] == sbin["closed_at"][:10]
+    )
+    assert (
+        float(row["mae_points"]) == sbin["mae_points"]
+        and float(row["mfe_points"]) == sbin["mfe_points"]
+    )
+    assert float(row["mae_amount"]) == sbin["mae_amount"]
+
+
+def test_csv_respects_date_broker_account_and_category_filters(client, env, monkeypatch):
+    enable(monkeypatch)
+    nse_calendar(monkeypatch)
+    flat_bars(monkeypatch)
+    seed(env)
+    url = "/api/discretionary-pnl/export.csv"
+    assert {x["broker"] for x in csv_rows(get(client, url, period="all", broker="zerodha"))} == {
+        "zerodha"
+    }
+    assert [x["symbol"] for x in csv_rows(get(client, url, period="all", category="swing"))] == [
+        "TCS"
+    ]
+    assert [x["symbol"] for x in csv_rows(get(client, url, period="all", account="B"))] == ["TCS"]
+    assert csv_rows(get(client, url, period="all", account="B", category="intraday")) == []
+    day = csv_rows(get(client, url, period="custom", start="2026-11-10", end="2026-11-10"))
+    assert [x["symbol"] for x in day] == ["SBIN"]
+    assert len(csv_rows(get(client, url, period="all", symbol="SBIN"))) == 2
+    for category in ("all", "intraday", "swing"):
+        summary_total = summary(client, category=category)["trades_total"]
+        assert len(csv_rows(get(client, url, period="all", category=category))) == summary_total
+    r = get(client, url, period="custom", start="2026-11-10", end="not-a-date")
+    assert r.status_code == 400
+    assert get(client, url, period="forever").status_code == 400
+
+
+def test_csv_formula_injection_is_guarded_for_text_but_not_numbers(client, env, monkeypatch):
+    enable(monkeypatch)
+    nse_calendar(monkeypatch)
+    flat_bars(monkeypatch)
+    seed(env)
+    for symbol in ('=HYPERLINK("x")', "+CMD", "-1+2", "@SUM(A1)"):
+        env.fill("BUY", 10, 100, d(13, 9, 30), symbol=symbol, account="E")
+        env.fill("SELL", 10, 95, d(13, 9, 50), symbol=symbol, account="E")  # a loss: negative nums
+    rows = csv_rows(get(client, "/api/discretionary-pnl/export.csv", period="all", account="E"))
+    symbols = {x["symbol"] for x in rows}
+    assert symbols == {'\'=HYPERLINK("x")', "'+CMD", "'-1+2", "'@SUM(A1)"}
+    for x in rows:
+        assert float(x["gross_pnl"]) == -50.0 and float(x["points_per_unit"]) == -5.0
+        # negative numeric cells are written as plain numbers: never quote-prefixed
+        for column in ("gross_pnl", "points_per_unit", "net_pnl", "charges"):
+            assert x[column] and not x[column].startswith("'"), column
+        assert x["gross_pnl"].startswith("-") and x["net_pnl"].startswith("-")
+        assert x["exchange"] == "NSE"
+
+
+def test_csv_cell_unit_rules():
+    cell = route_module._csv_cell
+    assert cell("symbol", None) == "" and cell("net_pnl", None) == ""
+    assert cell("symbol", "=A1") == "'=A1" and cell("symbol", "\tX") == "'\tX"
+    assert cell("symbol", "SBIN") == "SBIN" and cell("symbol", "") == ""
+    assert cell("net_pnl", -5.25) == -5.25 and cell("mae_points", 0.0) == 0.0  # 0 stays 0
+    assert cell("net_pnl", -12.5) == -12.5  # a negative number is not text: no quote prefix
+    out = io.StringIO()
+    csv.writer(out).writerow([cell("net_pnl", -12.5)])
+    assert out.getvalue().strip() == "-12.5"  # the written cell is unquoted
+    assert cell("holding_minutes", 0) == 0
+
+
+def test_excursion_and_export_are_read_only_and_make_no_broker_call(client, env, monkeypatch):
+    enable(monkeypatch)
+    nse_calendar(monkeypatch)
+    flat_bars(monkeypatch)
+    seed(env)
+    before = env.ledger_digest()
+    get(client, "/api/discretionary-pnl/excursions", period="all")
+    get(client, "/api/discretionary-pnl/export.csv", period="all")
+    assert env.ledger_digest() == before
+    assert env.quote_calls == [] and env.positionbook_calls == 0
+
+
+# ---------------------------------------------------------------- review fixes: error mapping
+
+
+@pytest.mark.parametrize(
+    ("url", "target"),
+    [
+        ("/api/discretionary-pnl/summary", "get_performance"),
+        ("/api/discretionary-pnl/excursions", "get_excursions"),
+        ("/api/discretionary-pnl/export.csv", "get_export"),
+    ],
+)
+def test_only_filter_errors_are_400_an_internal_value_error_is_a_generic_500(
+    client, env, monkeypatch, url, target
+):
+    enable(monkeypatch)
+    seed(env)
+
+    def internal(*a, **k):
+        raise ValueError("net P&L must be finite: secret-internal-detail")
+
+    monkeypatch.setattr(pnl, target, internal)
+    r = get(client, url, period="all")
+    assert r.status_code == 500
+    text_body = r.get_data(as_text=True)
+    assert "secret-internal-detail" not in text_body and "finite" not in text_body
+    assert r.get_json()["status"] == "error"
+
+    def bad_filter(*a, **k):
+        raise pnl.FilterError("category must be one of all, intraday, swing")
+
+    monkeypatch.setattr(pnl, target, bad_filter)
+    # a different period: the single-flight would replay the previous (cached) 500 otherwise
+    r = get(client, url, period="90d")
+    assert r.status_code == 400
+    assert r.get_json()["message"] == "category must be one of all, intraday, swing"
+
+
+def test_filter_error_is_a_value_error_so_service_callers_still_catch_it():
+    assert issubclass(pnl.FilterError, ValueError)
+    with pytest.raises(pnl.FilterError):
+        pnl.check_category("positional")

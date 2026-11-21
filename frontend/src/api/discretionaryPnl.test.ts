@@ -8,7 +8,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const get = vi.fn()
 vi.mock('./client', () => ({ webClient: { get: (...a: unknown[]) => get(...a) } }))
 
-const { discretionaryPnlApi, summaryParams } = await import('./discretionaryPnl')
+const { discretionaryPnlApi, exportCsvUrl, scopeParams, summaryParams } = await import(
+  './discretionaryPnl'
+)
 
 beforeEach(() => vi.clearAllMocks())
 
@@ -45,7 +47,12 @@ describe('summary params', () => {
       { broker: ' flattrade ', symbol: '', account: undefined },
       false
     )
-    expect(Object.fromEntries(p)).toEqual({ period: '30d', quotes: '0', broker: 'flattrade' })
+    expect(Object.fromEntries(p)).toEqual({
+      period: '30d',
+      category: 'all',
+      quotes: '0',
+      broker: 'flattrade',
+    })
   })
 
   it('sends quotes=1 and the custom range', () => {
@@ -57,6 +64,7 @@ describe('summary params', () => {
     )
     expect(Object.fromEntries(p)).toEqual({
       period: 'custom',
+      category: 'all',
       quotes: '1',
       symbol: 'TCS',
       start: '2026-11-01',
@@ -64,9 +72,64 @@ describe('summary params', () => {
     })
   })
 
+  it('sends the category, and only the three known values are offered', () => {
+    for (const category of ['all', 'intraday', 'swing'] as const) {
+      const p = summaryParams('30d', undefined, {}, false, category)
+      expect(p.get('category')).toBe(category)
+    }
+  })
+
   it('leaves a stale range out for a preset period', () => {
     const p = summaryParams('7d', { start: '2026-11-01', end: '2026-11-10' }, {}, false)
     expect(p.has('start')).toBe(false)
+  })
+})
+
+describe('scope shared by summary, excursions and export', () => {
+  const range = { start: '2026-11-01', end: '2026-11-10' }
+  const filters = { broker: 'zerodha', account: 'ZR1', symbol: 'TCS' }
+
+  it('is the summary query without quotes, so the three cannot drift', () => {
+    const summary = Object.fromEntries(summaryParams('custom', range, filters, true, 'swing'))
+    const scope = Object.fromEntries(scopeParams('custom', range, filters, 'swing'))
+    delete (summary as Record<string, string>).quotes
+    expect(scope).toEqual(summary)
+    expect(scope).toEqual({
+      period: 'custom',
+      category: 'swing',
+      broker: 'zerodha',
+      account: 'ZR1',
+      symbol: 'TCS',
+      start: '2026-11-01',
+      end: '2026-11-10',
+    })
+  })
+
+  it('builds the CSV link from the same scope', () => {
+    const url = exportCsvUrl('custom', range, filters, 'intraday')
+    const [path, query] = url.split('?')
+    expect(path).toBe('/api/discretionary-pnl/export.csv')
+    expect(Object.fromEntries(new URLSearchParams(query))).toEqual(
+      Object.fromEntries(scopeParams('custom', range, filters, 'intraday'))
+    )
+  })
+
+  it('asks the excursions endpoint with the same scope', async () => {
+    get.mockResolvedValue({ data: { status: 'success', positions: [] } })
+    await discretionaryPnlApi.excursions('7d', undefined, { symbol: 'TCS' }, 'swing')
+    const url = get.mock.calls[0][0] as string
+    expect(url.startsWith('/api/discretionary-pnl/excursions?')).toBe(true)
+    expect(Object.fromEntries(new URLSearchParams(url.split('?')[1]))).toEqual({
+      period: '7d',
+      category: 'swing',
+      symbol: 'TCS',
+    })
+  })
+
+  it('sends category on the summary request', async () => {
+    get.mockResolvedValue({ data: { status: 'success' } })
+    await discretionaryPnlApi.summary('7d', undefined, {}, false, 'intraday')
+    expect(get.mock.calls[0][0]).toContain('category=intraday')
   })
 })
 

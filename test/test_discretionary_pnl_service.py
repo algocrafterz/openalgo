@@ -95,6 +95,7 @@ def _calendar_down(day, exchange):
 def _clock_only(monkeypatch):
     """No test reads the real market calendar: it is 'down' unless a test supplies a window."""
     monkeypatch.setattr(pnl, "_calendar_window", _calendar_down)
+    monkeypatch.setattr(pnl, "_calendar_window_info", _calendar_down)
     monkeypatch.setattr(pnl, "_confirmed_closed", lambda day, ex: False)
     monkeypatch.setattr(pnl, "_calendar_cache", {})
 
@@ -141,6 +142,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(pnl, "_account_auth_provider", lambda broker, account: ("tok", "feed"))
     # no real market calendar read in tests: the calendar "fails", so the clock windows apply
     monkeypatch.setattr(pnl, "_calendar_window", _calendar_down)
+    monkeypatch.setattr(pnl, "_calendar_window_info", _calendar_down)
     monkeypatch.setattr(pnl, "_calendar_cache", {})
     monkeypatch.setattr(pnl, "_tables_ready", False)
     monkeypatch.delenv("DISCRETIONARY_MCX_CLOSE", raising=False)
@@ -478,7 +480,10 @@ def test_unrealized_never_reaches_metrics(env):
     assert s["open_positions"] == 1
     m = s["metrics"]
     assert m["net_profit"] == pytest.approx(100.0) and m["trades_count"] == 1
-    assert m["gross_profit"] == pytest.approx(100.0)
+    # gross_profit is a sum of NET wins now: the +100 gross trade less its estimated charges
+    done = next(t for t in pnl.get_trades() if t["symbol"] == "DONE")
+    assert m["gross_profit"] == pytest.approx(100.0 - done["charges"], abs=0.01)
+    assert 99.0 < m["gross_profit"] < 100.0
     assert m["equity_curve"][-1]["value"] == pytest.approx(100.0)
     assert "unrealized" in m["equity_basis"] and "excludes" in m["equity_basis"]
 
@@ -1526,7 +1531,14 @@ def test_scenario_a_partial_exit_is_realized_but_not_a_trade(env):
     m = perf["metrics"]
     assert m["trades_count"] == 0 and m["winning_trades"] == 0 and m["losing_trades"] == 0
     # no completed trade: nothing to rate (compute_metrics answers 0; the UI shows a dash)
-    assert (m["win_rate"], m["profit_factor"], m["avg_win"], m["expectancy"]) == (0, 0, 0, 0)
+    # no completed trade has a net P&L: the ratios are unknown (None), never 0
+    assert (m["win_rate"], m["profit_factor"], m["avg_win"], m["expectancy"]) == (
+        None,
+        None,
+        None,
+        None,
+    )
+    assert m["avg_loss"] is None and m["count_unavailable_reason"]
     assert perf["trades"] == [] and perf["trades_total"] == 0
     assert set(_counts(perf)) == {0}
     assert perf["hold"]["overall"]["count"] == 0
@@ -1554,7 +1566,9 @@ def test_scenario_b_full_exit_makes_one_trade_of_all_legs(env):
     assert t["charges"] == pytest.approx(perf["charges"], abs=1e-4)  # one trade: all charges
     m = perf["metrics"]
     assert (m["trades_count"], m["win_rate"], m["profit_factor"]) == (1, 100.0, None)
-    assert (m["avg_win"], m["expectancy"]) == (400.0, 400.0)
+    # net basis (was 400.0 / 400.0 on gross): 400 less the position's estimated charges
+    assert m["avg_win"] == pytest.approx(t["net_pnl"], abs=0.01)
+    assert m["expectancy"] == pytest.approx(t["net_pnl"], abs=0.01)
     assert perf["hold"]["overall"]["mean_minutes"] == 60.0
     _assert_money_reconciles(perf)
 
@@ -1568,7 +1582,11 @@ def test_scenario_c_a_winning_leg_inside_a_losing_trade_is_a_loss(env):
     m = perf["metrics"]
     assert (m["trades_count"], m["winning_trades"], m["losing_trades"]) == (1, 0, 1)
     assert (m["win_rate"], m["profit_factor"]) == (0.0, 0.0)
-    assert (m["avg_loss"], m["expectancy"]) == (50.0, -50.0)
+    # net basis (was 50.0 / -50.0 on gross): 50 plus the position's estimated charges
+    (only,) = perf["trades"]
+    assert m["avg_loss"] == pytest.approx(-only["net_pnl"], abs=0.01)
+    assert m["expectancy"] == pytest.approx(only["net_pnl"], abs=0.01)
+    assert only["net_pnl"] < -50.0
     (row,) = perf["by_symbol"]
     assert (row["wins"], row["losses"], row["win_rate"]) == (0, 1, 0.0)
     _assert_money_reconciles(perf)
@@ -1836,6 +1854,7 @@ def _money_view(out):
         "source_labels",  # read-time source label counts: informational, no figure
         "data_quality",
         "provisional",
+        "unresolved_in_range",  # count of unresolved / orphan fills of the range: informational
     }
 
     def strip(v):
@@ -1863,3 +1882,285 @@ def test_execution_counts_change_no_figure(env):
     assert _exec_counts(before) == (3, 0) and _exec_counts(after) == (4, 1)
     pending = after["today"]["pending_attribution"]
     assert pending["grace_count"] + pending["other_total"] == 1
+
+
+# ================================================================ Phase 2A: category, reconciliation
+
+
+def _nse_calendar(monkeypatch):
+    """The market calendar answers NSE 09:15-15:30 on weekdays (closed at weekends)."""
+
+    def window(day):
+        def ms(hh, mm):
+            naive = datetime(day.year, day.month, day.day, hh, mm) - datetime(1970, 1, 1)
+            return int(naive.total_seconds() * 1000) - 19_800_000
+
+        return {"start_ms": ms(9, 15), "end_ms": ms(15, 30), "is_special": False}
+
+    monkeypatch.setattr(
+        pnl,
+        "_calendar_window_info",
+        lambda day, ex: window(day) if ex == "NSE" and day.weekday() < 5 else None,
+    )
+    monkeypatch.setattr(pnl, "_confirmed_closed", lambda day, ex: day.weekday() >= 5)
+
+
+def _seed_categories(env):
+    # intraday win: SBIN, Tue 10
+    env.fill("BUY", 10, 100, d(10, 9, 30))
+    env.fill("SELL", 10, 110, d(10, 9, 45))
+    # swing with a partial exit the first day: TCS CNC, Wed 11 -> Thu 12
+    env.fill("BUY", 10, 3000, d(11, 10, 0), symbol="TCS", product="CNC")
+    env.fill("SELL", 4, 3050, d(11, 11, 0), symbol="TCS", product="CNC")
+    env.fill("SELL", 6, 3040, d(12, 10, 0), symbol="TCS", product="CNC")
+    # intraday loss, other account: ITC, Thu 12
+    env.fill("BUY", 20, 400, d(12, 10, 0), symbol="ITC", account="B")
+    env.fill("SELL", 20, 398, d(12, 10, 30), symbol="ITC", account="B")
+    # unclassified: a sell whose opening is not in the ledger (orphan), then a round trip
+    env.fill("SELL", 5, 1500, d(13, 9, 40), symbol="INFY", product="CNC")
+    env.fill("BUY", 5, 1490, d(13, 10, 0), symbol="INFY", product="CNC")
+    env.fill("SELL", 5, 1500, d(13, 11, 0), symbol="INFY", product="CNC")
+
+
+def _perf_cat(category, **kw):
+    return pnl.get_performance(period="all", category=category, **kw)
+
+
+def test_category_filter_money_counts_and_tables_reconcile(env, monkeypatch):
+    _nse_calendar(monkeypatch)
+    _seed_categories(env)
+    out = {c: _perf_cat(c) for c in ("all", "intraday", "swing")}
+    cls = out["all"]["classification"]
+    assert (cls["closed"]["intraday"], cls["closed"]["swing"], cls["closed"]["unclassified"]) == (
+        2,
+        1,
+        1,
+    )
+    assert cls["closed"]["unclassified_reasons"] == {"opening_unknown": 1}
+    assert {c: len(o["trades"]) for c, o in out.items()} == {"all": 4, "intraday": 2, "swing": 1}
+    assert {t["category"] for t in out["all"]["trades"]} == {"intraday", "swing", "unclassified"}
+    assert {t["symbol"] for t in out["intraday"]["trades"]} == {"SBIN", "ITC"}
+    assert {t["symbol"] for t in out["swing"]["trades"]} == {"TCS"}
+    # every table / block follows the same set
+    for cat, symbols in (("intraday", {"SBIN", "ITC"}), ("swing", {"TCS"})):
+        o = out[cat]
+        assert {r["key"] for r in o["by_symbol"]} == symbols
+        assert o["metrics"]["trades_count"] == len(o["trades"]) == o["trades_total"]
+        assert o["category"] == cat and o["classification"]["selected"] == cat
+        assert sum(r["realized_gross"] for r in o["by_period"]["daily"]) == pytest.approx(
+            o["realized_gross"]
+        )
+    # the unclassified position is in 'all' only; the three views add up to 'all'
+    parts = ("intraday", "swing")
+    unclassified = [t for t in out["all"]["trades"] if t["category"] == "unclassified"]
+    assert len(unclassified) == 1 and unclassified[0]["category_reason"] == "opening_unknown"
+    extra = sum(t["realized_pnl"] for t in unclassified)
+    assert sum(out[c]["realized_gross"] for c in parts) + extra == pytest.approx(
+        out["all"]["realized_gross"]
+    )
+    assert sum(out[c]["net"] for c in parts) + sum(
+        t["net_pnl"] for t in unclassified
+    ) == pytest.approx(out["all"]["net"], abs=1e-3)
+
+
+def test_headline_reconciles_to_the_closed_position_ledger(env, monkeypatch):
+    _nse_calendar(monkeypatch)
+    _seed_categories(env)
+    for cat in ("all", "intraday", "swing"):
+        o = _perf_cat(cat)
+        rec = o["reconciliation"]
+        # sum of the net P&L of the selected closed positions == the headline net, because every
+        # position of this book closed inside the period and none is still partly open
+        assert rec["closed_positions_net"] == pytest.approx(
+            sum(t["net_pnl"] for t in o["trades"]), abs=1e-3
+        )
+        assert rec["headline_net"] == pytest.approx(o["net"], abs=1e-3)
+        assert rec["closed_positions"] == len(o["trades"]) and rec["reconciled"] is True
+        assert rec["closed_positions_net"] == pytest.approx(rec["headline_net"], abs=1e-3), cat
+        assert rec["difference"] == 0.0
+
+
+def test_period_straddling_partial_exit_is_explained_not_hidden(env, monkeypatch):
+    _nse_calendar(monkeypatch)
+    _seed_categories(env)
+    # TCS: partial exit Wed 11, final close Thu 12. Period = Thu 12 only.
+    o = pnl.get_performance(period="custom", start="2026-11-12", end="2026-11-12", category="swing")
+    rec = o["reconciliation"]
+    (tcs,) = o["trades"]
+    leg_wed = 4 * (3050 - 3000)  # 200 gross, closed on the 11th, before the period
+    assert rec["earlier_legs_of_closed_positions"] != 0.0
+    assert rec["difference"] == pytest.approx(-rec["earlier_legs_of_closed_positions"], abs=1e-3)
+    assert rec["closed_positions_net"] == pytest.approx(tcs["net_pnl"], abs=1e-3)
+    assert rec["headline_net"] == pytest.approx(o["net"], abs=1e-3)
+    assert o["realized_gross"] == pytest.approx(tcs["realized_pnl"] - leg_wed, abs=1e-3)  # legs
+    assert rec["reconciled"] is True
+    # the other direction: a position opened and partly exited in the period, still open
+    env.fill("BUY", 10, 500, d(17, 9, 30), symbol="HDFC")
+    env.fill("SELL", 4, 510, d(17, 10, 0), symbol="HDFC")
+    o = pnl.get_performance(period="custom", start="2026-11-17", end="2026-11-17")
+    rec = o["reconciliation"]
+    assert rec["open_position_partial_exits"] != 0.0 and rec["closed_positions"] == 0
+    assert rec["difference"] == pytest.approx(rec["open_position_partial_exits"], abs=1e-3)
+    assert rec["reconciled"] is True
+
+
+def test_unknown_category_is_rejected_not_defaulted(env):
+    for bad in ("positional", "unclassified", "ALL", "", None, 1):
+        with pytest.raises(ValueError):
+            pnl.get_performance(period="all", category=bad)
+        with pytest.raises(ValueError):
+            pnl.get_summary(period="all", category=bad)
+
+
+def test_category_combines_with_broker_account_and_date_filters(env, monkeypatch):
+    _nse_calendar(monkeypatch)
+    _seed_categories(env)
+    env.fill("BUY", 10, 100, d(13, 9, 30), symbol="SBIN", broker="zerodha", account="Z")
+    env.fill("SELL", 10, 103, d(13, 9, 50), symbol="SBIN", broker="zerodha", account="Z")
+    o = _perf_cat("intraday", broker="zerodha")
+    assert [t["broker"] for t in o["trades"]] == ["zerodha"] and o["category"] == "intraday"
+    o = _perf_cat("intraday", broker="flattrade", account="B")
+    assert [t["symbol"] for t in o["trades"]] == ["ITC"]
+    o = _perf_cat("swing", broker="flattrade", account="B")
+    assert o["trades"] == [] and o["metrics"]["trades_count"] == 0
+    o = pnl.get_performance(
+        period="custom", start="2026-11-12", end="2026-11-13", category="intraday", account="B"
+    )
+    assert [t["symbol"] for t in o["trades"]] == ["ITC"]
+    o = pnl.get_performance(
+        period="custom", start="2026-11-13", end="2026-11-13", category="intraday"
+    )
+    assert [t["broker"] for t in o["trades"]] == ["zerodha"]
+    assert (
+        pnl.get_performance(
+            period="custom", start="2026-11-11", end="2026-11-11", category="intraday"
+        )["trades"]
+        == []
+    )
+    assert o["reconciliation"]["reconciled"] is True
+
+
+def test_calendar_down_swing_is_a_fallback_and_intraday_is_unclassified(env):
+    _seed_categories(env)  # the autouse fixture keeps the calendar down
+    o = _perf_cat("all")
+    by = {t["symbol"]: t for t in o["trades"]}
+    assert (by["TCS"]["category"], by["TCS"]["category_reason"]) == ("swing", "fallback_boundary")
+    assert (by["SBIN"]["category"], by["SBIN"]["category_reason"]) == (
+        "unclassified",
+        "fallback_boundary",
+    )
+    assert _perf_cat("intraday")["trades"] == []
+
+
+def test_open_positions_follow_the_category_filter(env, monkeypatch):
+    _nse_calendar(monkeypatch)
+    env.fill("BUY", 10, 500, d(16, 14, 0), symbol="HDFC", product="CNC")  # opened Mon: swing now
+    env.fill("BUY", 10, 700, d(17, 10, 0), symbol="ITC")  # opened today, market still open
+    allv = _perf_cat("all")
+    assert {p["symbol"] for p in allv["positions"]} == {"HDFC", "ITC"}
+    assert {p["symbol"] for p in _perf_cat("swing")["positions"]} == {"HDFC"}
+    assert _perf_cat("intraday")["positions"] == []
+    assert allv["classification"]["open"]["swing"] == 1
+    assert allv["classification"]["open"]["unclassified_reasons"] == {"still_open_in_session": 1}
+
+
+def test_stats_and_export_use_all_positions_only_the_table_is_capped(env, monkeypatch):
+    _nse_calendar(monkeypatch)
+    monkeypatch.setattr(pnl, "TABLE_LIMIT", 3)
+    for i in range(7):
+        env.fill("BUY", 10, 100, d(10, 9, 20 + 2 * i))
+        env.fill("SELL", 10, 101 + i, d(10, 9, 21 + 2 * i))
+    o = _perf_cat("all")
+    assert o["metrics"]["trades_count"] == 7 == o["trades_total"]
+    assert (len(o["trades"]), o["trades_shown"], o["trades_truncated"]) == (3, 3, 4)
+    assert o["by_symbol"][0]["trades"] == 7 and o["sample"]["completed_trades"] == 7
+    assert o["points_by_instrument"][0]["positions"] == 7
+    assert o["risk"]["positions"] == 7 and o["monthly"][0]["positions"] == 7
+    assert pnl.get_export(period="all")["rows"].__len__() == 7  # the export has no table limit
+
+
+def test_new_summary_blocks_shape_and_json(env, monkeypatch):
+    import json
+
+    _nse_calendar(monkeypatch)
+    _seed_categories(env)
+    o = _perf_cat("all")
+    for name in (
+        "points_by_instrument",
+        "risk",
+        "monthly",
+        "weekday",
+        "trade_management",
+        "costs",
+        "classification",
+        "unresolved_in_range",
+        "reconciliation",
+    ):
+        assert o[name] is not None, name
+    assert {r["symbol"] for r in o["points_by_instrument"]} == {"SBIN", "TCS", "ITC", "INFY"}
+    sbin = next(r for r in o["points_by_instrument"] if r["symbol"] == "SBIN")
+    assert sbin["net_points"] == 10.0 and sbin["positions"] == 1
+    assert set(o["risk"]) >= {
+        "max_drawdown",
+        "current_drawdown",
+        "current_streak",
+        "max_consecutive_wins",
+    }
+    assert o["monthly"][0]["period"] == "2026-11"
+    assert [r["weekday"] for r in o["weekday"]][:5] == ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    for row in o["trades"]:
+        for key in (
+            "category",
+            "points_per_unit",
+            "opening_unknown",
+            "orphan_fills",
+            "hold_minutes",
+        ):
+            assert key in row
+    json.dumps(o)
+
+
+def test_net_unavailable_positions_are_flagged_everywhere_not_dropped(env, monkeypatch):
+    _nse_calendar(monkeypatch)
+    env.fill("BUY", 50, 100, d(12, 9, 30), symbol="NIFTY26NOV26FUT", exchange="NFO", product="NRML")
+    env.fill(
+        "SELL", 50, 101, d(12, 9, 40), symbol="NIFTY26NOV26FUT", exchange="NFO", product="NRML"
+    )
+    env.fill("BUY", 10, 100, d(12, 10, 0))
+    env.fill("SELL", 10, 95, d(12, 10, 30))
+    o = _perf_cat("all")
+    assert o["metrics"]["trades_count"] == 2
+    assert (o["metrics"]["net_basis_trades"], o["metrics"]["net_unavailable_trades"]) == (1, 1)
+    assert o["metrics"]["winning_trades"] == 0 and o["metrics"]["losing_trades"] == 1
+    assert o["realized_gross"] == pytest.approx(50 - 50)  # gross totals keep BOTH positions
+    assert o["risk"]["net_unavailable_positions"] == 1 and o["risk"]["positions"] == 1
+    assert o["costs"]["charges_unavailable_positions"] == 1
+    assert o["trade_management"]["net_unavailable_positions"] == 1
+    assert (
+        o["reconciliation"]["net_unavailable_positions"] == 1 and o["reconciliation"]["reconciled"]
+    )
+    fut = next(t for t in o["trades"] if t["exchange"] == "NFO")
+    assert fut["net_pnl"] is None and fut["realized_pnl"] == 50.0
+
+
+def test_unresolved_and_orphan_fills_in_range_are_counted_not_used(env, monkeypatch):
+    _nse_calendar(monkeypatch)
+    _seed_categories(env)  # one orphan (INFY sell on the 13th)
+    env.fill("BUY", 3, 50, d(12, 10, 5), symbol="UNRES", state="unresolved")
+    env.fill("BUY", 3, 50, d(2, 10, 5), symbol="OLD", state="unresolved")  # outside the range
+    env.fill("BUY", 2, 60, d(12, 10, 6), symbol="STRAT", state="strategy_tag")
+    o = pnl.get_performance(period="custom", start="2026-11-10", end="2026-11-17")
+    block = o["unresolved_in_range"]
+    assert (block["unresolved_fills"], block["orphan_fills"], block["total"]) == (1, 1, 2)
+    assert (block["start"], block["end"]) == ("2026-11-10", "2026-11-17")
+    assert "UNRES" not in {t["symbol"] for t in o["trades"]}
+    assert "UNRES" not in {r["symbol"] for r in o["points_by_instrument"]}
+    wide = _perf_cat("all")["unresolved_in_range"]
+    assert wide["unresolved_fills"] == 2
+    # the provisional block and the /unresolved listing still exist
+    assert o["provisional"] is not None and len(pnl.get_unresolved()) == 2
+
+
+def test_provisional_block_is_kept_because_the_frontend_reads_it(env):
+    env.fill("BUY", 10, 100, d(12, 10, 0))
+    assert "provisional" in pnl.get_performance(period="all")

@@ -2,8 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   consistency,
   dataQuality,
-  provisional,
-  provisionalTcs,
+  riskBlock,
   summary,
   tradingBreakdowns,
 } from '@/test/discretionaryFixtures'
@@ -15,7 +14,6 @@ import {
   RiskStrip,
   SampleNote,
 } from './DiscretionaryInsights'
-import { ProvisionalPanel } from './ProvisionalPanel'
 
 const money = (v: number) => `Rs ${v.toFixed(2)}`
 
@@ -113,6 +111,31 @@ describe('RiskStrip', () => {
     expect(onSelect).toHaveBeenLastCalledWith(expect.objectContaining({ id: 11, build_id: 'b1' }))
     await userEvent.click(screen.getByRole('button', { name: /largest loss, INFY/ }))
     expect(onSelect).toHaveBeenLastCalledWith(expect.objectContaining({ id: 12 }))
+  })
+
+  it('shows the largest win and loss on the net basis the server picks them on', () => {
+    render(<RiskStrip consistency={consistency()} formatCurrency={money} onSelectTrade={vi.fn()} />)
+    // RELIANCE: gross 100, net 87.50 -> the net is shown; INFY has no net -> gross, said so
+    expect(screen.getByTestId('risk-largest-win')).toHaveTextContent('Rs 87.50')
+    expect(screen.getByTestId('risk-largest-win')).toHaveTextContent('(net)')
+    expect(screen.getByTestId('risk-largest-loss')).toHaveTextContent('Rs -40.00')
+    expect(screen.getByTestId('risk-largest-loss')).toHaveTextContent('(gross)')
+  })
+
+  it('uses the net drawdown and streaks of the risk block when given, in rupees', () => {
+    render(
+      <RiskStrip
+        consistency={consistency()}
+        risk={riskBlock({ current_streak: { type: 'win', length: 1 } })}
+        formatCurrency={money}
+        onSelectTrade={vi.fn()}
+      />
+    )
+    expect(screen.getByTestId('risk-drawdown')).toHaveTextContent('-Rs 320.50')
+    expect(screen.getByTestId('risk-current-drawdown')).toHaveTextContent('-Rs 120.00')
+    expect(screen.getByTestId('risk-current-streak')).toHaveTextContent('1 win')
+    expect(screen.getByTestId('risk-win-streak')).toHaveTextContent('3')
+    expect(screen.getByTestId('risk-strip').textContent).not.toMatch(/\d%/)
   })
 
   it('explains what cannot be calculated instead of showing a number', () => {
@@ -237,93 +260,5 @@ describe('DataQualityStrip', () => {
     expect(screen.getByTestId('dq-prices')).toHaveTextContent('Prices: 1 without a usable price')
     expect(screen.getByTestId('dq-sync')).toHaveTextContent('no successful sync yet')
     expect(screen.getByTestId('dq-sync-problems')).toHaveTextContent('1 sync problem(s)')
-  })
-})
-
-describe('ProvisionalPanel', () => {
-  it('shows the TCS round trip with estimated charges and net, separate from every total', async () => {
-    render(<ProvisionalPanel provisional={provisional()} formatCurrency={money} />)
-    const panel = screen.getByTestId('provisional-panel')
-    expect(
-      within(panel).getByText(
-        'Pending attribution: provisional figures (not included in any total above)'
-      )
-    ).toBeInTheDocument()
-    expect(
-      within(panel).getByText(
-        /These executions are excluded from your P&L until classified as manual/
-      )
-    ).toBeInTheDocument()
-    const row = within(panel).getByTestId('provisional-row')
-    for (const text of [
-      'TCS',
-      '2396.41',
-      '2395.20',
-      '45',
-      '09:46',
-      '10:16',
-      'Rs -54.40',
-      'Rs 38.25',
-      'Rs -92.65',
-      '30m',
-      'Provisional',
-    ]) {
-      expect(row).toHaveTextContent(text)
-    }
-    expect(row).toHaveTextContent('estimated')
-    const metrics = within(panel).getByTestId('provisional-metrics')
-    expect(metrics).toHaveTextContent('Provisional trades1')
-    expect(metrics).toHaveTextContent('Win rate0.0%')
-    // profit factor follows the sample rule: a dash with what it needs
-    expect(metrics).toHaveTextContent('Profit factor—needs 30 trades over 10 days')
-    // legs inline, no drill-down route
-    await userEvent.click(row)
-    const fills = within(panel).getByTestId('provisional-fills')
-    expect(within(fills).getAllByRole('row')).toHaveLength(6)
-    expect(fills).toHaveTextContent('2401.80')
-  })
-
-  it('flags an unknown opening and lists provisional open positions and orphans', () => {
-    render(
-      <ProvisionalPanel
-        provisional={provisional({
-          trades: [provisionalTcs({ opening_unknown: true })],
-          open_positions: [
-            {
-              broker: 'flattrade',
-              account: 'B',
-              symbol: 'SBIN',
-              exchange: 'NSE',
-              product: 'MIS',
-              direction: 'SHORT',
-              open_qty: 10,
-              avg_entry: 101,
-              opened_at: '2026-11-17 09:30:00',
-              realized_so_far: 0,
-              opening_unknown: false,
-            },
-          ],
-          orphans: [{ fill_ref: 9, reason: 'opening_unknown', symbol: 'HDFC' }],
-        })}
-        formatCurrency={money}
-      />
-    )
-    expect(screen.getByText('opening unknown')).toBeInTheDocument()
-    expect(screen.getByTestId('provisional-open')).toHaveTextContent(
-      'SBIN NSE MIS Short 10 @ 101.00'
-    )
-    expect(screen.getByTestId('provisional-orphans')).toHaveTextContent(
-      '1 unresolved fill(s) could not be placed'
-    )
-  })
-
-  it('renders nothing when there are no unresolved fills', () => {
-    const { container } = render(
-      <ProvisionalPanel
-        provisional={provisional({ fills: 0, trades: [] })}
-        formatCurrency={money}
-      />
-    )
-    expect(container).toBeEmptyDOMElement()
   })
 })

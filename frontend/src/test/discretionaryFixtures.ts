@@ -1,15 +1,24 @@
 import type {
   BreakdownRow,
+  CalendarRow,
+  ClassificationBlock,
   ConsistencyBlock,
+  CostsBlock,
   DataQuality,
   DiscretionaryPosition,
   DiscretionarySummary,
   DiscretionaryToday,
   DiscretionaryTrade,
+  ExcursionPosition,
+  ExcursionsResponse,
+  PointsByInstrumentRow,
   ProvisionalBlock,
   ProvisionalTrade,
+  RiskBlock,
   TodayClosedPosition,
+  TradeManagementBlock,
   TradingBreakdowns,
+  UnresolvedInRange,
 } from '@/api/discretionaryPnl'
 
 export function breakdownRow(key: string, extra: Partial<BreakdownRow> = {}): BreakdownRow {
@@ -487,6 +496,229 @@ export function provisional(extra: Partial<ProvisionalBlock> = {}): ProvisionalB
       min_days: 10,
       sufficient: false,
     },
+    ...extra,
+  }
+}
+
+// ---------------------------------------------------------------- phase 2 blocks
+
+export function classification(extra: Partial<ClassificationBlock> = {}): ClassificationBlock {
+  return {
+    selected: 'all',
+    closed: {
+      intraday: 1,
+      swing: 0,
+      unclassified: 1,
+      unclassified_reasons: { opening_unknown: 1 },
+    },
+    open: { intraday: 0, swing: 1, unclassified: 0, unclassified_reasons: {} },
+    note: 'intraday = opened and closed in the same exchange session; swing = still open after the opening session ended; unclassified (reason shown) is never guessed and is in the all view only.',
+    ...extra,
+  }
+}
+
+export function unresolvedInRange(extra: Partial<UnresolvedInRange> = {}): UnresolvedInRange {
+  return {
+    unresolved_fills: 2,
+    orphan_fills: 1,
+    total: 3,
+    start: '2026-10-19',
+    end: '2026-11-17',
+    ...extra,
+  }
+}
+
+export function pointsRow(extra: Partial<PointsByInstrumentRow> = {}): PointsByInstrumentRow {
+  return {
+    symbol: 'RELIANCE',
+    exchange: 'NSE',
+    positions: 3,
+    winners: 2,
+    losers: 1,
+    gross_points_gained: 25,
+    gross_points_lost: 8,
+    net_points: 17,
+    avg_points_per_position: 5.6667,
+    avg_win_points: 12.5,
+    avg_loss_points: -8,
+    largest_win_points: 15,
+    largest_loss_points: -8,
+    ...extra,
+  }
+}
+
+export function riskBlock(extra: Partial<RiskBlock> = {}): RiskBlock {
+  return {
+    basis: 'net realised equity by position close time, peak starts at 0',
+    positions: 5,
+    net_unavailable_positions: 1,
+    max_drawdown: 320.5,
+    current_drawdown: 120,
+    peak_equity: 900,
+    latest_equity: 780,
+    max_drawdown_at: '2026-11-12 14:10:00',
+    max_drawdown_pct: null,
+    current_drawdown_pct: null,
+    percent_unavailable_reason: 'no capital basis',
+    max_consecutive_wins: 3,
+    max_consecutive_losses: 2,
+    current_streak: { type: 'loss', length: 2 },
+    ...extra,
+  }
+}
+
+export function calendarRow(key: string, extra: Partial<CalendarRow> = {}): CalendarRow {
+  return {
+    key,
+    positions: 4,
+    wins: 3,
+    losses: 1,
+    win_rate: 75,
+    realized_gross: 500,
+    charges: 40,
+    net_of_charges: 460,
+    charges_unavailable_positions: 0,
+    net_unavailable_positions: 0,
+    ...extra,
+  }
+}
+
+export function monthRows(): CalendarRow[] {
+  return [
+    { period: '2026-10', ...calendarRow('2026-10') },
+    {
+      period: '2026-11',
+      ...calendarRow('2026-11', { net_of_charges: -150, realized_gross: -120 }),
+    },
+  ]
+}
+
+export function weekdayRows(): CalendarRow[] {
+  return [
+    { weekday: 'Mon', ...calendarRow('Mon') },
+    {
+      weekday: 'Tue',
+      ...calendarRow('Tue', {
+        positions: 0,
+        wins: 0,
+        losses: 0,
+        win_rate: null,
+        realized_gross: 0,
+        charges: 0,
+        net_of_charges: 0,
+      }),
+    },
+    { weekday: 'Wed', ...calendarRow('Wed', { net_of_charges: -75, realized_gross: -60 }) },
+  ]
+}
+
+export function tradeManagement(extra: Partial<TradeManagementBlock> = {}): TradeManagementBlock {
+  return {
+    net_basis_positions: 5,
+    net_unavailable_positions: 1,
+    break_even_excluded: 1,
+    median_net_pnl: 42.5,
+    avg_net_pnl: 30,
+    winners: { count: 3, mean_minutes: 45, median_minutes: 30 },
+    losers: { count: 1, mean_minutes: 125, median_minutes: 125 },
+    ...extra,
+  }
+}
+
+export function costsBlock(extra: Partial<CostsBlock> = {}): CostsBlock {
+  return {
+    total_charges: 120,
+    gross_profit: 800,
+    charges_pct_of_gross_profit: 15,
+    reason: null,
+    charges_unavailable_positions: 0,
+    ...extra,
+  }
+}
+
+export function excursionPosition(extra: Partial<ExcursionPosition> = {}): ExcursionPosition {
+  return {
+    id: 11,
+    symbol: 'RELIANCE',
+    exchange: 'NSE',
+    direction: 'LONG',
+    category: 'intraday',
+    opened_at: '2026-11-16 09:20:00',
+    closed_at: '2026-11-16 10:05:00',
+    closed_quantity: 10,
+    points_per_unit: 10,
+    net_pnl: 87.5,
+    status: 'available',
+    reason: null,
+    reason_text: null,
+    mae_points: 2.5,
+    mfe_points: 14,
+    mae_amount: 25,
+    mfe_amount: 140,
+    minute_bar_precision: true,
+    profit_capture: 0.7143,
+    ...extra,
+  }
+}
+
+export const EXCURSION_NOTE =
+  'MAE/MFE for completed trades becomes available after market close, once price data processing is complete.'
+
+export function excursions(extra: Partial<ExcursionsResponse> = {}): ExcursionsResponse {
+  const dist = (average: number | null, median: number | null, count = 1) => ({
+    count,
+    average,
+    median,
+  })
+  return {
+    build_id: 'b1',
+    period: { period: '30d', start: '2026-10-19', end: '2026-11-17' },
+    category: 'all',
+    positions: [
+      excursionPosition(),
+      excursionPosition({
+        id: 12,
+        symbol: 'INFY',
+        direction: 'SHORT',
+        net_pnl: -40,
+        status: 'unavailable',
+        reason: 'unsupported_segment',
+        reason_text: 'unsupported segment',
+        mae_points: null,
+        mfe_points: null,
+        mae_amount: null,
+        mfe_amount: null,
+        profit_capture: null,
+      }),
+    ],
+    positions_total: 2,
+    computed: 1,
+    cap: 300,
+    aggregates: {
+      winners: {
+        mae_points: dist(2.5, 2.5),
+        mfe_points: dist(14, 14),
+        mae_amount: dist(25, 25),
+        mfe_amount: dist(140, 140),
+        profit_capture: dist(0.7143, 0.7143),
+      },
+      losers: {
+        mae_points: dist(null, null, 0),
+        mfe_points: dist(null, null, 0),
+        mae_amount: dist(null, null, 0),
+        mfe_amount: dist(null, null, 0),
+      },
+      coverage: {
+        available: 1,
+        total: 2,
+        label: '1 of 2 positions available',
+        unavailable_reasons: { unsupported_segment: 1 },
+      },
+      minute_bar_precision: true,
+      precision_note:
+        'Minute-bar based lower bound of the true excursion, not tick accurate: the minute of each fill is observed only at the fill price.',
+    },
+    note: EXCURSION_NOTE,
     ...extra,
   }
 }

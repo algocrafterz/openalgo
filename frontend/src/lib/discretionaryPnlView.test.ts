@@ -25,7 +25,6 @@ import {
   parseSourceParam,
   pendingAttributionLines,
   priceBadge,
-  ratioCell,
   reasonText,
   resolveSource,
   summarizeUnrealized,
@@ -33,7 +32,6 @@ import {
   todayUnrealized,
   totalCard,
   totalPnl,
-  withheldSentence,
 } from './discretionaryPnlView'
 
 describe('source parameter', () => {
@@ -98,34 +96,16 @@ describe('formatters', () => {
     expect(fmtProfitFactor(null, 0, 0)).toBe('—')
     expect(fmtProfitFactor(0, 0, 2)).toBe('0.00')
   })
-})
 
-describe('withheld ratios', () => {
-  const withheld = { sharpe_ratio: 'no capital basis' }
-
-  it('shows -- and the reason for a withheld ratio, whatever value arrives', () => {
-    expect(ratioCell('sharpe_ratio', 1.7, withheld)).toEqual({
-      value: '--',
-      hint: 'Not shown: no capital basis',
-      withheld: true,
-    })
-  })
-
-  it('shows the value when it is not withheld, and -- when it is simply missing', () => {
-    expect(ratioCell('sortino_ratio', 1.234, withheld)).toMatchObject({ value: '1.23' })
-    expect(ratioCell('sortino_ratio', null, withheld)).toEqual({ value: '--', withheld: false })
-  })
-
-  it('writes one sentence per reason', () => {
-    expect(
-      withheldSentence({
-        sharpe_ratio: 'no capital basis',
-        sortino_ratio: 'no capital basis',
-        return_pct: 'no capital basis',
-      })
-    ).toBe('Sharpe, Sortino, Return %: not shown: no capital basis')
-    expect(withheldSentence({})).toBe('')
-    expect(withheldSentence(undefined)).toBe('')
+  it('shows an unknown net-basis money figure as a dash, never as zero', () => {
+    const money = (v: number) => `₹${v.toFixed(2)}`
+    expect(view.fmtNetMoney(null, money)).toBe('—')
+    expect(view.fmtNetMoney(undefined, money)).toBe('—')
+    expect(view.fmtNetMoney(Number.NaN, money)).toBe('—')
+    expect(view.fmtNetMoney(0, money)).toBe('₹0.00') // a real zero stays a number
+    expect(view.fmtNetMoney(-12.5, money)).toBe('₹-12.50')
+    expect(fmtWinRate(null)).toBe('—')
+    expect(fmtProfitFactor(null, 0, 0)).toBe('—') // no wins and no losses: nothing to show
   })
 })
 
@@ -267,6 +247,8 @@ describe('plain-text labels', () => {
     const text = netDefinitionText('net and realized_net_of_charges = realized_gross minus x')
     expect(text).not.toContain('_')
     expect(text).toMatch(/^Net = gross realized minus estimated charges/)
+    expect(text).toContain('measured on net P&L')
+    expect(text).not.toContain('gross metrics')
     expect(netDefinitionText(undefined)).toBe('')
   })
 })
@@ -382,7 +364,7 @@ describe('today helpers', () => {
     })
     expect(lines).toEqual([
       '1 execution(s) awaiting attribution: they are inside the 30-minute safety window that lets a strategy order tag arrive, and are not counted in P&L yet. Earliest attribution at 11:20 IST, at the first ledger sync after it.',
-      '2 execution(s) of today stay unresolved for another reason and are excluded from P&L; see Unresolved fills.',
+      '2 execution(s) of today stay unresolved for another reason and are excluded from P&L; see the unresolved fills warning.',
     ])
   })
 })
@@ -513,5 +495,192 @@ describe('dashboard additions', () => {
       'Weekday',
       'Holding time',
     ])
+  })
+})
+
+describe('net equity series', () => {
+  const t = (id: number, closed_at: string, net_pnl: number | null) => ({
+    id,
+    closed_at,
+    trade_date: closed_at.slice(0, 10),
+    net_pnl,
+  })
+
+  it('accumulates net P&L in close order and keeps one end-of-day point per date', () => {
+    // given out of order: the series follows closed_at, then id
+    const out = view.netEquitySeries([
+      t(3, '2026-11-17 10:00:00', -20),
+      t(1, '2026-11-16 09:30:00', 100),
+      t(2, '2026-11-16 14:00:00', -30),
+    ])
+    expect(out.points).toEqual([
+      { date: '2026-11-16', value: 70 },
+      { date: '2026-11-17', value: 50 },
+    ])
+    expect(out.used).toBe(3)
+    expect(out.skipped).toBe(0)
+  })
+
+  it('skips a trade without a net instead of counting it as zero, and counts it', () => {
+    const out = view.netEquitySeries([
+      t(1, '2026-11-16 09:30:00', 50.5),
+      t(2, '2026-11-16 10:30:00', null),
+      t(3, '2026-11-17 10:30:00', 10.25),
+    ])
+    expect(out.points).toEqual([
+      { date: '2026-11-16', value: 50.5 },
+      { date: '2026-11-17', value: 60.75 },
+    ])
+    expect(out.used).toBe(2)
+    expect(out.skipped).toBe(1)
+  })
+
+  it('is empty when no trade has a net, and for no trades', () => {
+    expect(view.netEquitySeries([t(1, '2026-11-16 09:30:00', null)])).toEqual({
+      points: [],
+      used: 0,
+      skipped: 1,
+    })
+    expect(view.netEquitySeries([])).toEqual({ points: [], used: 0, skipped: 0 })
+  })
+
+  it('does not rely on gross P&L: the series ignores the gross field', () => {
+    const out = view.netEquitySeries([
+      { ...t(1, '2026-11-16 09:30:00', 87.5), realized_pnl: 100 } as ReturnType<typeof t>,
+    ])
+    expect(out.points[0].value).toBe(87.5)
+  })
+})
+
+describe('chart and table helpers', () => {
+  it('writes points with a sign and a dash for unknown', () => {
+    expect(view.fmtPoints(12.5)).toBe('+12.50')
+    expect(view.fmtPoints(-3)).toBe('-3.00')
+    expect(view.fmtPoints(0)).toBe('0.00')
+    expect(view.fmtPoints(null)).toBe('—')
+    expect(view.fmtDistance(null)).toBe('—')
+    expect(view.fmtDistance(0)).toBe('0.00')
+  })
+
+  it('puts the sign in the label whatever the currency formatter does', () => {
+    const money = (v: number) => `Rs ${v.toFixed(2)}`
+    expect(view.signedMoney(5, money)).toBe('+Rs 5.00')
+    expect(view.signedMoney(-5, money)).toBe('-Rs 5.00')
+    expect(view.signedMoney(0, money)).toBe('Rs 0.00')
+  })
+
+  it('scales bars to the largest absolute value, positive and negative alike', () => {
+    const bars = view.calendarBars([
+      {
+        key: '2026-10',
+        positions: 4,
+        wins: 3,
+        losses: 1,
+        win_rate: 75,
+        realized_gross: 500,
+        charges: 40,
+        net_of_charges: 460,
+        charges_unavailable_positions: 0,
+        net_unavailable_positions: 1,
+      },
+      {
+        key: '2026-11',
+        positions: 2,
+        wins: 0,
+        losses: 2,
+        win_rate: 0,
+        realized_gross: -200,
+        charges: 20,
+        net_of_charges: -230,
+        charges_unavailable_positions: 0,
+        net_unavailable_positions: 0,
+      },
+    ])
+    expect(bars.map((b) => [b.label, b.value, b.count])).toEqual([
+      ['2026-10', 460, 3],
+      ['2026-11', -230, 2],
+    ])
+    expect(bars[0].pct).toBe(100)
+    expect(bars[1].pct).toBe(50)
+    expect(view.calendarBars(null)).toEqual([])
+  })
+
+  it('orders the symbol bars best first', () => {
+    const rows = [
+      { ...summary().by_symbol[0], key: 'A', net_of_charges: -10 },
+      { ...summary().by_symbol[0], key: 'B', net_of_charges: 30 },
+    ]
+    expect(view.symbolBars(rows).map((b) => b.label)).toEqual(['B', 'A'])
+  })
+
+  it('plots only available positions that have both MAE and MFE', () => {
+    const base = {
+      id: 1,
+      symbol: 'X',
+      exchange: 'NSE',
+      direction: 'LONG' as const,
+      category: 'intraday' as const,
+      opened_at: '',
+      closed_at: '',
+      closed_quantity: 1,
+      points_per_unit: 1,
+      reason: null,
+      reason_text: null,
+      mae_amount: 1,
+      mfe_amount: 1,
+      minute_bar_precision: true,
+      profit_capture: null,
+    }
+    const pts = view.scatterPoints([
+      { ...base, id: 1, net_pnl: 10, status: 'available', mae_points: 1, mfe_points: 2 },
+      { ...base, id: 2, net_pnl: -10, status: 'available', mae_points: 3, mfe_points: 1 },
+      { ...base, id: 3, net_pnl: 0, status: 'available', mae_points: 0, mfe_points: 0 },
+      { ...base, id: 4, net_pnl: 5, status: 'unavailable', mae_points: null, mfe_points: null },
+      { ...base, id: 5, net_pnl: 5, status: 'available', mae_points: null, mfe_points: 2 },
+    ])
+    expect(pts.map((p) => [p.id, p.kind])).toEqual([
+      [1, 'winner'],
+      [2, 'loser'],
+      [3, 'even'],
+    ])
+    // a real zero MAE is plotted at 0; an unavailable one is never plotted
+    expect(pts[2]).toMatchObject({ mae: 0, mfe: 0 })
+  })
+
+  it('joins excursions to the rows only for the same build', () => {
+    const ex = { build_id: 'b1', positions: [{ id: 7 }] } as never
+    expect(view.excursionIndex(ex, 'b1').has(7)).toBe(true)
+    expect(view.excursionIndex(ex, 'b2').size).toBe(0)
+    expect(view.excursionIndex(undefined, 'b1').size).toBe(0)
+  })
+
+  it('writes the unresolved warning only above 0', () => {
+    const u = { unresolved_fills: 1, orphan_fills: 0, total: 1, start: 'a', end: 'b' }
+    expect(view.unresolvedWarningText(u)).toBe(
+      '1 fill in the selected range could not be attributed and is excluded from completed-trade statistics.'
+    )
+    expect(view.unresolvedWarningText({ ...u, total: 4 })).toBe(
+      '4 fills in the selected range could not be attributed and are excluded from completed-trade statistics.'
+    )
+    expect(view.unresolvedWarningText({ ...u, total: 0 })).toBeNull()
+    expect(view.unresolvedWarningText(null)).toBeNull()
+    expect(view.unresolvedWarningText(undefined)).toBeNull()
+  })
+
+  it('explains unclassified reasons in plain words, never the raw code', () => {
+    expect(view.categoryReasonText('opening_unknown')).toBe(
+      'the fill that opened it is not in the ledger'
+    )
+    expect(view.categoryReasonText(null)).toBe('not classified')
+    expect(view.unclassifiedReasonsText({ opening_unknown: 2, orphan_fills: 1 })).toBe(
+      '2: the fill that opened it is not in the ledger; 1: some of its fills could not be placed'
+    )
+  })
+
+  it('names the current streak', () => {
+    expect(view.streakText({ type: 'win', length: 1 })).toBe('1 win')
+    expect(view.streakText({ type: 'win', length: 3 })).toBe('3 wins')
+    expect(view.streakText({ type: 'loss', length: 2 })).toBe('2 losses')
+    expect(view.streakText({ type: null, length: 0 })).toBe('none')
   })
 })
