@@ -85,14 +85,14 @@ export function ExcursionPanel({
   }[] = [
     {
       label: 'MAE (worst move against you)',
-      unit: 'points',
+      unit: 'points per unit',
       w: w.mae_points,
       l: l.mae_points,
       fmt: pts,
     },
     {
       label: 'MFE (best move for you)',
-      unit: 'points',
+      unit: 'points per unit',
       w: w.mfe_points,
       l: l.mfe_points,
       fmt: pts,
@@ -163,11 +163,36 @@ export function ExcursionPanel({
           </TableBody>
         </Table>
       </div>
+      <div
+        className="rounded-md border p-3 text-sm"
+        data-testid="profit-capture-block"
+        title="Profit capture = gross points a winner made / its MFE points (winners only). It can pass 100% because MFE is a lower bound."
+      >
+        {capture.count > 0 && capture.average != null ? (
+          <span>
+            Winners captured{' '}
+            <span className="font-mono font-semibold">{fmtPct(capture.average * 100)}</span> of the
+            favourable move (median{' '}
+            <span className="font-mono">
+              {capture.median != null ? fmtPct(capture.median * 100) : '—'}
+            </span>
+            , {capture.count} position{capture.count === 1 ? '' : 's'}).
+          </span>
+        ) : (
+          <span>
+            Winners captured <span className="font-mono font-semibold">—</span> of the favourable
+            move:{' '}
+            <span className="text-muted-foreground">
+              no winning position has both gross points and a favourable move to compare.
+            </span>
+          </span>
+        )}
+      </div>
       <p className="text-xs text-muted-foreground" data-testid="excursions-precision">
         {agg.precision_note} Profit capture is the points a winner made divided by its MFE; it can
         pass 100% because MFE is a lower bound.
       </p>
-      <MaeMfeScatter points={points} />
+      <MaeMfeScatter points={points} formatCurrency={formatCurrency} />
     </div>
   )
 }

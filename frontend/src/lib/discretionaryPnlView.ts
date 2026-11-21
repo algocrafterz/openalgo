@@ -13,6 +13,7 @@ import type {
   PendingAttribution,
   PeriodRow,
   PriceStatus,
+  RiskBlock,
   SampleContext,
   SyncHealth,
   UnresolvedInRange,
@@ -933,6 +934,9 @@ export interface ScatterPoint {
   mfe: number
   kind: ScatterKind
   net: number | null
+  direction?: 'LONG' | 'SHORT'
+  opened_at?: string
+  closed_at?: string
 }
 
 /** Available positions with both MAE and MFE; unavailable ones are never plotted (never at 0). */
@@ -949,6 +953,9 @@ export function scatterPoints(positions: ExcursionPosition[] | undefined): Scatt
       mfe: p.mfe_points,
       kind,
       net: p.net_pnl,
+      direction: p.direction,
+      opened_at: p.opened_at,
+      closed_at: p.closed_at,
     })
   }
   return out
@@ -963,4 +970,405 @@ export function excursionIndex(
   if (!excursions || (summaryBuildId && excursions.build_id !== summaryBuildId)) return map
   for (const p of excursions.positions) map.set(p.id, p)
   return map
+}
+
+// ---------------------------------------------------------------- per-position equity curve
+
+/** Money below half a paise is float noise, never a result (the backend's clean_money rule). */
+const PAISE_EPS = 0.005
+export function cleanMoney(value: number): number {
+  return Math.abs(value) < PAISE_EPS ? 0 : value
+}
+
+export interface CurvePoint {
+  /** 1-based position number in close order (the x axis; no timestamps are invented). */
+  index: number
+  id: number
+  /** Close time of the position (IST text), or the close date for an end-of-day point. */
+  closed_at: string
+  symbol: string | null
+  direction: 'LONG' | 'SHORT' | null
+  /** Net P&L of this position (after estimated charges), or the day's change for a day point. */
+  net: number
+  /** Cumulative net P&L after this point. */
+  equity: number
+  /** Highest cumulative net so far; starts at 0. */
+  peak: number
+  /** Peak minus equity, in rupees (0 at a new high). */
+  drawdown: number
+}
+
+export interface NetCurve {
+  points: CurvePoint[]
+  used: number
+  skipped: number
+  maxDrawdown: number
+  maxDrawdownAt: string | null
+  currentDrawdown: number
+  peakEquity: number
+  latestEquity: number
+}
+
+function sortByClose<T extends { id: number; closed_at: string }>(rows: T[]): T[] {
+  // The backend sorts by (str(closed_at), id): plain string order, ties by id.
+  return [...rows].sort((a, b) =>
+    a.closed_at === b.closed_at ? a.id - b.id : a.closed_at < b.closed_at ? -1 : 1
+  )
+}
+
+/**
+ * NET realised equity per closed position, with the drawdown defined exactly as the server's
+ * Risk card (services/discretionary_analytics.py drawdown()): equity and peak start at 0,
+ * positions run in (closed_at, id) order, a position without a net is skipped (counted, never
+ * zero), each step adds the net cleaned of sub-paise noise, drawdown = peak - equity.
+ * Displayed values are the cleaned nets; nothing is rounded here.
+ */
+export function netEquityPerTrade(
+  trades: Pick<DiscretionaryTrade, 'id' | 'closed_at' | 'symbol' | 'direction' | 'net_pnl'>[]
+): NetCurve {
+  let equity = 0
+  let peak = 0
+  let worst = 0
+  let worstAt: string | null = null
+  let used = 0
+  let skipped = 0
+  const points: CurvePoint[] = []
+  for (const t of sortByClose(trades)) {
+    if (t.net_pnl == null || !Number.isFinite(t.net_pnl)) {
+      skipped += 1
+      continue
+    }
+    const net = cleanMoney(t.net_pnl)
+    used += 1
+    equity += net
+    peak = Math.max(peak, equity)
+    const drawdown = peak - equity
+    if (drawdown > worst) {
+      worst = drawdown
+      worstAt = t.closed_at
+    }
+    points.push({
+      index: used,
+      id: t.id,
+      closed_at: t.closed_at,
+      symbol: t.symbol,
+      direction: t.direction,
+      net,
+      equity,
+      peak,
+      drawdown,
+    })
+  }
+  return {
+    points,
+    used,
+    skipped,
+    maxDrawdown: worst,
+    maxDrawdownAt: worstAt,
+    currentDrawdown: peak - equity,
+    peakEquity: peak,
+    latestEquity: equity,
+  }
+}
+
+/** The end-of-day curve (netEquitySeries points) with the same peak-from-0 drawdown rule. */
+export function netEquityDaily(points: { date: string; value: number }[]): NetCurve {
+  let peak = 0
+  let worst = 0
+  let worstAt: string | null = null
+  let prev = 0
+  const out: CurvePoint[] = points.map((p, i) => {
+    peak = Math.max(peak, p.value)
+    const drawdown = peak - p.value
+    if (drawdown > worst) {
+      worst = drawdown
+      worstAt = p.date
+    }
+    const point: CurvePoint = {
+      index: i + 1,
+      id: i + 1,
+      closed_at: p.date,
+      symbol: null,
+      direction: null,
+      net: p.value - prev,
+      equity: p.value,
+      peak,
+      drawdown,
+    }
+    prev = p.value
+    return point
+  })
+  const latest = points.length > 0 ? points[points.length - 1].value : 0
+  return {
+    points: out,
+    used: out.length,
+    skipped: 0,
+    maxDrawdown: worst,
+    maxDrawdownAt: worstAt,
+    currentDrawdown: peak - latest,
+    peakEquity: peak,
+    latestEquity: latest,
+  }
+}
+
+export type ReconcileKind =
+  | 'match'
+  | 'truncated'
+  | 'mismatch'
+  | 'no_risk'
+  | 'day_curve'
+  | 'day_no_risk'
+
+export interface Reconciliation {
+  kind: ReconcileKind
+  text: string
+}
+
+const DD_TOLERANCE = 0.01
+
+/**
+ * The caption that ties the curve's maximum drawdown to the Risk card, computed at run time from
+ * the numbers themselves (it only labels; no displayed figure is changed). Never leaves a
+ * difference unexplained: a cut trade list, positions without a net and a plain mismatch each
+ * say which basis the curve and the Risk card use.
+ */
+export function drawdownReconciliation(args: {
+  curve: NetCurve
+  mode: 'position' | 'day'
+  tradesShown: number
+  tradesTotal: number
+  risk: RiskBlock | null | undefined
+  formatCurrency: (v: number) => string
+}): Reconciliation {
+  const { curve, mode, tradesShown, tradesTotal, risk, formatCurrency: money } = args
+  const curveDd = money(curve.maxDrawdown)
+  if (mode === 'day') {
+    return {
+      kind: risk ? 'day_curve' : 'day_no_risk',
+      text: risk
+        ? `This curve is end-of-day: one point per close date, so intra-day falls are not drawn and its maximum drawdown (${curveDd}) can be smaller than the per-position Risk card figure (${money(risk.max_drawdown)}).`
+        : `This curve is end-of-day: one point per close date, so intra-day falls are not drawn. Maximum drawdown on this curve: ${curveDd}.`,
+    }
+  }
+  if (!risk) {
+    return {
+      kind: 'no_risk',
+      text: `Maximum drawdown on this curve: ${curveDd} (net, per closed position by close time, peak starts at 0). The server sent no Risk card to compare with.`,
+    }
+  }
+  if (tradesTotal > tradesShown) {
+    return {
+      kind: 'truncated',
+      text: `Curve shows the newest ${tradesShown} of ${tradesTotal} closed positions and starts from 0 at the first of them (maximum drawdown ${curveDd}); the Risk card covers all ${tradesTotal} (maximum drawdown ${money(risk.max_drawdown)}).`,
+    }
+  }
+  const same =
+    Math.abs(curve.maxDrawdown - risk.max_drawdown) <= DD_TOLERANCE &&
+    Math.abs(curve.currentDrawdown - risk.current_drawdown) <= DD_TOLERANCE &&
+    curve.skipped === risk.net_unavailable_positions
+  if (same) {
+    const left =
+      curve.skipped > 0
+        ? ` ${curve.skipped} position(s) without a net P&L are left out of both.`
+        : ''
+    return {
+      kind: 'match',
+      text: `Max drawdown on this curve equals the Risk card (${curveDd}).${left}`,
+    }
+  }
+  return {
+    kind: 'mismatch',
+    text: `Not reconciled: the curve uses ${curve.used} position(s) with a net P&L (${curve.skipped} left out) and gives a maximum drawdown of ${curveDd}; the Risk card uses ${risk.positions} (${risk.net_unavailable_positions} left out) and gives ${money(risk.max_drawdown)}. Both are net, by close time, peak from 0; the position sets differ.`,
+  }
+}
+
+// ---------------------------------------------------------------- section visibility by data
+
+export type ProfileName = 'session' | 'short' | 'medium' | 'long'
+
+export interface PeriodProfile {
+  profile: ProfileName
+  showMonthly: boolean
+  showWeekday: boolean
+  showByPeriodTabs: boolean
+  /** Which tabs of "P&L by period" are offered, in order. */
+  byPeriodTabs: ('daily' | 'weekly' | 'monthly')[]
+  showDailyBars: boolean
+  showBreakdownTables: boolean
+  /** Secondary breakdowns sit under a "More breakdowns" toggle. */
+  collapseSecondary: boolean
+  /** The curve is one point per closed position (otherwise end-of-day). */
+  perPositionCurve: boolean
+  /** One visible line naming what is hidden or collapsed and why; null when nothing is. */
+  note: string | null
+}
+
+/**
+ * Which sections make sense for the data on screen. `closeDates` = distinct dates with a closed
+ * position; `months` = number of calendar months in the monthly rows. A 1-day period is always
+ * the session profile.
+ */
+export function periodProfile(input: {
+  period: string
+  closeDates: number
+  months: number
+}): PeriodProfile {
+  const { period, closeDates, months } = input
+  if (period === '1d' || closeDates <= 1) {
+    return {
+      profile: 'session',
+      showMonthly: false,
+      showWeekday: false,
+      showByPeriodTabs: false,
+      byPeriodTabs: [],
+      showDailyBars: false,
+      showBreakdownTables: true,
+      collapseSecondary: true,
+      perPositionCurve: true,
+      note: 'Month, weekday and period tables are hidden because this view covers one trading day. Symbol, side and product breakdowns are under More breakdowns.',
+    }
+  }
+  if (closeDates > 31 || months >= 3) {
+    return {
+      profile: 'long',
+      showMonthly: true,
+      showWeekday: true,
+      showByPeriodTabs: true,
+      byPeriodTabs: ['daily', 'weekly', 'monthly'],
+      showDailyBars: true,
+      showBreakdownTables: true,
+      collapseSecondary: false,
+      perPositionCurve: false,
+      note: null,
+    }
+  }
+  if (closeDates <= 7) {
+    return {
+      profile: 'short',
+      showMonthly: false,
+      showWeekday: true,
+      showByPeriodTabs: true,
+      byPeriodTabs: ['daily'],
+      showDailyBars: true,
+      showBreakdownTables: true,
+      collapseSecondary: true,
+      perPositionCurve: true,
+      note: `The monthly table and the weekly and monthly period tabs are hidden because the range has only ${closeDates} trading days. Symbol, side and product breakdowns are under More breakdowns.`,
+    }
+  }
+  const monthly = months >= 2
+  return {
+    profile: 'medium',
+    showMonthly: monthly,
+    showWeekday: true,
+    showByPeriodTabs: true,
+    byPeriodTabs: monthly ? ['daily', 'weekly', 'monthly'] : ['daily', 'weekly'],
+    showDailyBars: true,
+    showBreakdownTables: true,
+    collapseSecondary: true,
+    perPositionCurve: true,
+    note: monthly
+      ? 'Symbol, side and product breakdowns are under More breakdowns.'
+      : 'The monthly table and tab are hidden because the range sits in one calendar month. Symbol, side and product breakdowns are under More breakdowns.',
+  }
+}
+
+/** Distinct close dates: server daily rows with closed positions, else the shown trades' dates. */
+export function closeDateCount(
+  summary: Pick<DiscretionarySummary, 'by_period' | 'trades'> | undefined
+): number {
+  const daily = (summary?.by_period?.daily ?? []).filter((r) => r.trades > 0)
+  if (daily.length > 0) return daily.length
+  return new Set((summary?.trades ?? []).map((t) => (t.trade_date || t.closed_at).slice(0, 10)))
+    .size
+}
+
+// ---------------------------------------------------------------- summary header text
+
+export interface Verdict {
+  tone: 'profit' | 'loss' | 'flat' | 'none'
+  text: string
+}
+
+/** One plain sentence: profitable or not on net, the amount, the closed count and the win rate. */
+export function verdictLine(
+  summary: Pick<
+    DiscretionarySummary,
+    'realized_net_of_charges' | 'metrics' | 'charges_unavailable_trades'
+  >,
+  formatCurrency: (v: number) => string
+): Verdict {
+  const n = summary.metrics.trades_count
+  if (n === 0) return { tone: 'none', text: 'No closed position in this range yet.' }
+  const net = cleanMoney(summary.realized_net_of_charges)
+  const rate =
+    summary.metrics.win_rate == null ? '' : ` Win rate ${fmtWinRate(summary.metrics.win_rate)}.`
+  const incomplete =
+    summary.charges_unavailable_trades > 0
+      ? ' Some charges are not estimated, so net is not complete.'
+      : ''
+  const count = `${n} closed position${n === 1 ? '' : 's'}`
+  if (net > 0)
+    return {
+      tone: 'profit',
+      text: `Profitable on net: ${formatCurrency(net)} after estimated charges from ${count}.${rate}${incomplete}`,
+    }
+  if (net < 0)
+    return {
+      tone: 'loss',
+      text: `Not profitable on net: ${formatCurrency(Math.abs(net))} lost after estimated charges over ${count}.${rate}${incomplete}`,
+    }
+  return {
+    tone: 'flat',
+    text: `Break-even on net after estimated charges over ${count}.${rate}${incomplete}`,
+  }
+}
+
+/**
+ * The single biggest weakness, taken only from fields the server already sends, in this order:
+ * charges turning a gross profit into a net loss; charges taking 30% or more of gross profit;
+ * the largest loss bigger than the largest win; a current drawdown; a small sample. Null when
+ * none applies. A description, not advice.
+ */
+export function weaknessLine(
+  summary: Pick<
+    DiscretionarySummary,
+    | 'realized_gross'
+    | 'realized_net_of_charges'
+    | 'metrics'
+    | 'consistency'
+    | 'costs'
+    | 'risk'
+    | 'sample'
+  >,
+  formatCurrency: (v: number) => string
+): string | null {
+  if (summary.metrics.trades_count === 0) return null
+  const net = cleanMoney(summary.realized_net_of_charges)
+  if (summary.realized_gross > 0 && net < 0) {
+    return `Charges turned a gross profit of ${formatCurrency(summary.realized_gross)} into a net loss.`
+  }
+  const pct = summary.costs?.charges_pct_of_gross_profit
+  if (pct != null && pct >= 30) {
+    return `Charges take ${pct.toFixed(1)}% of gross profit.`
+  }
+  const win = summary.consistency?.largest_win
+  const loss = summary.consistency?.largest_loss
+  if (win && loss) {
+    const w = win.net_pnl ?? win.realized_pnl
+    const l = Math.abs(loss.net_pnl ?? loss.realized_pnl)
+    if (l > w) {
+      return `Largest loss (${formatCurrency(l)}) is bigger than the largest win (${formatCurrency(w)}).`
+    }
+  } else if (loss && !win) {
+    return `Largest loss is ${formatCurrency(Math.abs(loss.net_pnl ?? loss.realized_pnl))} and there is no winning position.`
+  }
+  const cur = summary.risk?.current_drawdown ?? 0
+  if (cur > 0) {
+    return `Currently ${formatCurrency(cur)} below the best net equity so far.`
+  }
+  if (summary.sample && !summary.sample.sufficient) {
+    return `Low sample: ${summary.sample.completed_trades} completed trade(s) over ${summary.sample.trading_days} trading day(s), so ratios are indicative only.`
+  }
+  return null
 }

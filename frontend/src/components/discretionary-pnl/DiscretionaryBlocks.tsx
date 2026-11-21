@@ -205,7 +205,10 @@ export function TradeManagementStrip({
   management,
   costs,
   formatCurrency,
+  compact = false,
 }: {
+  /** Half-width card: fewer tile columns. */
+  compact?: boolean
   management: TradeManagementBlock | null | undefined
   costs: CostsBlock | null | undefined
   formatCurrency: Money
@@ -213,7 +216,13 @@ export function TradeManagementStrip({
   if (!management && !costs) return null
   return (
     <div data-testid="trade-management">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+      <div
+        className={
+          compact
+            ? 'grid grid-cols-2 gap-2 lg:grid-cols-3'
+            : 'grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6'
+        }
+      >
         {management && (
           <>
             <StripTile

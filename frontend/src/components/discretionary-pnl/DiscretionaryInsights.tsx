@@ -44,6 +44,25 @@ import { cn } from '@/lib/utils'
 
 type Money = (value: number) => string
 
+/** In-page link that scrolls to a section and keeps the page URL (and its filters) as it is. */
+export function JumpLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <a
+      className="underline underline-offset-2"
+      href={`#${to}`}
+      onClick={(e) => {
+        const el = document.getElementById(to)
+        if (!el) return
+        e.preventDefault()
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        el.focus?.({ preventScroll: true })
+      }}
+    >
+      {children}
+    </a>
+  )
+}
+
 /** "Based on N completed trades" under the metric cards, with the low-sample note. */
 export function SampleNote({ sample }: { sample: SampleContext | undefined }) {
   const note = sampleNote(sample)
@@ -201,7 +220,10 @@ export function RiskStrip({
   risk,
   formatCurrency,
   onSelectTrade,
+  compact = false,
 }: {
+  /** Half-width card: fewer tile columns. */
+  compact?: boolean
   consistency: ConsistencyBlock
   /** Net realised drawdown and streaks; when given they replace the gross drawdown and streak tiles. */
   risk?: RiskBlock | null
@@ -209,7 +231,7 @@ export function RiskStrip({
   onSelectTrade: (trade: TradeRef) => void
 }) {
   return (
-    <Card data-testid="risk-strip">
+    <Card data-testid="risk-strip" className={compact ? 'gap-3 py-4' : undefined}>
       <CardHeader className="pb-2">
         <CardTitle className="text-base">Risk and consistency</CardTitle>
         {risk && (
@@ -222,7 +244,13 @@ export function RiskStrip({
         )}
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-9">
+        <div
+          className={
+            compact
+              ? 'grid grid-cols-2 gap-2 lg:grid-cols-3'
+              : 'grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-9'
+          }
+        >
           <StripTile label="Largest win" testId="risk-largest-win">
             {c.largest_win ? (
               <TradeButton

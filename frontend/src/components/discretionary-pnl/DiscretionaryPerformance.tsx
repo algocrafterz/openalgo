@@ -8,10 +8,7 @@ import {
   exportCsvUrl,
 } from '@/api/discretionaryPnl'
 import type { PerformancePeriod } from '@/api/strategyPnl'
-import { EquityDrawdownChart } from '@/components/strategy-pnl/EquityDrawdownChart'
-import { MetricCard } from '@/components/strategy-pnl/MetricCard'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -32,18 +29,18 @@ import {
   awaitingAttributionText,
   calendarBars,
   classificationLine,
+  closeDateCount,
   DISCRETIONARY_POLL_MS,
-  DRAWDOWN_BASIS,
+  drawdownReconciliation,
   excursionIndex,
   filterChoices,
-  fmtNetMoney,
-  fmtProfitFactor,
-  fmtWinRate,
   holdingRows,
   isEmptyBook,
   NET_EQUITY_CAPTION,
-  netDefinitionText,
+  netEquityDaily,
+  netEquityPerTrade,
   netEquitySeries,
+  periodProfile,
   summarizeUnrealized,
   symbolBars,
   syncSummary,
@@ -52,22 +49,13 @@ import {
   unclassifiedScopeNote,
   unresolvedWarningText,
 } from '@/lib/discretionaryPnlView'
-import { fmtDate, fmtDuration, pnlClass } from '@/lib/strategyPnlView'
-import { cn } from '@/lib/utils'
-import {
-  CalendarTable,
-  CategorySelector,
-  PointsByInstrumentTable,
-  TradeManagementStrip,
-} from './DiscretionaryBlocks'
+import { fmtDate } from '@/lib/strategyPnlView'
+import { CalendarTable, CategorySelector, PointsByInstrumentTable } from './DiscretionaryBlocks'
 import { NetBarChart } from './DiscretionaryCharts'
-import {
-  DailyPnlChart,
-  DataQualityStrip,
-  HowYouTradeCard,
-  RiskStrip,
-  SampleNote,
-} from './DiscretionaryInsights'
+import { DiscretionaryEquityChart } from './DiscretionaryEquityChart'
+import { DiscretionaryGroups } from './DiscretionaryGroups'
+import { DailyPnlChart, DataQualityStrip, HowYouTradeCard } from './DiscretionaryInsights'
+import { DiscretionaryHeader, TodayLine } from './DiscretionarySummary'
 import {
   BreakdownTable,
   ClosedTradesTable,
@@ -206,6 +194,17 @@ export function DiscretionaryPerformance({
     [excursionsQuery.data, summary?.build_id]
   )
   const netEquity = useMemo(() => netEquitySeries(summary?.trades ?? []), [summary?.trades])
+  const positionCurve = useMemo(() => netEquityPerTrade(summary?.trades ?? []), [summary?.trades])
+  const dayCurve = useMemo(() => netEquityDaily(netEquity.points), [netEquity])
+  const profile = useMemo(
+    () =>
+      periodProfile({
+        period,
+        closeDates: closeDateCount(summary),
+        months: summary?.monthly?.length ?? 0,
+      }),
+    [period, summary]
+  )
   const exportHref = exportCsvUrl(period, range, queryFilters, category)
 
   // Fills arrive on order events; the poll covers a missed event.
@@ -240,11 +239,12 @@ export function DiscretionaryPerformance({
   const warnings = actionableWarnings(summary?.warnings)
   const sync = syncSummary(summary?.sync_health)
   const metrics = summary?.metrics
-  // No completed trade (e.g. only a partial exit): the ratios have nothing to rate.
-  const noTrades = (metrics?.trades_count ?? 0) === 0
   // Executions exist but none is attributable yet (all await attribution): a specific message
   // instead of the generic empty state, and the Unresolved fills list opens.
   const awaiting = awaitingAttribution(summary)
+  const sessionRange = summary
+    ? { start: summary.period.start, end: summary.period.end }
+    : undefined
   const openTrade = (id: number, buildId?: string | null) => {
     const bid = buildId ?? summary?.build_id
     if (bid) setSelectedTrade({ id, buildId: bid })
@@ -298,6 +298,20 @@ export function DiscretionaryPerformance({
     </div>
   )
 
+  const todayNode = summary?.today ? (
+    // the current session, whatever the period; same build as everything below
+    <TodayLine today={summary.today} range={sessionRange} formatCurrency={formatCurrency}>
+      <TodayPerformance
+        today={summary.today}
+        formatCurrency={formatCurrency}
+        onSelectClosed={(id) => {
+          if (summary.build_id) setSelectedTrade({ id, buildId: summary.build_id })
+        }}
+      />
+    </TodayLine>
+  ) : null
+  const populated = !!summary && !awaiting && !isEmptyBook(summary) && !!metrics && !!unrealized
+
   let body: React.ReactNode
   if (!rangeReady) {
     body = (
@@ -340,18 +354,37 @@ export function DiscretionaryPerformance({
       summary.charges_unavailable_trades > 0
         ? `${summary.charges_unavailable_trades} trade(s) without a charge estimate: not complete`
         : `after ${formatCurrency(summary.charges)} estimated charges`
-    const unrealizedValue =
-      unrealized.kind === 'complete' || unrealized.kind === 'partial'
-        ? formatCurrency(unrealized.value)
-        : '—'
-    const unrealizedHint =
-      unrealized.kind === 'none'
-        ? 'no open positions'
-        : unrealized.kind === 'not_requested'
-          ? 'Not requested: turn on Fetch live prices'
-          : unrealized.kind === 'partial'
-            ? `${unrealized.unpriced} position(s) unpriced or not listed`
-            : undefined
+    const curveMode = profile.perPositionCurve ? 'position' : 'day'
+    const curve = curveMode === 'position' ? positionCurve : dayCurve
+    const shown = summary.trades_shown ?? summary.trades.length
+    const reconciliation = drawdownReconciliation({
+      curve,
+      mode: curveMode,
+      tradesShown: shown,
+      tradesTotal: summary.trades_total,
+      risk: summary.risk,
+      formatCurrency,
+    })
+    const equityBasis =
+      curveMode === 'position'
+        ? `Net realised P&L after estimated charges, per closed position by close time; excludes unrealized P&L. Based on ${positionCurve.used} completed trade(s)${
+            positionCurve.skipped > 0
+              ? `; ${positionCurve.skipped} without a net P&L (no charge estimate) are left out`
+              : ''
+          }${
+            summary.trades_truncated > 0
+              ? `; only the newest ${summary.trades.length} of ${summary.trades_total} trades are included`
+              : ''
+          }.`
+        : `${NET_EQUITY_CAPTION}. Based on ${netEquity.used} completed trade(s)${
+            netEquity.skipped > 0
+              ? `; ${netEquity.skipped} without a net P&L (no charge estimate) are left out`
+              : ''
+          }${
+            summary.trades_truncated > 0
+              ? `; only the newest ${summary.trades.length} of ${summary.trades_total} trades are included`
+              : ''
+          }.`
 
     body = awaiting ? (
       <div
@@ -384,164 +417,50 @@ export function DiscretionaryPerformance({
       />
     ) : (
       <>
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3">
-          <MetricCard
-            label="Net realized (after est. charges)"
-            value={formatCurrency(net)}
-            positive={net > 0}
-            negative={net < 0}
-            hint={chargesHint}
-          />
-          <MetricCard
-            label="Gross realized"
-            value={formatCurrency(summary.realized_gross)}
-            positive={summary.realized_gross > 0}
-            negative={summary.realized_gross < 0}
-            hint="before charges"
-          />
-          <Card>
-            <CardContent className="py-4">
-              <div className="text-xs text-muted-foreground">Unrealized</div>
-              <div
-                className={cn(
-                  'text-xl font-bold font-mono mt-1 break-words',
-                  (unrealized.kind === 'complete' || unrealized.kind === 'partial') &&
-                    pnlClass(unrealized.value)
-                )}
-              >
-                {unrealizedValue}
-              </div>
-              <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                {unrealized.badge && (
-                  <Badge
-                    variant="outline"
-                    className="text-[11px]"
-                    title={unrealized.badge.title}
-                    data-testid="unrealized-price-badge"
-                  >
-                    {unrealized.badge.label}
-                  </Badge>
-                )}
-                {unrealizedHint && (
-                  <span className="text-[11px] text-muted-foreground">{unrealizedHint}</span>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-          <MetricCard
-            label={total.label}
-            value={formatCurrency(total.value)}
-            positive={total.value > 0}
-            negative={total.value < 0}
-            hint={total.hint}
-          />
-          <MetricCard
-            label="Total won (net)"
-            value={formatCurrency(metrics.gross_profit)}
-            hint="winning trades, after charges"
-          />
-          <MetricCard
-            label="Total lost (net)"
-            value={formatCurrency(metrics.gross_loss)}
-            hint="losing trades, after charges"
-          />
-          <MetricCard
-            label="Win rate (net)"
-            value={noTrades ? '—' : fmtWinRate(metrics.win_rate)}
-            hint={
-              metrics.count_unavailable_reason
-                ? 'no completed trade has a net P&L'
-                : 'a win is a profit after charges'
-            }
-          />
-          <MetricCard
-            label="Profit factor (net)"
-            value={
-              noTrades
-                ? '—'
-                : fmtProfitFactor(
-                    metrics.profit_factor,
-                    metrics.winning_trades,
-                    metrics.losing_trades
-                  )
-            }
-            hint="total won / total lost"
-          />
-          <MetricCard
-            label="Completed trades"
-            value={String(metrics.trades_count)}
-            hint={`${metrics.winning_trades} wins / ${metrics.losing_trades} losses`}
-          />
-          <MetricCard
-            label="Avg win (net)"
-            value={noTrades ? '—' : fmtNetMoney(metrics.avg_win, formatCurrency)}
-          />
-          <MetricCard
-            label="Avg loss (net)"
-            value={noTrades ? '—' : fmtNetMoney(metrics.avg_loss, formatCurrency)}
-          />
-          <MetricCard
-            label="Expectancy (net)"
-            value={noTrades ? '—' : fmtNetMoney(metrics.expectancy, formatCurrency)}
-            hint="net, per trade"
-          />
-          {!summary.risk &&
-            (summary.consistency?.max_drawdown_unavailable_reason ? (
-              // one trading day has no peak to fall from: say so instead of showing 0
-              <MetricCard
-                label="Max drawdown"
-                value="—"
-                hint={`${summary.consistency.max_drawdown_unavailable_reason}; basis: ${DRAWDOWN_BASIS}`}
-              />
-            ) : (
-              <MetricCard
-                label="Max drawdown"
-                value={formatCurrency(Math.abs(metrics.max_drawdown ?? 0))}
-                negative
-                hint={`basis: ${DRAWDOWN_BASIS}`}
-              />
-            ))}
-        </div>
-        <SampleNote sample={summary.sample} />
-        {(metrics.net_unavailable_trades ?? 0) > 0 && (
-          <p className="text-xs text-amber-600" data-testid="net-unavailable-note">
-            {metrics.net_unavailable_trades} completed trade(s) have no net P&amp;L (no charge
-            estimate) and are left out of win rate, profit factor, expectancy and the averages.
-          </p>
-        )}
-        {summary.net_definition && (
-          <p className="text-xs text-muted-foreground">
-            {netDefinitionText(summary.net_definition)}
+        <DiscretionaryHeader
+          summary={summary}
+          formatCurrency={formatCurrency}
+          chargesHint={chargesHint}
+        >
+          {todayNode}
+        </DiscretionaryHeader>
+        {profile.note && (
+          <p className="text-xs text-muted-foreground" data-testid="profile-note">
+            {profile.note}
           </p>
         )}
 
         {(summary.trades.length > 0 || (summary.by_period?.daily ?? []).length > 0) && (
-          <Card>
+          <Card data-testid="equity-card">
             <CardHeader>
-              <CardTitle>Equity Curve &amp; Drawdown (net)</CardTitle>
+              <CardTitle>
+                {profile.profile === 'session' ? 'Session progression' : 'Cumulative net P&L'}
+              </CardTitle>
             </CardHeader>
             <CardContent>
-              {netEquity.points.length > 0 ? (
-                <EquityDrawdownChart
-                  equityCurve={netEquity.points}
-                  equityCurveNet={[]}
+              {curve.points.length > 0 ? (
+                <DiscretionaryEquityChart
+                  curve={curve}
+                  mode={curveMode}
+                  reconciliation={reconciliation}
+                  basis={equityBasis}
                   isDarkMode={isDarkMode}
                   formatCurrency={formatCurrency}
                 />
               ) : (
-                <p className="text-sm text-muted-foreground" data-testid="net-equity-empty">
-                  No completed trade with a net P&amp;L yet, so there is no equity curve.
-                </p>
+                <>
+                  <p className="text-sm text-muted-foreground" data-testid="net-equity-empty">
+                    No completed trade with a net P&amp;L yet, so there is no equity curve.
+                  </p>
+                  <p
+                    className="mt-2 text-xs text-muted-foreground"
+                    data-testid="net-equity-caption"
+                  >
+                    {equityBasis}
+                  </p>
+                </>
               )}
-              <p className="mt-2 text-xs text-muted-foreground" data-testid="net-equity-caption">
-                {NET_EQUITY_CAPTION}. Based on {netEquity.used} completed trade(s)
-                {netEquity.skipped > 0 &&
-                  `; ${netEquity.skipped} without a net P&L (no charge estimate) are left out`}
-                {summary.trades_truncated > 0 &&
-                  `; only the newest ${summary.trades.length} of ${summary.trades_total} trades are included`}
-                .
-              </p>
-              {(summary.by_period?.daily ?? []).length > 0 && (
+              {profile.showDailyBars && (summary.by_period?.daily ?? []).length > 0 && (
                 <div className="mt-6">
                   <DailyPnlChart
                     rows={summary.by_period?.daily ?? []}
@@ -553,34 +472,32 @@ export function DiscretionaryPerformance({
           </Card>
         )}
 
-        {summary.consistency && (
-          <RiskStrip
-            consistency={summary.consistency}
-            risk={summary.risk}
+        <DiscretionaryGroups
+          summary={summary}
+          unrealized={unrealized}
+          total={total}
+          excursions={excursionsQuery.data}
+          formatCurrency={formatCurrency}
+          onSelectTrade={(t) => openTrade(t.id, t.build_id)}
+        />
+
+        <h2 className="pt-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          How you trade
+        </h2>
+        {summary.breakdowns && (
+          <HowYouTradeCard
+            breakdowns={summary.breakdowns}
+            sample={summary.sample}
             formatCurrency={formatCurrency}
-            onSelectTrade={(t) => openTrade(t.id, t.build_id)}
           />
         )}
 
-        {(summary.trade_management || summary.costs) && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Trade management and costs</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <TradeManagementStrip
-                management={summary.trade_management}
-                costs={summary.costs}
-                formatCurrency={formatCurrency}
-              />
-            </CardContent>
-          </Card>
-        )}
-
-        {(summary.monthly || summary.weekday) && (
+        {(profile.showMonthly || profile.showWeekday) && (summary.monthly || summary.weekday) && (
           <Card data-testid="calendar-card">
             <CardHeader>
-              <CardTitle>Net P&amp;L by month and weekday</CardTitle>
+              <CardTitle>
+                {profile.showMonthly ? 'Net P&L by month and weekday' : 'Net P&L by weekday'}
+              </CardTitle>
               <p className="text-xs text-muted-foreground">
                 Each position counts once, on the date of its final close. * means some positions
                 have no charge estimate, so charges and net are not complete.
@@ -588,7 +505,7 @@ export function DiscretionaryPerformance({
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                {summary.monthly && (
+                {profile.showMonthly && summary.monthly && (
                   <div className="min-w-0 space-y-3">
                     <NetBarChart
                       title="Net P&L by month"
@@ -606,7 +523,7 @@ export function DiscretionaryPerformance({
                     />
                   </div>
                 )}
-                {summary.weekday && (
+                {profile.showWeekday && summary.weekday && (
                   <div className="min-w-0 space-y-3">
                     <NetBarChart
                       title="Net P&L by weekday (close date)"
@@ -629,31 +546,88 @@ export function DiscretionaryPerformance({
           </Card>
         )}
 
-        <Card>
-          <CardHeader>
-            <CardTitle>P&amp;L by period</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Tabs defaultValue="daily">
-              <TabsList>
-                <TabsTrigger value="daily">Daily</TabsTrigger>
-                <TabsTrigger value="weekly">Weekly</TabsTrigger>
-                <TabsTrigger value="monthly">Monthly</TabsTrigger>
-              </TabsList>
-              {(['daily', 'weekly', 'monthly'] as const).map((g) => (
-                <TabsContent key={g} value={g}>
-                  <PeriodTable
-                    rows={summary.by_period?.[g] ?? []}
-                    formatCurrency={formatCurrency}
-                  />
-                </TabsContent>
-              ))}
-            </Tabs>
-          </CardContent>
-        </Card>
+        {profile.showByPeriodTabs && (
+          <Card data-testid="period-card">
+            <CardHeader>
+              <CardTitle>P&amp;L by period</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Tabs defaultValue="daily">
+                <TabsList>
+                  {profile.byPeriodTabs.map((g) => (
+                    <TabsTrigger key={g} value={g}>
+                      {g === 'daily' ? 'Daily' : g === 'weekly' ? 'Weekly' : 'Monthly'}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+                {profile.byPeriodTabs.map((g) => (
+                  <TabsContent key={g} value={g}>
+                    <PeriodTable
+                      rows={summary.by_period?.[g] ?? []}
+                      formatCurrency={formatCurrency}
+                    />
+                  </TabsContent>
+                ))}
+              </Tabs>
+            </CardContent>
+          </Card>
+        )}
 
+        {profile.showBreakdownTables && (
+          <details
+            open={!profile.collapseSecondary}
+            className="rounded-lg border"
+            data-testid="more-breakdowns"
+          >
+            <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+              More breakdowns: by symbol, long vs short, product, intraday vs overnight
+            </summary>
+            <div className="border-t p-4">
+              <div className="mb-6">
+                <NetBarChart
+                  title="Net P&L by symbol"
+                  bars={symbolBars(summary.by_symbol)}
+                  formatCurrency={formatCurrency}
+                  samples="trade(s)"
+                  emptyText="No closed trades in this range."
+                  testId="symbol-chart"
+                />
+              </div>
+              <div className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
+                <BreakdownTable
+                  title="By symbol"
+                  firstColumn="Symbol"
+                  rows={summary.by_symbol ?? []}
+                  formatCurrency={formatCurrency}
+                />
+                <BreakdownTable
+                  title="Long vs Short"
+                  firstColumn="Side"
+                  rows={summary.by_side ?? []}
+                  formatCurrency={formatCurrency}
+                />
+                <BreakdownTable
+                  title="By product"
+                  firstColumn="Product"
+                  rows={summary.by_product ?? []}
+                  formatCurrency={formatCurrency}
+                />
+                <BreakdownTable
+                  title="Intraday vs overnight"
+                  firstColumn="Holding"
+                  rows={holdingRows(summary.by_holding)}
+                  formatCurrency={formatCurrency}
+                />
+              </div>
+            </div>
+          </details>
+        )}
+
+        <h2 className="pt-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          Trade quality
+        </h2>
         {summary.points_by_instrument && (
-          <Card data-testid="points-card">
+          <Card data-testid="points-card" id="discretionary-points" className="scroll-mt-4">
             <CardHeader>
               <CardTitle>Points by instrument</CardTitle>
               <p className="text-xs text-muted-foreground">
@@ -667,82 +641,7 @@ export function DiscretionaryPerformance({
           </Card>
         )}
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Breakdowns</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="mb-6">
-              <NetBarChart
-                title="Net P&L by symbol"
-                bars={symbolBars(summary.by_symbol)}
-                formatCurrency={formatCurrency}
-                samples="trade(s)"
-                emptyText="No closed trades in this range."
-                testId="symbol-chart"
-              />
-            </div>
-            <div className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
-              <BreakdownTable
-                title="By symbol"
-                firstColumn="Symbol"
-                rows={summary.by_symbol ?? []}
-                formatCurrency={formatCurrency}
-              />
-              <BreakdownTable
-                title="Long vs Short"
-                firstColumn="Side"
-                rows={summary.by_side ?? []}
-                formatCurrency={formatCurrency}
-              />
-              <BreakdownTable
-                title="By product"
-                firstColumn="Product"
-                rows={summary.by_product ?? []}
-                formatCurrency={formatCurrency}
-              />
-              <BreakdownTable
-                title="Intraday vs overnight"
-                firstColumn="Holding"
-                rows={holdingRows(summary.by_holding)}
-                formatCurrency={formatCurrency}
-              />
-            </div>
-            <div className="mt-6" data-testid="hold-durations">
-              <div className="text-sm font-medium mb-2">Average holding duration</div>
-              <div className="grid grid-cols-3 gap-3">
-                {(
-                  [
-                    ['Overall', summary.hold?.overall],
-                    ['Winners', summary.hold?.winners],
-                    ['Losers', summary.hold?.losers],
-                  ] as const
-                ).map(([label, stat]) => (
-                  <MetricCard
-                    key={label}
-                    label={label}
-                    value={fmtDuration(stat?.mean_minutes)}
-                    hint={
-                      stat && stat.count > 0
-                        ? `median ${fmtDuration(stat.median_minutes)}, ${stat.count} trade(s)`
-                        : undefined
-                    }
-                  />
-                ))}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {summary.breakdowns && (
-          <HowYouTradeCard
-            breakdowns={summary.breakdowns}
-            sample={summary.sample}
-            formatCurrency={formatCurrency}
-          />
-        )}
-
-        <Card data-testid="excursion-card">
+        <Card data-testid="excursion-card" id="discretionary-excursion" className="scroll-mt-4">
           <CardHeader>
             <CardTitle>MAE / MFE</CardTitle>
           </CardHeader>
@@ -757,7 +656,7 @@ export function DiscretionaryPerformance({
           </CardContent>
         </Card>
 
-        <Card>
+        <Card id="discretionary-ledger" className="scroll-mt-4" data-testid="ledger-card">
           <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
             <CardTitle>Closed trades</CardTitle>
             <Button asChild variant="outline" size="sm">
@@ -913,16 +812,7 @@ export function DiscretionaryPerformance({
 
       {summary?.data_quality && <DataQualityStrip dq={summary.data_quality} />}
 
-      {summary?.today && (
-        // the current session, whatever the period; same build as everything below
-        <TodayPerformance
-          today={summary.today}
-          formatCurrency={formatCurrency}
-          onSelectClosed={(id) => {
-            if (summary.build_id) setSelectedTrade({ id, buildId: summary.build_id })
-          }}
-        />
-      )}
+      {!populated && todayNode}
 
       {body}
 
