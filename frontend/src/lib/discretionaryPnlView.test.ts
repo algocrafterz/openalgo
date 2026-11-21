@@ -216,7 +216,7 @@ describe('book helpers', () => {
 
   it('words the awaiting-attribution message exactly', () => {
     expect(awaitingAttributionText(5, 5)).toBe(
-      'No attributable trades available for performance analysis yet. 5 executions collected; 5 awaiting attribution. Their P&L is excluded until classification is resolved.'
+      'No attributable trades available for performance analysis yet. 5 fills collected; 5 awaiting attribution. Their P&L is excluded until classification is resolved.'
     )
   })
 

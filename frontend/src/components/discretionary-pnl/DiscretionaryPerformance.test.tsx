@@ -177,7 +177,7 @@ describe('empty and error states', () => {
     const block = await screen.findByTestId('discretionary-awaiting-attribution')
     expect(
       within(block).getByText(
-        'No attributable trades available for performance analysis yet. 5 executions collected; 5 awaiting attribution. Their P&L is excluded until classification is resolved.'
+        'No attributable trades available for performance analysis yet. 5 fills collected; 5 awaiting attribution. Their P&L is excluded until classification is resolved.'
       )
     ).toBeInTheDocument()
     expect(within(block).getByText(/Use View details in the warning above/)).toBeInTheDocument()
@@ -207,7 +207,7 @@ describe('empty and error states', () => {
     renderIt()
     expect(
       await screen.findByText(
-        'No attributable trades available for performance analysis yet. 7 executions collected; 2 awaiting attribution. Their P&L is excluded until classification is resolved.'
+        'No attributable trades available for performance analysis yet. 7 fills collected; 2 awaiting attribution. Their P&L is excluded until classification is resolved.'
       )
     ).toBeInTheDocument()
   })
@@ -1134,7 +1134,7 @@ describe('dashboard additions', () => {
     renderIt()
     const block = await screen.findByTestId('discretionary-awaiting-attribution')
     expect(block).toHaveTextContent(
-      'No attributable trades available for performance analysis yet. 5 executions collected; 5 awaiting attribution. Their P&L is excluded until classification is resolved.'
+      'No attributable trades available for performance analysis yet. 5 fills collected; 5 awaiting attribution. Their P&L is excluded until classification is resolved.'
     )
     expect(screen.queryByTestId('provisional-panel')).not.toBeInTheDocument()
     expect(screen.queryByText(/Pending attribution: provisional figures/)).not.toBeInTheDocument()

@@ -567,7 +567,7 @@ export function DataQualityStrip({ dq }: { dq: DataQuality }) {
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <Info className="h-4 w-4 text-muted-foreground" />
         <span className="font-medium">Data quality</span>
-        <span className="text-xs text-muted-foreground">executions of this period and filters</span>
+        <span className="text-xs text-muted-foreground">fills of this period and filters</span>
         {!dq.reconciles && (
           <Badge variant="outline" className="border-red-600/40 text-red-600 dark:text-red-400">
             counts do not add up

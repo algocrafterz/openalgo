@@ -437,7 +437,7 @@ export function awaitingAttribution(
 
 /** The empty-state message while every execution of the selection awaits attribution. */
 export function awaitingAttributionText(collected: number, unresolved: number): string {
-  return `No attributable trades available for performance analysis yet. ${collected} executions collected; ${unresolved} awaiting attribution. Their P&L is excluded until classification is resolved.`
+  return `No attributable trades available for performance analysis yet. ${collected} fills collected; ${unresolved} awaiting attribution. Their P&L is excluded until classification is resolved.`
 }
 
 /** Sorted distinct non-empty values, for a filter's choices. */
@@ -739,7 +739,7 @@ export function dataQualityStates(dq: DataQuality): DataQualityState[] {
       step: '1',
       label: 'Collected',
       count: dq.collected,
-      detail: 'manual and unresolved executions',
+      detail: 'manual and unresolved fills',
     },
     {
       key: 'awaiting',
