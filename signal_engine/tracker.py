@@ -429,6 +429,8 @@ class PositionTracker:
         self._time_exit_deadline: float | None = None
         # tracked key -> id of the MARKET order the square-off sent to close that leg
         self._square_off_orders: dict[str, str] = {}
+        # When the last time-exit pass began: the lower bound for finding its late fills (BUG-034).
+        self._time_exit_started: datetime | None = None
         self._last_stop_audit: float | None = None  # time.monotonic() of the last twin-stop audit
         self._shared_stop_checked: dict[str, float] = {}
         # Day summary counters (reset at midnight via TimeExitScheduler)
@@ -1844,28 +1846,59 @@ class PositionTracker:
             )
         return sweep
 
-    async def _closing_label(self, key: str, pos, sl_filled: bool) -> str:
+    async def _closing_label(self, key: str, pos, sl_filled: bool, stop_status: str = "") -> str:
         """The label of the order that closed a position the poll found flat (BUG-034).
 
         SL only when this tracker's own stop is complete. TIME when its own time-exit order is
-        complete. SQUAREOFF when the time exit was left open or the stop is known cancelled or
-        rejected, so a failsafe or broker square-off order the tracker did not place closed it
-        (2026-11-23 APLAPOLLO and TATASTEEL were booked SL after the 14:55 square-off).
-        With no evidence either way (status unreadable, no time exit in flight) it stays "SL",
-        the label this path always used. Label only: no order, price or P&L changes here.
+        complete: the order id recorded in _square_off_orders, or, when that exit came back
+        unconfirmed and no id was recorded, a complete order on the order book that carries this
+        strategy's exact tag. SQUAREOFF when the time exit was left open or the stop was already
+        cancelled or rejected BEFORE this poll touched it, so a failsafe or broker square-off
+        order the tracker did not place closed it (2026-11-23 APLAPOLLO and TATASTEEL were booked
+        SL after the 14:55 square-off).
+
+        `stop_status` is the stop's status read before the poll's own cancel. Never re-read it
+        here: the tracker cancels a working stop itself, and that cancel proves nothing about who
+        closed the position. A close nothing identifies stays "SL", the label this path always
+        used (residual risk: a manual close, the 15:15 sandbox square-off or a catch-up
+        settlement with a working stop). Label only: no order, price or P&L changes here.
         """
         if sl_filled:
             return "SL"
         own = self._square_off_orders.get(key)
-        if own and (await fetch_order_status(own, pos.strategy)).lower() == "complete":
+        if own:
+            if (await fetch_order_status(own, pos.strategy)).lower() == "complete":
+                return "TIME"
+        elif pos.time_exit_left_open and await self._late_time_exit_filled(key, pos):
             return "TIME"
-        stop_status = (
-            (await fetch_order_status(pos.sl_order_id, pos.strategy)).lower()
-            if pos.sl_order_id else ""
-        )
         if pos.time_exit_left_open or stop_status in ("cancelled", "canceled", "rejected"):
             return "SQUAREOFF"
         return "SL"
+
+    async def _late_time_exit_filled(self, key: str, pos) -> bool:
+        """True when the order book shows this strategy's own time-exit close complete.
+
+        For a time exit whose result was unconfirmed, so _square_off_orders holds no id. The
+        evidence is the one the time-exit booker uses (find_recent_complete_order_id: symbol,
+        closing action, quantity, placed since the pass began) AND an order tag equal to this
+        strategy (exact after strip, case-sensitive). An untagged order, as the failsafe
+        closepositions are, never matches. Never raises: no evidence leaves the label alone.
+        """
+        started = self._time_exit_started
+        if started is None:
+            return False
+        try:
+            book = await fetch_orderbook() or []
+        except Exception:
+            logger.exception(f"{key}: order book unreadable while labelling a close")
+            return False
+        own = [
+            o for o in book
+            if isinstance(o, dict) and str(o.get("strategy") or "").strip() == pos.strategy
+        ]
+        action = "SELL" if pos.direction == Direction.LONG else "BUY"
+        taken = frozenset(self._square_off_orders.values())
+        return bool(find_recent_complete_order_id(own, pos.symbol, action, pos.quantity, started, taken))
 
     async def _record_closed_trade(
         self, key: str, pos, age: timedelta, pnl_delta: float, _settings
@@ -1884,10 +1917,13 @@ class PositionTracker:
         freed by the earlier out-of-band settlement.
         """
         sl_filled = False
+        stop_status = ""
         if pos.sl_order_id:
             # A normal SL-HIT close means the stop itself just filled. OpenAlgo refuses to
             # cancel a completed order and logs an error each time, so skip the call then.
-            sl_filled = (await fetch_order_status(pos.sl_order_id, pos.strategy)).lower() == "complete"
+            # Kept as read BEFORE the cancel below: the label must not see our own cancel.
+            stop_status = (await fetch_order_status(pos.sl_order_id, pos.strategy)).lower()
+            sl_filled = stop_status == "complete"
         if pos.sl_order_id and not sl_filled:
             try:
                 cancelled = await cancel_order(pos.sl_order_id, pos.strategy)
@@ -1904,7 +1940,11 @@ class PositionTracker:
                     "(already filled/closed, or already gone)"
                 )
         await self._cancel_untracked_stops(key, pos)
-        closer = await self._closing_label(key, pos, sl_filled)
+        # The label is discarded when another path claimed the exit or already labelled it with
+        # something other than a target leg, so read the evidence only when it will be used.
+        labels = pos.exit_types or []
+        label_used = not pos.claimed_exit and (not labels or labels[-1].upper().startswith("TP"))
+        closer = await self._closing_label(key, pos, sl_filled, stop_status) if label_used else "SL"
         # Implied exit fill price from the PnL delta — the broker does not report one.
         base_price = pos.fill_price if pos.fill_price > 0 else pos.entry_price
         if pos.quantity > 0:
@@ -2418,6 +2458,7 @@ class PositionTracker:
         # Whole seconds: broker order timestamps carry no sub-second part, so keeping one here
         # would make an order stamped in the same second look older than the square-off.
         started = datetime.now(IST).replace(microsecond=0)
+        self._time_exit_started = started
         # Held from the first cancel to the last booking, so neither the poll nor a TP/EXIT
         # signal can book or act on a position the square-off is closing.
         self._time_exit_active = True
