@@ -28,57 +28,48 @@ import {
   awaitingAttribution,
   awaitingAttributionText,
   breakdownVisibility,
-  calendarBars,
-  calendarVisibility,
   classificationLine,
   closeDateCount,
   DISCRETIONARY_POLL_MS,
   drawdownReconciliation,
   excursionIndex,
   filterChoices,
-  holdingRows,
   isEmptyBook,
   ledgerIsEmpty,
+  MONTHLY_TABLE_DETAIL,
   MONTHLY_TABLE_NOTE,
   materialDataWarning,
   monthlyTotalDiffers,
+  monthTableVisible,
   NET_EQUITY_CAPTION,
   NO_CLOSED_TRADES_TEXT,
   netEquityDaily,
-  netEquityFromDailyRows,
   netEquityPerTrade,
   netEquitySeries,
   pendingAttributionLines,
   periodProfile,
-  profileNoteText,
   rangeEndsBeforeReliableStart,
   reliableStartNotice,
   requestedStartDate,
   summarizeUnrealized,
-  symbolBars,
   totalCard,
+  UNMATCHED_FILLS_REASON,
   unclassifiedReasonsText,
   unclassifiedScopeNote,
+  unmatchedFillCount,
+  unmatchedFillsNote,
 } from '@/lib/discretionaryPnlView'
 import { fmtDate, todayIst } from '@/lib/strategyPnlView'
-import { cn } from '@/lib/utils'
 import { CalendarTable, CategorySelector, PointsByInstrumentTable } from './DiscretionaryBlocks'
-import { NetBarChart } from './DiscretionaryCharts'
-import { DiscretionaryEquityChart } from './DiscretionaryEquityChart'
-import { DiscretionaryGroups } from './DiscretionaryGroups'
-import { HowYouTradeCard, JumpLink } from './DiscretionaryInsights'
+import { DiscretionaryBreakdowns } from './DiscretionaryBreakdowns'
+import { JumpLink, RiskStrip } from './DiscretionaryInsights'
 import { DiscretionaryStatistics } from './DiscretionaryStatistics'
-import { DiscretionaryHeader, TodayLine, TradingInsights } from './DiscretionarySummary'
-import {
-  BreakdownTable,
-  ClosedTradesTable,
-  OpenPositionsTable,
-  PeriodTable,
-} from './DiscretionaryTables'
+import { DiscretionaryHeader } from './DiscretionarySummary'
+import { ClosedTradesTable, OpenPositionsTable, PeriodTable } from './DiscretionaryTables'
 import { EquityCurveCard } from './EquityCurveCard'
 import { ExcursionPanel } from './ExcursionPanel'
 import { PnlCalendar } from './PnlCalendar'
-import { TodayPerformance } from './TodayPerformance'
+import { TodayLine } from './TodayPerformance'
 import { type SelectedTrade, TradeFillsDialog } from './TradeFillsDialog'
 import { UnresolvedDialog } from './UnresolvedDialog'
 import { useLedgerFillRefresh } from './useLedgerFillRefresh'
@@ -168,7 +159,6 @@ export function DiscretionaryPerformance({
   const [category, setCategory] = useState<DiscretionaryCategory>('all')
   const [unresolvedOpen, setUnresolvedOpen] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
-  const [breakdownsOpen, setBreakdownsOpen] = useState(true)
   const [selectedTrade, setSelectedTrade] = useState<SelectedTrade | null>(null)
   const [knownBrokers, setKnownBrokers] = useState<string[]>([])
   const [knownAccounts, setKnownAccounts] = useState<string[]>([])
@@ -257,6 +247,7 @@ export function DiscretionaryPerformance({
 
   const unrealized = useMemo(() => (summary ? summarizeUnrealized(summary) : null), [summary])
   const dataWarning = summary ? materialDataWarning(summary) : null
+  const unmatched = summary ? unmatchedFillCount(summary) : 0
   const reliableNotice = summary
     ? reliableStartNotice(
         requestedStartDate(period, range, summary.today?.session_date ?? todayIst()),
@@ -269,6 +260,28 @@ export function DiscretionaryPerformance({
   // instead of the generic empty state, and the Unresolved fills list opens.
   const beforeReliable = rangeEndsBeforeReliableStart(period, range, summary)
   const awaiting = beforeReliable ? null : awaitingAttribution(summary)
+  const unmatchedNode =
+    summary && unmatched > 0 && !(beforeReliable && isEmptyBook(summary)) ? (
+      <p
+        className="text-xs text-muted-foreground"
+        data-testid="unmatched-fills-note"
+        title={UNMATCHED_FILLS_REASON}
+      >
+        {unmatchedFillsNote(unmatched)}
+        {(summary.unresolved_in_range?.total ?? 0) > 0 && (
+          <>
+            {' '}
+            <button
+              type="button"
+              className="underline underline-offset-2 hover:text-foreground"
+              onClick={() => setUnresolvedOpen(true)}
+            >
+              View details
+            </button>
+          </>
+        )}
+      </p>
+    ) : null
   const sessionRange = summary
     ? { start: summary.period.start, end: summary.period.end }
     : undefined
@@ -340,15 +353,15 @@ export function DiscretionaryPerformance({
       pendingAttributionLines(today.pending_attribution).length > 0)
   const todayNode = summary?.today ? (
     // the current session, whatever the period; same build as everything below
-    <TodayLine today={summary.today} range={sessionRange} formatCurrency={formatCurrency}>
-      <TodayPerformance
-        today={summary.today}
-        formatCurrency={formatCurrency}
-        onSelectClosed={(id) => {
-          if (summary.build_id) setSelectedTrade({ id, buildId: summary.build_id })
-        }}
-      />
-    </TodayLine>
+    <TodayLine
+      today={summary.today}
+      formatCurrency={formatCurrency}
+      onShowToday={
+        onSelectDate && !todayIsRange
+          ? () => onSelectDate(summary.today?.session_date ?? todayIst())
+          : undefined
+      }
+    />
   ) : null
   const populated = !!summary && !awaiting && !isEmptyBook(summary) && !!metrics && !!unrealized
 
@@ -395,85 +408,49 @@ export function DiscretionaryPerformance({
         ? `${summary.charges_unavailable_trades} trade(s) without a charge estimate: not complete`
         : 'after estimated charges'
     const vis = breakdownVisibility(summary)
+    // Positions and win rate per month appear only in this table, so it stays (a table, no chart).
+    const monthByPosition =
+      profile.byPeriodTabs.includes('monthly') && monthTableVisible(summary.monthly)
     const curveMode = profile.perPositionCurve ? 'position' : 'day'
     const shown = summary.trades_shown ?? summary.trades.length
     const dailyRows = summary.by_period?.daily ?? []
-    // Equity Curve: the running sum of the server's daily realised net rows. It needs two days;
-    // one session is covered by Trade-by-trade P&L. Older servers without daily rows fall back
-    // to the end-of-day curve built from the trades.
-    const rowCurve = netEquityFromDailyRows(dailyRows, [], summary.realized_net_of_charges)
-    const hasRowCurve = rowCurve.points.length >= 2
-    const showDayCurve = hasRowCurve || curveMode === 'day'
     const truncatedNote =
       summary.trades_truncated > 0
-        ? `; only the newest ${summary.trades.length} of ${summary.trades_total} trades are included`
+        ? `; only the newest ${summary.trades.length} of ${summary.trades_total} are included`
         : ''
-    const skippedNote = (n: number) =>
-      n > 0 ? `; ${n} without a net P&L (no charge estimate) are left out` : ''
-    const positionBasis = `Net realised P&L after estimated charges, per completed trade by close time; excludes unrealized P&L. Based on ${positionCurve.used} completed trade(s)${skippedNote(positionCurve.skipped)}${truncatedNote}.`
-    const dayBasis = `${NET_EQUITY_CAPTION}. Based on ${netEquity.used} completed trade(s)${skippedNote(netEquity.skipped)}${truncatedNote}.`
+    const skippedNote = (n: number) => (n > 0 ? `; ${n} left out (no charge estimate)` : '')
+    const positionBasis = `Net P&L after estimated charges. ${positionCurve.used} completed trade(s)${skippedNote(positionCurve.skipped)}${truncatedNote}.`
+    const dayBasis = `${NET_EQUITY_CAPTION}. ${netEquity.used} completed trade(s)${skippedNote(netEquity.skipped)}${truncatedNote}.`
 
-    const tradeCard = () => {
-      const curve = positionCurve
-      const reconciliation = drawdownReconciliation({
-        curve,
-        mode: 'position',
-        tradesShown: shown,
-        tradesTotal: summary.trades_total,
-        risk: summary.risk,
-        formatCurrency,
-      })
-      return (
-        <Card data-testid="equity-card" key="position">
-          <CardHeader>
-            <CardTitle>Trade-by-trade P&amp;L</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {curve.points.length > 0 ? (
-              <DiscretionaryEquityChart
-                curve={curve}
-                mode="position"
-                reconciliation={reconciliation}
-                basis={positionBasis}
-                isDarkMode={isDarkMode}
-                formatCurrency={formatCurrency}
-              />
-            ) : (
-              <>
-                <p className="text-sm text-muted-foreground" data-testid="net-equity-empty">
-                  No completed trade with a net P&amp;L yet, so there is nothing to chart.
-                </p>
-                <p className="mt-2 text-xs text-muted-foreground" data-testid="net-equity-caption">
-                  {positionBasis}
-                </p>
-              </>
-            )}
-          </CardContent>
-        </Card>
-      )
-    }
+    // One cumulative-net curve: per closed trade for 7 or fewer close dates, per day beyond that.
     const hasAnyCurveData = summary.trades.length > 0 || dailyRows.length > 0
-    const equityCurveNode =
-      hasAnyCurveData && showDayCurve ? (
-        <EquityCurveCard
-          summary={summary}
-          filters={queryFilters}
-          category={category}
-          today={summary.today?.session_date ?? todayIst()}
-          fallback={{ curve: dayCurve, basis: dayBasis }}
-          showDailyBars={profile.showDailyBars}
-          formatCurrency={formatCurrency}
-          isDarkMode={isDarkMode}
-        />
-      ) : null
-    const tradeCurveNode = hasAnyCurveData && curveMode === 'position' ? tradeCard() : null
-
-    // A section with nothing to compare is not rendered, so no heading or shell is left empty.
-    const calVis = calendarVisibility(summary, profile)
-    const hasBreakdowns =
-      (!!summary.breakdowns && vis.patterns.length > 0) ||
-      calVis.any ||
-      (profile.showBreakdownTables && !vis.noneShown)
+    const equityCurveNode = hasAnyCurveData ? (
+      <EquityCurveCard
+        summary={summary}
+        filters={queryFilters}
+        category={category}
+        today={summary.today?.session_date ?? todayIst()}
+        fallback={{ curve: dayCurve, basis: dayBasis }}
+        position={
+          curveMode === 'position'
+            ? {
+                curve: positionCurve,
+                basis: positionBasis,
+                reconciliation: drawdownReconciliation({
+                  curve: positionCurve,
+                  mode: 'position',
+                  tradesShown: shown,
+                  tradesTotal: summary.trades_total,
+                  risk: summary.risk,
+                  formatCurrency,
+                }),
+              }
+            : null
+        }
+        formatCurrency={formatCurrency}
+        isDarkMode={isDarkMode}
+      />
+    ) : null
 
     body = awaiting ? (
       <div
@@ -486,7 +463,7 @@ export function DiscretionaryPerformance({
         </p>
         {(summary.unresolved_in_range?.total ?? 0) > 0 && (
           <p className="text-sm text-muted-foreground mt-1">
-            Use View details in the warning above to list them.
+            Select View details above to list them.
           </p>
         )}
       </div>
@@ -512,7 +489,7 @@ export function DiscretionaryPerformance({
         description={
           filtersActive || category !== 'all'
             ? 'Clear the filters, choose All trades or widen the period.'
-            : 'Closed trades and open positions appear here once your broker trades have been collected. If you traded today and see nothing, check that you are logged in to your broker.'
+            : 'Trades appear here after your broker trades sync. If you traded today, check your broker login.'
         }
       />
     ) : (
@@ -521,25 +498,20 @@ export function DiscretionaryPerformance({
           summary={summary}
           formatCurrency={formatCurrency}
           chargesHint={chargesHint}
+          unrealized={unrealized}
+          total={total}
+          coverageNote={unmatchedNode}
         >
           {
             // The range already is today's session, or today has nothing to add: no second panel.
             !todayIsRange && todayHasActivity ? todayNode : null
           }
         </DiscretionaryHeader>
-        {profileNoteText(profile.note, profile.showBreakdownTables && !vis.noneShown) && (
+        {profile.note && (
           <p className="text-xs text-muted-foreground" data-testid="profile-note">
-            {profileNoteText(profile.note, profile.showBreakdownTables && !vis.noneShown)}
+            {profile.note}
           </p>
         )}
-
-        <DiscretionaryGroups
-          summary={summary}
-          unrealized={unrealized}
-          total={total}
-          formatCurrency={formatCurrency}
-          part="performance"
-        />
 
         {onSelectDate && (
           <PnlCalendar
@@ -562,182 +534,13 @@ export function DiscretionaryPerformance({
           onSelectTrade={(t) => openTrade(t.id, t.build_id)}
         />
 
-        {hasBreakdowns && (
-          <Collapsible
-            open={breakdownsOpen}
-            onOpenChange={setBreakdownsOpen}
-            className="rounded-lg border"
-            data-testid="performance-breakdowns"
-          >
-            <CollapsibleTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-auto w-full justify-start gap-2 whitespace-normal px-4 py-3 text-left text-sm font-semibold"
-                data-testid="performance-breakdowns-toggle"
-              >
-                {breakdownsOpen ? (
-                  <ChevronDown className="size-4" />
-                ) : (
-                  <ChevronRight className="size-4" />
-                )}
-                Performance breakdowns
-                <span className="min-w-0 break-words font-normal text-muted-foreground">
-                  symbol, direction, product, weekday, time of day
-                </span>
-              </Button>
-            </CollapsibleTrigger>
-            <CollapsibleContent className="space-y-6 border-t p-4">
-              {summary.breakdowns && vis.patterns.length > 0 && (
-                <HowYouTradeCard
-                  keys={vis.patterns}
-                  breakdowns={summary.breakdowns}
-                  formatCurrency={formatCurrency}
-                />
-              )}
-
-              {calVis.any && (
-                <Card data-testid="calendar-card">
-                  <CardHeader>
-                    <CardTitle>
-                      {calVis.monthly && calVis.weekday
-                        ? 'Net P&L by month and weekday'
-                        : calVis.monthly
-                          ? 'Net P&L by month'
-                          : 'Net P&L by weekday'}
-                    </CardTitle>
-                    <p className="text-xs text-muted-foreground">
-                      Each position counts once, on the date of its final close.
-                      {calVis.weekday && vis.patterns.includes('weekday')
-                        ? ' The weekday table here is by close date; the Weekday tab under How you trade is by entry day.'
-                        : ''}{' '}
-                      * means some positions have no charge estimate, so charges and net are not
-                      complete.
-                    </p>
-                  </CardHeader>
-                  <CardContent>
-                    <div
-                      className={cn(
-                        'grid grid-cols-1 gap-6',
-                        calVis.monthly && calVis.weekday && 'xl:grid-cols-2'
-                      )}
-                    >
-                      {calVis.monthly && (
-                        <div className="min-w-0 space-y-3">
-                          <NetBarChart
-                            title="Net P&L by month"
-                            bars={calendarBars(summary.monthly)}
-                            formatCurrency={formatCurrency}
-                            samples="position(s)"
-                            emptyText="No completed trades in this range."
-                            testId="monthly-chart"
-                          />
-                          <CalendarTable
-                            rows={summary.monthly ?? []}
-                            first="Month"
-                            label={(r) => r.period ?? r.key}
-                            formatCurrency={formatCurrency}
-                          />
-                          {monthlyTotalDiffers(
-                            summary.monthly,
-                            summary.realized_net_of_charges
-                          ) && (
-                            <p
-                              className="text-xs text-muted-foreground"
-                              data-testid="monthly-table-note"
-                            >
-                              {MONTHLY_TABLE_NOTE}
-                            </p>
-                          )}
-                        </div>
-                      )}
-                      {calVis.weekday && (
-                        <div className="min-w-0 space-y-3">
-                          <NetBarChart
-                            title="Net P&L by weekday (close date)"
-                            bars={calendarBars(summary.weekday)}
-                            formatCurrency={formatCurrency}
-                            samples="position(s)"
-                            emptyText="No completed trades in this range."
-                            testId="weekday-chart"
-                          />
-                          <CalendarTable
-                            rows={summary.weekday ?? []}
-                            first="Weekday"
-                            label={(r) => r.weekday ?? r.key}
-                            formatCurrency={formatCurrency}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-
-              {profile.showBreakdownTables && !vis.noneShown && (
-                <details
-                  open={!profile.collapseSecondary}
-                  className="rounded-lg border"
-                  data-testid="more-breakdowns"
-                >
-                  <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
-                    More breakdowns
-                  </summary>
-                  <div className="border-t p-4">
-                    {vis.symbol && (
-                      <div className="mb-6">
-                        <NetBarChart
-                          title="Net P&L by symbol"
-                          bars={symbolBars(summary.by_symbol)}
-                          formatCurrency={formatCurrency}
-                          samples="trade(s)"
-                          emptyText="No closed trades in this range."
-                          testId="symbol-chart"
-                        />
-                      </div>
-                    )}
-                    <div className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
-                      {vis.symbol && (
-                        <BreakdownTable
-                          title="By symbol"
-                          firstColumn="Symbol"
-                          rows={summary.by_symbol ?? []}
-                          formatCurrency={formatCurrency}
-                        />
-                      )}
-                      {vis.side && (
-                        <BreakdownTable
-                          title="Long vs Short"
-                          firstColumn="Side"
-                          rows={summary.by_side ?? []}
-                          formatCurrency={formatCurrency}
-                        />
-                      )}
-                      {vis.product && (
-                        <BreakdownTable
-                          title="By product"
-                          firstColumn="Product"
-                          rows={summary.by_product ?? []}
-                          formatCurrency={formatCurrency}
-                        />
-                      )}
-                      {vis.holding && (
-                        <BreakdownTable
-                          title="Intraday vs overnight"
-                          firstColumn="Holding"
-                          rows={holdingRows(summary.by_holding)}
-                          formatCurrency={formatCurrency}
-                        />
-                      )}
-                    </div>
-                  </div>
-                </details>
-              )}
-            </CollapsibleContent>
-          </Collapsible>
+        {vis.tabs.length > 0 && (
+          <DiscretionaryBreakdowns
+            summary={summary}
+            tabs={vis.tabs}
+            formatCurrency={formatCurrency}
+          />
         )}
-
-        {tradeCurveNode}
 
         <Card id="discretionary-ledger" className="scroll-mt-4" data-testid="ledger-card">
           <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
@@ -763,32 +566,32 @@ export function DiscretionaryPerformance({
             )}
             {summary.trades_truncated > 0 && (
               <p className="mt-2 text-xs text-muted-foreground" data-testid="trades-truncated">
-                Showing {summary.trades_shown ?? summary.trades.length} of {summary.trades_total}{' '}
-                trades (the newest). Totals above and the CSV export cover all of them.
+                Showing the newest {summary.trades_shown ?? summary.trades.length} of{' '}
+                {summary.trades_total} trades. Totals and CSV cover all.
               </p>
             )}
           </CardContent>
         </Card>
 
-        <Card data-testid="open-positions-card">
-          <CardHeader>
-            <CardTitle>Open positions</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {summary.positions.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No open positions.</p>
-            ) : (
+        {summary.positions.length === 0 ? (
+          <p className="px-1 text-sm text-muted-foreground" data-testid="open-positions-card">
+            No open positions.
+          </p>
+        ) : (
+          <Card data-testid="open-positions-card">
+            <CardHeader>
+              <CardTitle>Open positions</CardTitle>
+            </CardHeader>
+            <CardContent>
               <OpenPositionsTable positions={summary.positions} formatCurrency={formatCurrency} />
-            )}
-            {summary.positions_truncated > 0 && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                Showing {summary.positions.length} of {summary.positions_total} positions.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <TradingInsights summary={summary} formatCurrency={formatCurrency} />
+              {summary.positions_truncated > 0 && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Showing {summary.positions.length} of {summary.positions_total} positions.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         <Collapsible
           open={advancedOpen}
@@ -810,8 +613,7 @@ export function DiscretionaryPerformance({
               )}
               Advanced analysis
               <span className="min-w-0 break-words font-normal text-muted-foreground">
-                risk and consistency, trade management and costs, P&L by period, points by
-                instrument, MAE / MFE
+                risk, consistency, periods, instruments, MAE / MFE
               </span>
             </Button>
           </CollapsibleTrigger>
@@ -830,13 +632,16 @@ export function DiscretionaryPerformance({
             </JumpLink>
           </p>
           <CollapsibleContent className="space-y-6 border-t p-4">
-            <DiscretionaryGroups
-              summary={summary}
-              unrealized={unrealized}
-              total={total}
-              formatCurrency={formatCurrency}
-              part="analysis"
-            />
+            {(summary.consistency || summary.trade_management || summary.costs || summary.hold) && (
+              <RiskStrip
+                consistency={summary.consistency}
+                risk={summary.risk}
+                management={summary.trade_management}
+                costs={summary.costs}
+                hold={summary.hold}
+                formatCurrency={formatCurrency}
+              />
+            )}
 
             {profile.showByPeriodTabs && (
               <Card data-testid="period-card">
@@ -844,13 +649,18 @@ export function DiscretionaryPerformance({
                   <CardTitle>P&amp;L by period</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <Tabs defaultValue="daily">
-                    <TabsList>
+                  <Tabs defaultValue={profile.byPeriodTabs[0]}>
+                    <TabsList className="h-auto flex-wrap justify-start">
                       {profile.byPeriodTabs.map((g) => (
                         <TabsTrigger key={g} value={g}>
-                          {g === 'daily' ? 'Daily' : g === 'weekly' ? 'Weekly' : 'Monthly'}
+                          {g === 'weekly' ? 'Weekly' : 'Monthly'}
                         </TabsTrigger>
                       ))}
+                      {monthByPosition && (
+                        <TabsTrigger value="month_positions">
+                          Monthly (by position close)
+                        </TabsTrigger>
+                      )}
                     </TabsList>
                     {profile.byPeriodTabs.map((g) => (
                       <TabsContent key={g} value={g}>
@@ -860,6 +670,28 @@ export function DiscretionaryPerformance({
                         />
                       </TabsContent>
                     ))}
+                    {monthByPosition && (
+                      <TabsContent value="month_positions" className="space-y-2">
+                        <CalendarTable
+                          rows={summary.monthly ?? []}
+                          first="Month"
+                          label={(r) => r.period ?? r.key}
+                          formatCurrency={formatCurrency}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Counted once, on the final close date. *: some charges are not estimated.
+                        </p>
+                        {monthlyTotalDiffers(summary.monthly, summary.realized_net_of_charges) && (
+                          <p
+                            className="text-xs text-muted-foreground"
+                            data-testid="monthly-table-note"
+                            title={MONTHLY_TABLE_DETAIL}
+                          >
+                            {MONTHLY_TABLE_NOTE}
+                          </p>
+                        )}
+                      </TabsContent>
+                    )}
                   </Tabs>
                 </CardContent>
               </Card>
@@ -923,7 +755,9 @@ export function DiscretionaryPerformance({
               {unclassifiedScopeNote(summary.classification, category)}
             </p>
           )}
-          <p>{summary.classification.note}</p>
+          <p title={summary.classification.note}>
+            Intraday: closed in its opening session. Swing: held past it.
+          </p>
         </div>
       )}
 
@@ -982,18 +816,10 @@ export function DiscretionaryPerformance({
         >
           <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
           <span className="min-w-0 flex-1">{dataWarning}</span>
-          {(summary.unresolved_in_range?.total ?? 0) > 0 && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setUnresolvedOpen(true)}
-            >
-              View details
-            </Button>
-          )}
         </output>
       )}
+
+      {!populated && unmatchedNode}
 
       {!populated && todayNode}
 

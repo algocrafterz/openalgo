@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   breakdownVisibility,
+  EQUITY_CAPTION_DETAIL,
   equityCurveBasis,
   equityCurveReconciliation,
   netEquityFromDailyRows,
@@ -58,7 +59,8 @@ describe('netEquityFromDailyRows (Equity Curve)', () => {
     ])
     expect(curve.incompleteDays).toBe(1)
     expect(equityCurveBasis(curve)).toContain('1 day(s) include trades without a charge estimate')
-    expect(equityCurveBasis(curve)).toContain('not an account balance')
+    // the "not an account balance" disclosure moved to the caption tooltip
+    expect(EQUITY_CAPTION_DETAIL).toContain('not an account balance or a return on capital')
   })
 
   it('flags a last point that differs from the period net', () => {

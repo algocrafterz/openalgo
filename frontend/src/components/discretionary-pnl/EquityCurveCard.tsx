@@ -22,10 +22,10 @@ import {
   equityCurveReconciliation,
   type NetCurve,
   netEquityFromDailyRows,
+  type Reconciliation,
 } from '@/lib/discretionaryPnlView'
 import { fmtDate } from '@/lib/strategyPnlView'
 import { DiscretionaryEquityChart } from './DiscretionaryEquityChart'
-import { DailyPnlChart } from './DiscretionaryInsights'
 
 type Money = (value: number) => string
 
@@ -47,7 +47,7 @@ export function EquityCurveCard({
   category,
   today,
   fallback,
-  showDailyBars,
+  position,
   formatCurrency,
   isDarkMode,
 }: {
@@ -58,7 +58,11 @@ export function EquityCurveCard({
   today: string
   /** Older servers without daily rows: the end-of-day curve built from the trades. */
   fallback: { curve: NetCurve; basis: string }
-  showDailyBars: boolean
+  /**
+   * For 7 or fewer close dates the curve is drawn per closed trade instead of per day; it is the
+   * one curve of the report period. Choosing another range switches to the day curve of it.
+   */
+  position?: { curve: NetCurve; basis: string; reconciliation: Reconciliation } | null
   formatCurrency: Money
   isDarkMode: boolean
 }) {
@@ -122,8 +126,31 @@ export function EquityCurveCard({
 
   const separate = !!view && !!range && (view.start !== pageStart || view.end !== pageEnd)
 
+  const positionMode = !!position && !range
+
   let content: React.ReactNode
-  if (range && !ranged) {
+  if (positionMode && position) {
+    content =
+      position.curve.points.length > 0 ? (
+        <DiscretionaryEquityChart
+          curve={position.curve}
+          mode="position"
+          reconciliation={position.reconciliation}
+          basis={position.basis}
+          isDarkMode={isDarkMode}
+          formatCurrency={formatCurrency}
+        />
+      ) : (
+        <>
+          <p className="text-sm text-muted-foreground" data-testid="net-equity-empty">
+            No completed trade with a net P&amp;L yet, so there is nothing to chart.
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground" data-testid="net-equity-caption">
+            {position.basis}
+          </p>
+        </>
+      )
+  } else if (range && !ranged) {
     content = query.isError ? (
       <div className="flex flex-wrap items-center gap-3 text-sm" data-testid="equity-range-error">
         <span>Could not load this range. The rest of the page is not affected.</span>
@@ -140,8 +167,8 @@ export function EquityCurveCard({
     content = (
       <p className="text-sm text-muted-foreground" data-testid="equity-range-empty">
         {range
-          ? 'There are fewer than two trading days with realised P&L in this range, so there is no curve to draw.'
-          : 'No completed trade with a net P&L yet, so there is nothing to chart.'}
+          ? 'Fewer than two trading days with P&L in this range.'
+          : 'No completed trade with a net P&L yet.'}
       </p>
     )
   } else {
@@ -155,44 +182,33 @@ export function EquityCurveCard({
       formatCurrency,
     })
     content = (
-      <>
-        <DiscretionaryEquityChart
-          curve={view.curve}
-          mode="day"
-          reconciliation={reconciliation}
-          netReconciliation={
-            view.hasRows
-              ? equityCurveReconciliation(
-                  view.rowCurve,
-                  net,
-                  formatCurrency,
-                  range ? 'this range' : 'the selected period'
-                )
-              : undefined
-          }
-          basis={view.basis}
-          notCollectedDays={view.uncollected}
-          uncollectedNote={view.uncollectedNote}
-          isDarkMode={isDarkMode}
-          formatCurrency={formatCurrency}
-        />
-        {(range ? view.rows.length > 0 : showDailyBars && view.rows.length > 0) && (
-          <div className="mt-6">
-            <DailyPnlChart
-              rows={view.rows}
-              formatCurrency={formatCurrency}
-              notCollectedDays={view.uncollected}
-            />
-          </div>
-        )}
-      </>
+      <DiscretionaryEquityChart
+        curve={view.curve}
+        mode="day"
+        reconciliation={reconciliation}
+        netReconciliation={
+          view.hasRows
+            ? equityCurveReconciliation(
+                view.rowCurve,
+                net,
+                formatCurrency,
+                range ? 'this range' : 'the selected period'
+              )
+            : undefined
+        }
+        basis={view.basis}
+        notCollectedDays={view.uncollected}
+        uncollectedNote={view.uncollectedNote}
+        isDarkMode={isDarkMode}
+        formatCurrency={formatCurrency}
+      />
     )
   }
 
   return (
     <Card data-testid="equity-curve-card">
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
-        <CardTitle>Equity curve</CardTitle>
+        <CardTitle>{positionMode ? 'Trade-by-trade P&L' : 'Equity curve'}</CardTitle>
         {showChoices && (
           <fieldset
             className="flex flex-wrap items-center gap-1 border-0 p-0"
@@ -218,12 +234,10 @@ export function EquityCurveCard({
         )}
       </CardHeader>
       <CardContent>
-        {view && (!range || ranged) && (
+        {view && (!range || ranged) && !positionMode && (
           <p className="mb-2 text-xs text-muted-foreground" data-testid="equity-range-label">
             {range ? 'Range shown' : 'Report period'}: {spanText(view.start, view.end)}.
-            {separate
-              ? ` This range is separate from the report period above (${spanText(pageStart, pageEnd)}), so its total can differ from that period's net P&L. The rest of the page does not change.`
-              : ''}
+            {separate ? ` Differs from the report period (${spanText(pageStart, pageEnd)}).` : ''}
           </p>
         )}
         {content}

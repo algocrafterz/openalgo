@@ -2,14 +2,15 @@ import { describe, expect, it } from 'vitest'
 import type { DiscretionarySummary, RiskBlock } from '@/api/discretionaryPnl'
 import { consistency, costsBlock, riskBlock, summary, trade } from '@/test/discretionaryFixtures'
 import {
+  chargesInsightHint,
   cleanMoney,
   closeDateCount,
   drawdownReconciliation,
+  largestLossHint,
   netEquityDaily,
   netEquityPerTrade,
   netEquitySeries,
   periodProfile,
-  weaknessLine,
 } from './discretionaryPnlView'
 
 const money = (v: number) => `Rs ${v.toFixed(2)}`
@@ -466,8 +467,8 @@ describe('drawdownReconciliation', () => {
   it('names the cut list and the basis of each when the trades are truncated', () => {
     const r = drawdownReconciliation({ ...base, tradesShown: 7, tradesTotal: 640, risk: risk() })
     expect(r.kind).toBe('truncated')
-    expect(r.text).toContain('The chart shows your latest 7 of 640 closed trades')
-    expect(r.text).toContain('Risk figure for all 640')
+    expect(r.text).toContain('covers the latest 7 of 640 trades')
+    expect(r.text).toContain('Max drawdown (Rs 25.50) covers all')
   })
 
   it('says exactly what differs when the position sets differ', () => {
@@ -476,7 +477,7 @@ describe('drawdownReconciliation', () => {
       risk: risk({ max_drawdown: 99, positions: 6, net_unavailable_positions: 1 }),
     })
     expect(r.kind).toBe('mismatch')
-    expect(r.text).toContain('they count different trades: 5 on the chart, 6 in the Risk figure')
+    expect(r.text).toContain('counts 5 trades; Max drawdown (Rs 99.00) counts 6')
     expect(r.text).not.toMatch(/reconcil|Risk card/i)
     expect(r.text).toContain('Rs 99.00')
   })
@@ -496,7 +497,9 @@ describe('drawdownReconciliation', () => {
     })
     expect(r.kind).toBe('day_curve')
     expect(r.text).toContain('end-of-day totals')
-    expect(r.text).toContain('The Risk figure (Rs 40.00)')
+    expect(r.text).toContain('Max drawdown uses each closed trade')
+    // the drawdown is stated once, in the summary: this note carries no drawdown number
+    expect(r.text).not.toMatch(/Rs \d/)
     expect(r.text).not.toContain('can be smaller')
   })
 
@@ -525,34 +528,16 @@ describe('drawdownReconciliation', () => {
 
 describe('periodProfile', () => {
   const cases: [string, number, number, string, Record<string, unknown>][] = [
-    ['30d', 0, 0, 'session', { showMonthly: false, showByPeriodTabs: false, showDailyBars: false }],
-    [
-      '30d',
-      1,
-      1,
-      'session',
-      { showWeekday: false, collapseSecondary: true, perPositionCurve: true },
-    ],
-    ['30d', 2, 1, 'short', { showMonthly: false, showWeekday: true, byPeriodTabs: ['daily'] }],
-    ['7d', 7, 1, 'short', { showDailyBars: true, collapseSecondary: true }],
-    [
-      '30d',
-      8,
-      1,
-      'medium',
-      { showMonthly: false, byPeriodTabs: ['daily', 'weekly'], showWeekday: true },
-    ],
-    ['30d', 8, 2, 'medium', { showMonthly: true, byPeriodTabs: ['daily', 'weekly', 'monthly'] }],
-    ['30d', 31, 2, 'medium', { collapseSecondary: true, perPositionCurve: true }],
-    [
-      'all',
-      32,
-      2,
-      'long',
-      { collapseSecondary: false, perPositionCurve: false, showMonthly: true },
-    ],
-    ['all', 5, 3, 'long', { showMonthly: true, showByPeriodTabs: true, showDailyBars: true }],
-    ['1d', 3, 1, 'session', { showWeekday: false, showByPeriodTabs: false }],
+    ['30d', 0, 0, 'session', { showByPeriodTabs: false, perPositionCurve: true }],
+    ['30d', 1, 1, 'session', { byPeriodTabs: [], perPositionCurve: true }],
+    ['30d', 2, 1, 'short', { showByPeriodTabs: false, perPositionCurve: true }],
+    ['7d', 7, 1, 'short', { byPeriodTabs: [], perPositionCurve: true }],
+    ['30d', 8, 1, 'medium', { byPeriodTabs: ['weekly'], perPositionCurve: false }],
+    ['30d', 8, 2, 'medium', { byPeriodTabs: ['weekly', 'monthly'], perPositionCurve: false }],
+    ['30d', 31, 2, 'medium', { showByPeriodTabs: true, perPositionCurve: false }],
+    ['all', 32, 2, 'long', { perPositionCurve: false, byPeriodTabs: ['weekly', 'monthly'] }],
+    ['all', 5, 3, 'long', { showByPeriodTabs: true, perPositionCurve: false }],
+    ['1d', 3, 1, 'session', { showByPeriodTabs: false }],
   ]
   for (const [period, closeDates, months, profile, expected] of cases) {
     it(`${period}, ${closeDates} date(s), ${months} month(s) -> ${profile}`, () => {
@@ -562,14 +547,36 @@ describe('periodProfile', () => {
     })
   }
 
-  it('always says what is hidden, except in the long profile', () => {
+  it('never offers a Daily tab (the calendar is the per-day view)', () => {
+    for (const closeDates of [0, 1, 3, 7, 8, 20, 31, 40]) {
+      for (const months of [1, 2, 4]) {
+        const p = periodProfile({ period: 'all', closeDates, months })
+        expect(p.byPeriodTabs as string[]).not.toContain('daily')
+      }
+    }
+  })
+
+  it('draws one curve per range: per trade for 7 or fewer close dates, per day beyond', () => {
+    for (const closeDates of [0, 1, 2, 7]) {
+      expect(periodProfile({ period: 'all', closeDates, months: 1 }).perPositionCurve).toBe(true)
+    }
+    for (const closeDates of [8, 15, 31, 32, 90]) {
+      expect(periodProfile({ period: 'all', closeDates, months: 1 }).perPositionCurve).toBe(false)
+    }
+  })
+
+  it('says what is hidden when a period table is hidden, and nothing otherwise', () => {
     expect(periodProfile({ period: '1d', closeDates: 1, months: 1 }).note).toContain(
       'one trading day'
     )
     expect(periodProfile({ period: '30d', closeDates: 3, months: 1 }).note).toContain(
       '3 trading days'
     )
+    expect(periodProfile({ period: '30d', closeDates: 10, months: 1 }).note).toContain(
+      'within one month'
+    )
     expect(periodProfile({ period: 'all', closeDates: 40, months: 4 }).note).toBeNull()
+    expect(periodProfile({ period: '30d', closeDates: 10, months: 2 }).note).toBeNull()
   })
 
   it('counts close dates from the server daily rows, else from the trade dates', () => {
@@ -583,7 +590,7 @@ describe('periodProfile', () => {
   })
 })
 
-describe('weaknessLine', () => {
+describe('chargesInsightHint and largestLossHint (the former insight rules, now tile hints)', () => {
   const s = (extra: Partial<DiscretionarySummary> = {}) => summary(extra)
   /** `summary` with enough completed trades for a comparison of single trades to mean something. */
   const rich = (extra: Partial<DiscretionarySummary> = {}) => {
@@ -591,154 +598,77 @@ describe('weaknessLine', () => {
     return { ...base, metrics: { ...base.metrics, trades_count: 12 } }
   }
 
-  it('has no weakness line with no completed trade', () => {
+  it('has no hint with no completed trade', () => {
     const e = s()
     e.metrics = { ...e.metrics, trades_count: 0 }
-    expect(weaknessLine(e, money)).toBeNull()
+    expect(chargesInsightHint(e, money)).toBeNull()
+    expect(largestLossHint(e, money)).toBeNull()
   })
 
-  it('picks the single biggest weakness in a fixed order, from existing fields only', () => {
-    // 1. charges turn a gross profit into a net loss
-    expect(weaknessLine(s({ realized_gross: 50, realized_net_of_charges: -10 }), money)).toContain(
-      'Estimated charges turned a gross profit of Rs 50.00 into a net loss, over 2 completed trades.'
+  it('charges: gross profit turned into a net loss, then 30% or more of winners gross, with the count', () => {
+    expect(chargesInsightHint(s({ realized_gross: 50, realized_net_of_charges: -10 }), money)).toBe(
+      'turned a gross profit of Rs 50.00 into a net loss, over 2 completed trades'
     )
-    // 2. charges take 30% or more of gross profit
     expect(
-      weaknessLine(s({ costs: costsBlock({ charges_pct_of_gross_profit: 42.5 }) }), money)
-    ).toBe(
-      'Estimated charges are 42.5% of the gross profit of your winning trades, over 2 completed trades.'
-    )
-    // 3. largest loss bigger than largest win
-    const c = consistency()
-    const big = rich({
-      costs: costsBlock({ charges_pct_of_gross_profit: 5 }),
-      consistency: {
-        ...c,
-        largest_win: { ...c.largest_win!, net_pnl: 100 },
-        largest_loss: { ...c.largest_loss!, net_pnl: -250 },
-      },
-    })
-    expect(weaknessLine(big, money)).toBe(
-      'Your biggest losing trade (Rs 250.00) is larger than your biggest winning trade (Rs 100.00), over 12 completed trades.'
-    )
-    // 4. a current drawdown
+      chargesInsightHint(s({ costs: costsBlock({ charges_pct_of_gross_profit: 42.5 }) }), money)
+    ).toBe('42.5% of the gross profit of your winning trades, over 2 completed trades')
     expect(
-      weaknessLine(
-        rich({ realized_gross: 10, risk: riskBlock({ current_drawdown: 75 }), consistency: null }),
-        money
-      )
-    ).toBe(
-      'Your net P&L is Rs 75.00 below its highest point in this period, over 12 completed trades.'
-    )
-    // 5. a small sample is never a weakness by itself: no line
-    const low = weaknessLine(
-      s({
-        realized_gross: 10,
-        consistency: null,
-        risk: riskBlock({ current_drawdown: 0 }),
-        sample: {
-          completed_trades: 2,
-          trading_days: 1,
-          min_trades: 30,
-          min_days: 10,
-          sufficient: false,
-        },
-      }),
-      money
-    )
-    expect(low).toBeNull()
-    // none
-    expect(
-      weaknessLine(
-        s({ realized_gross: 10, consistency: null, risk: riskBlock({ current_drawdown: 0 }) }),
-        money
-      )
+      chargesInsightHint(s({ costs: costsBlock({ charges_pct_of_gross_profit: 5 }) }), money)
     ).toBeNull()
   })
 
-  it('states the biggest trades and the fall from a peak over a handful of trades, with the trade count', () => {
+  it('largest loser: larger than the largest winner, net only, with the count', () => {
     const c = consistency()
-    const few = s({
-      realized_gross: 10,
-      costs: costsBlock({ charges_pct_of_gross_profit: 5 }),
-      risk: riskBlock({ current_drawdown: 75 }),
+    const big = rich({
       consistency: {
         ...c,
         largest_win: { ...c.largest_win!, net_pnl: 100 },
         largest_loss: { ...c.largest_loss!, net_pnl: -250 },
       },
-      sample: {
-        completed_trades: 4,
-        trading_days: 2,
-        min_trades: 30,
-        min_days: 10,
-        sufficient: false,
-      },
     })
-    const four = { ...few, metrics: { ...few.metrics, trades_count: 4 } }
-    const text = weaknessLine(four, money) ?? ''
-    expect(text).toContain('Your biggest losing trade (Rs 250.00)')
-    expect(text).toContain('over 4 completed trades')
-    expect(text).not.toMatch(/too early|low sample|indicative/i)
-    const ten = { ...few, metrics: { ...few.metrics, trades_count: 10 } }
-    expect(weaknessLine(ten, money)).toContain('over 10 completed trades')
-  })
-
-  it('treats missing data as unavailable: no gross fallback and no zero drawdown', () => {
-    const c = consistency()
-    const gross = rich({
-      realized_gross: 10,
-      costs: costsBlock({ charges_pct_of_gross_profit: 5 }),
-      risk: null,
+    expect(largestLossHint(big, money)).toBe(
+      'larger than your largest winner (Rs 100.00), over 12 completed trades'
+    )
+    const smaller = rich({
       consistency: {
         ...c,
-        // no net P&L on either trade: gross is never compared
+        largest_win: { ...c.largest_win!, net_pnl: 300 },
+        largest_loss: { ...c.largest_loss!, net_pnl: -250 },
+      },
+    })
+    expect(largestLossHint(smaller, money)).toBeNull()
+  })
+
+  it('treats missing data as unavailable: no gross fallback', () => {
+    const c = consistency()
+    const gross = rich({
+      consistency: {
+        ...c,
         largest_win: { ...c.largest_win!, net_pnl: null, realized_pnl: 100 },
         largest_loss: { ...c.largest_loss!, net_pnl: null, realized_pnl: -250 },
       },
     })
-    expect(weaknessLine(gross, money) ?? '').not.toMatch(/biggest/)
-    // a missing risk block is not a drawdown of 0 and not a statement about it
-    expect(weaknessLine(gross, money) ?? '').not.toMatch(/below its highest/)
+    expect(largestLossHint(gross, money)).toBeNull()
     const noWin = rich({
-      realized_gross: 10,
-      costs: costsBlock({ charges_pct_of_gross_profit: 5 }),
-      risk: null,
       consistency: {
         ...c,
         largest_win: null,
         largest_loss: { ...c.largest_loss!, net_pnl: null, realized_pnl: -250 },
       },
     })
-    expect(weaknessLine(noWin, money) ?? '').not.toMatch(/biggest/)
+    expect(largestLossHint(noWin, money)).toBeNull()
+    const lossOnly = rich({
+      consistency: { ...c, largest_win: null, largest_loss: { ...c.largest_loss!, net_pnl: -250 } },
+    })
+    expect(largestLossHint(lossOnly, money)).toBe('none of your 12 completed trades won')
   })
 
-  it('uses plain trader wording, with no internal terms', () => {
-    const lines = [
-      weaknessLine(s({ costs: costsBlock({ charges_pct_of_gross_profit: 42.5 }) }), money),
-      weaknessLine(
-        s({
-          realized_gross: 10,
-          consistency: null,
-          risk: riskBlock({ current_drawdown: 0 }),
-          sample: {
-            completed_trades: 2,
-            trading_days: 1,
-            min_trades: 30,
-            min_days: 10,
-            sufficient: false,
-          },
-        }),
-        money
-      ),
-    ].join(' ')
-    expect(lines).not.toMatch(/ratios|indicative|\bsample\b|leg|\barm/i)
-  })
-
-  it('never uses advice or AI wording', () => {
+  it('uses plain trader wording and no advice', () => {
     const text = [
-      weaknessLine(s({ realized_gross: 50, realized_net_of_charges: -10 }), money) ?? '',
+      chargesInsightHint(s({ realized_gross: 50, realized_net_of_charges: -10 }), money) ?? '',
+      chargesInsightHint(s({ costs: costsBlock({ charges_pct_of_gross_profit: 42.5 }) }), money) ??
+        '',
     ].join(' ')
-    expect(text).not.toMatch(/should|recommend|AI|paper/i)
+    expect(text).not.toMatch(/should|recommend|AI|paper|ratios|indicative|\bsample\b|leg|\barm/i)
   })
 })

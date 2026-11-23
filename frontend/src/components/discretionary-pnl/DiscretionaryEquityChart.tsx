@@ -1,8 +1,8 @@
 import { useMemo } from 'react'
 import {
+  EQUITY_CAPTION_DETAIL,
   type EquityReconciliation,
   type NetCurve,
-  progressionText,
   type Reconciliation,
 } from '@/lib/discretionaryPnlView'
 import { cn } from '@/lib/utils'
@@ -16,13 +16,14 @@ export function curveSummaryText(curve: NetCurve, mode: 'position' | 'day', mone
   if (pts.length === 0) return 'No points.'
   const eq = pts.map((p) => p.equity)
   const unit = mode === 'position' ? 'closed trade' : 'day'
-  return `${pts.length} ${unit}${pts.length === 1 ? '' : 's'}. Cumulative net P&L: first ${money(eq[0])}, last ${money(eq[eq.length - 1])}, lowest ${money(Math.min(...eq))}, highest ${money(Math.max(...eq))}. Maximum drawdown ${money(curve.maxDrawdown)}, current drawdown ${money(curve.currentDrawdown)}.`
+  return `${pts.length} ${unit}${pts.length === 1 ? '' : 's'}. Cumulative net P&L: first ${money(eq[0])}, last ${money(eq[eq.length - 1])}, lowest ${money(Math.min(...eq))}, highest ${money(Math.max(...eq))}.`
 }
 
 /**
  * Trade-by-trade P&L: the running total of net realised P&L (after estimated charges) and its
  * fall below the highest point so far. Per trade (x = trade number in close order) for a session
- * or a short range, end-of-day for a long one. A plain-English reading sits under the chart; the
+ * or a short range (7 or fewer close dates), end-of-day for a longer one. The maximum and current
+ * drawdown are stated once, in the summary's key figures; the lower pane only draws the fall. The
  * individual trades are in Closed trades only, so there is no second table here.
  */
 export function DiscretionaryEquityChart({
@@ -54,21 +55,14 @@ export function DiscretionaryEquityChart({
     () => curveSummaryText(curve, mode, formatCurrency),
     [curve, mode, formatCurrency]
   )
-  const reading = useMemo(
-    () => progressionText(curve, mode, formatCurrency),
-    [curve, mode, formatCurrency]
-  )
   const unit = mode === 'position' ? 'trade' : 'day'
   return (
     <div data-testid="equity-chart-block">
-      <p className="mb-2 text-sm" data-testid="equity-reading">
-        {reading}
-      </p>
       <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-1.5">
           <span className="inline-block h-0.5 w-4 bg-green-600" aria-hidden="true" />
           <span className="inline-block h-0.5 w-4 bg-red-600" aria-hidden="true" />
-          Cumulative net P&amp;L (green above 0, red below), upper pane
+          Cumulative net P&amp;L (green above 0, red below)
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span
@@ -76,12 +70,14 @@ export function DiscretionaryEquityChart({
             style={{ background: DRAWDOWN_COLOR }}
             aria-hidden="true"
           />
-          Drawdown: fall below the highest point so far, lower pane
+          {mode === 'day'
+            ? 'Drawdown, end-of-day totals (lower pane)'
+            : 'Drawdown from the highest point (lower pane)'}
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="inline-block size-2 rounded-full bg-green-600" aria-hidden="true" />
           <span className="inline-block size-2 rounded-full bg-red-600" aria-hidden="true" />
-          One dot per {unit}: green a winning {unit}, red a losing {unit}
+          One dot per {unit}: green win, red loss
         </span>
         <span>Amounts in rupees (Rs)</span>
       </div>
@@ -97,10 +93,14 @@ export function DiscretionaryEquityChart({
           formatCurrency={formatCurrency}
         />
       </div>
-      <p className="mt-1 text-[11px] text-muted-foreground" data-testid="equity-axis-note">
+      <p
+        className="mt-1 text-[11px] text-muted-foreground"
+        data-testid="equity-axis-note"
+        title={EQUITY_CAPTION_DETAIL}
+      >
         {mode === 'position'
-          ? 'Horizontal axis: trade number in close order. Hover a point for the close time and the net P&L of that trade.'
-          : 'Horizontal axis: calendar dates, weekends left out. Each dot is a day with realised P&L. A weekday with no dot had no recorded trades, so it has no value and the line does not join across it. Hover a dot for the day, its net P&L and the cumulative net P&L.'}
+          ? 'Axis: trade number in close order.'
+          : 'Axis: dates, weekends left out. A day with no dot had no trades.'}
       </p>
       {mode === 'day' && uncollectedNote && (
         <p
@@ -114,17 +114,16 @@ export function DiscretionaryEquityChart({
       <p className="sr-only" tabIndex={0} data-testid="equity-text-summary">
         {summaryText}
       </p>
-      <p className="mt-1 text-xs text-muted-foreground" data-testid="net-equity-caption">
+      <p
+        className="mt-1 text-xs text-muted-foreground"
+        data-testid="net-equity-caption"
+        title={EQUITY_CAPTION_DETAIL}
+      >
         {basis}
       </p>
-      {netReconciliation && (
+      {netReconciliation && netReconciliation.kind === 'mismatch' && (
         <p
-          className={cn(
-            'mt-1 text-xs',
-            netReconciliation.kind === 'match'
-              ? 'text-muted-foreground'
-              : 'text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500'
-          )}
+          className="mt-1 text-xs text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
           data-testid="equity-net-reconciliation"
           data-kind={netReconciliation.kind}
         >

@@ -118,8 +118,8 @@ describe('discretionary equity chart', () => {
     expect(dd.map((d) => d.value)).toEqual([-50, -20, -40, 0])
     expect((lw.series[0].opts as { title: string }).title).toContain('Cumulative net P&L')
     expect((lw.series[1].opts as { title: string }).title).toContain('Drawdown')
-    expect(screen.getByText(/Drawdown: fall below the highest point so far/)).toBeInTheDocument()
-    expect(screen.getByText(/green a winning trade, red a losing trade/)).toBeInTheDocument()
+    expect(screen.getByText(/Drawdown from the highest point/)).toBeInTheDocument()
+    expect(screen.getByText(/green win, red loss/)).toBeInTheDocument()
   })
 
   it('shows position, close time, symbol, net, cumulative and drawdown on hover', () => {
@@ -144,7 +144,8 @@ describe('discretionary equity chart', () => {
     expect(text).toHaveTextContent(
       'first Rs -50.00, last Rs 40.00, lowest Rs -50.00, highest Rs 40.00'
     )
-    expect(text).toHaveTextContent('Maximum drawdown Rs 50.00')
+    // the drawdown is stated once, in the summary's key figures, not in this text
+    expect(text).not.toHaveTextContent(/drawdown/i)
     expect(screen.queryByTestId('equity-data-table')).not.toBeInTheDocument()
     expect(screen.getByRole('img').getAttribute('aria-label')).toContain('Trade-by-trade P&L')
   })
@@ -229,7 +230,14 @@ describe('end-of-day curve on a calendar axis', () => {
   it('says a weekday without a dot has no value, and flags days that were not collected', () => {
     renderDays(['2026-11-16'])
     expect(screen.getByTestId('equity-axis-note')).toHaveTextContent(
-      'A weekday with no dot had no recorded trades, so it has no value and the line does not join across it'
+      'A day with no dot had no trades'
+    )
+    // the full explanation moved to the tooltip of the note
+    expect(screen.getByTestId('equity-axis-note')).toHaveAttribute(
+      'title',
+      expect.stringContaining(
+        'A weekday with no dot had no recorded trades: it is a gap, not a day of zero'
+      )
     )
     expect(screen.getByTestId('equity-uncollected-days')).toHaveTextContent(
       'Your broker trades were not collected on 16 Nov.'

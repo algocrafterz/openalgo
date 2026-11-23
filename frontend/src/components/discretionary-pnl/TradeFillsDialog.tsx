@@ -68,8 +68,7 @@ export function TradeFillsDialog({
             fills
           </DialogTitle>
           <DialogDescription>
-            Every fill that opened, added to, reduced or closed this trade, grouped by broker order,
-            with the net position after each step. Charges are estimates split across the fills.
+            Fills by broker order, with net position after each. Charges are estimated.
           </DialogDescription>
         </DialogHeader>
         {query.isLoading ? (

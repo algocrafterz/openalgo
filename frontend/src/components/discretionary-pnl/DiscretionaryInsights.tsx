@@ -1,12 +1,12 @@
-import { useState } from 'react'
 import type {
   BreakdownRow,
   ConsistencyBlock,
-  PeriodRow,
+  CostsBlock,
+  HoldSummary,
   RiskBlock,
   SampleContext,
+  TradeManagementBlock,
   TradeRef,
-  TradingBreakdowns,
 } from '@/api/discretionaryPnl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -17,19 +17,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { dailyTimeline } from '@/lib/discretionaryEquityRange'
 import {
   bucketLabel,
-  DAILY_CHART_CAPTION,
-  dailyBars,
   drawdownRecoveryText,
   fmtNetMoney,
+  fmtPct,
   fmtWinRate,
-  HOW_YOU_TRADE_OPTIONS,
-  type HowYouTradeKey,
   INSUFFICIENT_DATA,
-  NET_DRAWDOWN_BASIS,
   netIncomplete,
   pnlTextClass,
   quantityText,
@@ -37,13 +31,11 @@ import {
   rowProfitFactor,
   sampleNote,
   streakText,
-  timeOfDayBars,
   tradesPerDayText,
   winningDaysText,
 } from '@/lib/discretionaryPnlView'
 import { fmtDuration } from '@/lib/strategyPnlView'
 import { cn } from '@/lib/utils'
-import { NetBarChart } from './DiscretionaryCharts'
 
 type Money = (value: number) => string
 
@@ -94,105 +86,6 @@ export function SampleNote({ sample }: { sample: SampleContext | undefined }) {
     <p className="text-xs text-muted-foreground" data-testid="discretionary-sample-note">
       {note.text}
     </p>
-  )
-}
-
-/**
- * Daily realized net P&L bars (after estimated charges, the equity curve's basis) from the server's daily rows, with
- * the profitable / losing day count. Plain bars: every bar has a tooltip with charges and net.
- */
-export function DailyPnlChart({
-  rows,
-  formatCurrency,
-  notCollectedDays,
-}: {
-  rows: PeriodRow[]
-  formatCurrency: Money
-  /** Weekdays whose broker trades were not collected: shown as a flagged gap, never as zero. */
-  notCollectedDays?: string[]
-}) {
-  const { bars, profitable, losing, flat } = dailyBars(rows)
-  // One day is not a comparison; the daily figure is in the header and the calendar.
-  if (bars.length < 2) return null
-  const barByDate = new Map(bars.map((b) => [b.date, b]))
-  // One slot per day with a row and per weekday without one: a day without a row is an empty
-  // slot (no bar), not a bar of zero.
-  const slots = dailyTimeline(rows, notCollectedDays)
-  return (
-    <div data-testid="daily-pnl-chart">
-      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-        <div className="text-sm font-medium">Daily net P&amp;L</div>
-        <div className="text-xs text-muted-foreground" data-testid="daily-pnl-days">
-          <span className="text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600">
-            {profitable} profitable
-          </span>
-          {' / '}
-          <span className="text-red-600 dark:text-red-400">{losing} losing</span>
-          {flat > 0 ? ` / ${flat} flat` : ''} day(s) (net)
-        </div>
-      </div>
-      <div className="overflow-x-auto">
-        <div
-          className="flex h-40 items-stretch gap-1 border-y border-dashed border-border px-1"
-          style={{ minWidth: `${slots.length * 12}px` }}
-          role="img"
-          aria-label={`Daily net P&L over ${bars.length} trading day(s): ${profitable} profitable, ${losing} losing`}
-        >
-          {slots.map((slot) => {
-            const b = barByDate.get(slot.date)
-            if (!b) {
-              return (
-                <div
-                  key={slot.date}
-                  className={cn(
-                    'flex min-w-[8px] max-w-[40px] flex-1 flex-col justify-end',
-                    slot.notCollected && 'border-b-2 border-dashed border-amber-500'
-                  )}
-                  title={
-                    slot.notCollected
-                      ? `${slot.date}: your broker trades were not collected, so there is no figure for this day`
-                      : `${slot.date}: no trades recorded`
-                  }
-                  data-testid={slot.notCollected ? 'daily-pnl-uncollected' : 'daily-pnl-gap'}
-                />
-              )
-            }
-            const title = `${b.date}: net ${formatCurrency(b.net)}${b.netComplete ? '' : ' (incomplete: some charges unavailable)'}; gross ${formatCurrency(b.gross)}; est. charges ${formatCurrency(b.charges)}`
-            return (
-              <div
-                key={b.date}
-                className="flex min-w-[8px] max-w-[40px] flex-1 flex-col"
-                title={title}
-                data-testid="daily-pnl-bar"
-              >
-                <div className="flex flex-1 items-end">
-                  {b.net > 0 && (
-                    <div
-                      className="w-full rounded-t bg-green-600/80"
-                      style={{ height: `${Math.max(b.pct, 2)}%` }}
-                    />
-                  )}
-                </div>
-                <div className="h-px bg-border" />
-                <div className="flex flex-1 items-start">
-                  {b.net < 0 && (
-                    <div
-                      className="w-full rounded-b bg-red-600/80"
-                      style={{ height: `${Math.max(b.pct, 2)}%` }}
-                    />
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-      <div className="mt-1 flex justify-between text-[11px] text-muted-foreground">
-        <span>{slots[0].date}</span>
-        {slots.length > 1 && <span>{slots[slots.length - 1].date}</span>}
-      </div>
-      <p className="mt-1 text-xs text-muted-foreground">{DAILY_CHART_CAPTION}</p>
-    </div>
   )
 }
 
@@ -259,149 +152,270 @@ export function TradeButton({
   )
 }
 
+function Duration({
+  stat,
+}: {
+  stat: { count: number; mean_minutes: number | null; median_minutes: number | null }
+}) {
+  if (stat.count === 0) return <Unavailable reason="none in this range" />
+  return <>{fmtDuration(stat.mean_minutes)}</>
+}
+
 /**
- * One compact row of risk and consistency figures; figures that need more data say why instead
- * of showing a number. Largest win / loss and the maximum drawdown are in the summary only.
+ * Holding time of winners and losers (each with its median), median net P&L and what charges
+ * take from gross profit. Tiles only: they sit in the grid of the Risk and consistency card.
+ */
+function TradeManagementTiles({
+  management,
+  costs,
+  formatCurrency,
+}: {
+  management: TradeManagementBlock | null | undefined
+  costs: CostsBlock | null | undefined
+  formatCurrency: Money
+}) {
+  if (!management && !costs) return null
+  return (
+    <div className="contents" data-testid="trade-management">
+      {management && (
+        <>
+          <StripTile
+            label="Winners: average hold"
+            testId="tm-winner-hold"
+            hint={
+              management.winners.count > 0
+                ? `median ${fmtDuration(management.winners.median_minutes)}, ${management.winners.count} position(s)`
+                : undefined
+            }
+          >
+            <Duration stat={management.winners} />
+          </StripTile>
+          <StripTile
+            label="Losers: average hold"
+            testId="tm-loser-hold"
+            hint={
+              management.losers.count > 0
+                ? `median ${fmtDuration(management.losers.median_minutes)}, ${management.losers.count} position(s)`
+                : undefined
+            }
+          >
+            <Duration stat={management.losers} />
+          </StripTile>
+          <StripTile
+            label="Median net P&L"
+            testId="tm-median-net"
+            hint={`per position, ${management.net_basis_positions} with a net`}
+          >
+            {management.median_net_pnl == null ? (
+              <Unavailable reason="no position with a net" />
+            ) : (
+              <span className={pnlTextClass(management.median_net_pnl)}>
+                {formatCurrency(management.median_net_pnl)}
+              </span>
+            )}
+          </StripTile>
+        </>
+      )}
+      {costs && (
+        <StripTile
+          label="Est. charges as % of winners' gross profit"
+          testId="cost-pct"
+          hint={
+            costs.charges_unavailable_positions > 0
+              ? `${costs.charges_unavailable_positions} position(s) without a charge estimate not included`
+              : undefined
+          }
+        >
+          {costs.charges_pct_of_gross_profit == null ? (
+            <Unavailable reason={costs.reason ?? 'not available'} />
+          ) : (
+            fmtPct(costs.charges_pct_of_gross_profit)
+          )}
+        </StripTile>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Risk and consistency, with trade management and costs: one card of tiles. Average daily P&L
+ * leads with net like the rest of the page. The maximum and current drawdown are in the
+ * summary's key figures only, so a drawdown is stated once. Figures that need more data say why
+ * instead of showing a number.
  */
 export function RiskStrip({
   consistency: c,
   risk,
+  management,
+  costs,
+  hold,
   formatCurrency,
-  compact = false,
 }: {
-  /** Half-width card: fewer tile columns. */
-  compact?: boolean
-  consistency: ConsistencyBlock
-  /** Net realised drawdown and streaks; when given they replace the gross drawdown and streak tiles. */
+  /** Absent on an older server: only the trade-management and hold tiles are then shown. */
+  consistency?: ConsistencyBlock | null
+  /** Net realised streaks and trade counts; when given they replace the gross streak tiles. */
   risk?: RiskBlock | null
+  management?: TradeManagementBlock | null
+  costs?: CostsBlock | null
+  /** Older servers without the trade-management block: the hold figures they have. */
+  hold?: HoldSummary | null
   formatCurrency: Money
 }) {
+  const days = c ? `${c.trading_days} trading day${c.trading_days === 1 ? '' : 's'}` : ''
   return (
-    <Card data-testid="risk-strip" className={compact ? 'gap-3 py-4' : undefined}>
+    <Card data-testid="risk-strip" className="gap-3 py-4">
       <CardHeader className="pb-2">
         <CardTitle className="text-base">Risk and consistency</CardTitle>
         {risk && (
           <p className="text-xs text-muted-foreground" data-testid="risk-basis">
-            Drawdown and streaks: {NET_DRAWDOWN_BASIS}, in rupees, over {risk.positions} completed
-            trade{risk.positions === 1 ? '' : 's'}.
+            Streaks: net after estimated charges, over {risk.positions} completed trade
+            {risk.positions === 1 ? '' : 's'}.
             {risk.net_unavailable_positions > 0 &&
               ` ${risk.net_unavailable_positions} trade(s) without a net P&L are left out.`}
           </p>
         )}
       </CardHeader>
       <CardContent>
-        <div
-          className={
-            compact
-              ? 'grid grid-cols-2 gap-2 lg:grid-cols-3'
-              : 'grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-9'
-          }
-        >
-          <StripTile
-            label="Avg daily P&L (gross)"
-            testId="risk-avg-daily"
-            hint={
-              c.avg_daily_net != null
-                ? `net ${formatCurrency(c.avg_daily_net)}${c.avg_daily_net_complete ? '' : ' (incomplete)'}; ${c.trading_days} trading day${c.trading_days === 1 ? '' : 's'}`
-                : undefined
-            }
-          >
-            {c.avg_daily_pnl == null ? (
-              <Unavailable reason={c.avg_daily_unavailable_reason} />
-            ) : (
-              <span className={pnlTextClass(c.avg_daily_pnl)}>
-                {formatCurrency(c.avg_daily_pnl)}
-              </span>
-            )}
-          </StripTile>
-          {(() => {
-            const wd = winningDaysText(c)
-            if (wd) {
-              return (
-                <StripTile label="Winning days (net)" testId="risk-winning-days" hint={wd.hint}>
-                  {wd.value}
-                </StripTile>
-              )
-            }
-            // An older server: the gross daily counts, labelled as gross.
-            return (
-              c.trading_days > 1 && (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
+          {c && (
+            <>
+              {c.avg_daily_net != null ? (
                 <StripTile
-                  label="Profitable / losing days (gross)"
-                  testId="risk-days"
+                  label="Avg daily P&L (net)"
+                  testId="risk-avg-daily"
+                  hint={`${c.avg_daily_net_complete ? '' : 'incomplete: some charges unavailable; '}${
+                    c.avg_daily_pnl != null ? `gross ${formatCurrency(c.avg_daily_pnl)}; ` : ''
+                  }${days}`}
+                >
+                  <span className={pnlTextClass(c.avg_daily_net)}>
+                    {formatCurrency(c.avg_daily_net)}
+                  </span>
+                </StripTile>
+              ) : (
+                <StripTile label="Avg daily P&L (gross)" testId="risk-avg-daily">
+                  {c.avg_daily_pnl == null ? (
+                    <Unavailable reason={c.avg_daily_unavailable_reason} />
+                  ) : (
+                    <span className={pnlTextClass(c.avg_daily_pnl)}>
+                      {formatCurrency(c.avg_daily_pnl)}
+                    </span>
+                  )}
+                </StripTile>
+              )}
+              {(() => {
+                const wd = winningDaysText(c)
+                if (wd) {
+                  return (
+                    <StripTile label="Winning days (net)" testId="risk-winning-days" hint={wd.hint}>
+                      {wd.value}
+                    </StripTile>
+                  )
+                }
+                // An older server: the gross daily counts, labelled as gross.
+                return (
+                  c.trading_days > 1 && (
+                    <StripTile
+                      label="Profitable / losing days (gross)"
+                      testId="risk-days"
+                      hint={
+                        c.flat_days > 0 ? `${c.flat_days} flat` : `${c.trading_days} trading day(s)`
+                      }
+                    >
+                      <span className="text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600">
+                        {c.profitable_days}
+                      </span>
+                      {' / '}
+                      <span className="text-red-600 dark:text-red-400">{c.losing_days}</span>
+                    </StripTile>
+                  )
+                )
+              })()}
+              <StripTile
+                label="Max consecutive winning trades"
+                testId="risk-win-streak"
+                hint={
+                  risk
+                    ? `net of estimated charges; ${risk.positions} trade${risk.positions === 1 ? '' : 's'}`
+                    : c.completed_trades === 0
+                      ? 'no completed trades'
+                      : undefined
+                }
+              >
+                <span title={c.streak_rule}>
+                  {risk ? risk.max_consecutive_wins : c.max_consecutive_wins}
+                </span>
+              </StripTile>
+              <StripTile
+                label="Max consecutive losing trades"
+                testId="risk-loss-streak"
+                hint={`break-even ends a streak; ${risk ? risk.positions : c.completed_trades} trade${(risk ? risk.positions : c.completed_trades) === 1 ? '' : 's'}`}
+              >
+                <span title={c.streak_rule}>
+                  {risk ? risk.max_consecutive_losses : c.max_consecutive_losses}
+                </span>
+              </StripTile>
+              {risk && (
+                <StripTile label="Current streak" testId="risk-current-streak">
+                  {streakText(risk.current_streak)}
+                </StripTile>
+              )}
+              <StripTile
+                label="Avg holding time"
+                testId="risk-hold"
+                hint={
+                  c.median_hold_minutes != null
+                    ? `median ${fmtDuration(c.median_hold_minutes)}; ${c.completed_trades} trade${c.completed_trades === 1 ? '' : 's'}`
+                    : undefined
+                }
+              >
+                {c.avg_hold_minutes == null ? (
+                  <Unavailable reason="no completed trades" />
+                ) : (
+                  fmtDuration(c.avg_hold_minutes)
+                )}
+              </StripTile>
+            </>
+          )}
+          <TradeManagementTiles
+            management={management}
+            costs={costs}
+            formatCurrency={formatCurrency}
+          />
+          {!management && hold && (
+            // an older server without the trade-management block: the hold figures it has
+            <div className="contents" data-testid="hold-durations">
+              {(
+                [
+                  ...(c ? [] : ([['Overall: average hold', hold.overall]] as const)),
+                  ['Winners: average hold', hold.winners],
+                  ['Losers: average hold', hold.losers],
+                ] as const
+              ).map(([label, stat]) => (
+                <StripTile
+                  key={label}
+                  label={label}
                   hint={
-                    c.flat_days > 0 ? `${c.flat_days} flat` : `${c.trading_days} trading day(s)`
+                    stat && stat.count > 0
+                      ? `median ${fmtDuration(stat.median_minutes)}, ${stat.count} trade(s)`
+                      : undefined
                   }
                 >
-                  <span className="text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600">
-                    {c.profitable_days}
-                  </span>
-                  {' / '}
-                  <span className="text-red-600 dark:text-red-400">{c.losing_days}</span>
+                  {fmtDuration(stat?.mean_minutes)}
                 </StripTile>
-              )
-            )
-          })()}
-          <StripTile
-            label="Max consecutive winning trades"
-            testId="risk-win-streak"
-            hint={
-              risk
-                ? `net of estimated charges; break-even ends a streak; ${risk.positions} trade${risk.positions === 1 ? '' : 's'}`
-                : c.completed_trades === 0
-                  ? 'no completed trades'
-                  : undefined
-            }
-          >
-            <span title={c.streak_rule}>
-              {risk ? risk.max_consecutive_wins : c.max_consecutive_wins}
-            </span>
-          </StripTile>
-          <StripTile
-            label="Max consecutive losing trades"
-            testId="risk-loss-streak"
-            hint={`break-even ends a streak; ${risk ? risk.positions : c.completed_trades} trade${(risk ? risk.positions : c.completed_trades) === 1 ? '' : 's'}`}
-          >
-            <span title={c.streak_rule}>
-              {risk ? risk.max_consecutive_losses : c.max_consecutive_losses}
-            </span>
-          </StripTile>
-          {risk && (
-            <StripTile label="Current streak" testId="risk-current-streak">
-              {streakText(risk.current_streak)}
-            </StripTile>
-          )}
-          <StripTile
-            label="Avg holding time"
-            testId="risk-hold"
-            hint={
-              c.median_hold_minutes != null
-                ? `median ${fmtDuration(c.median_hold_minutes)}; ${c.completed_trades} trade${c.completed_trades === 1 ? '' : 's'}`
-                : undefined
-            }
-          >
-            {c.avg_hold_minutes == null ? (
-              <Unavailable reason="no completed trades" />
-            ) : (
-              fmtDuration(c.avg_hold_minutes)
-            )}
-          </StripTile>
-          {risk && (
-            <StripTile
-              label="Current drawdown"
-              testId="risk-current-drawdown"
-              hint="below the highest net P&L of the selected period"
-            >
-              <span
-                className={risk.current_drawdown > 0 ? 'text-red-600 dark:text-red-400' : undefined}
-              >
-                {risk.current_drawdown > 0 ? '-' : ''}
-                {formatCurrency(Math.abs(risk.current_drawdown))}
-              </span>
-            </StripTile>
+              ))}
+            </div>
           )}
         </div>
-        <BehaviourTiles consistency={c} risk={risk} />
+        {management &&
+          (management.break_even_excluded > 0 || management.net_unavailable_positions > 0) && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {management.break_even_excluded > 0 &&
+                `${management.break_even_excluded} break-even position(s) are in neither winners nor losers. `}
+              {management.net_unavailable_positions > 0 &&
+                `${management.net_unavailable_positions} position(s) without a net P&L are left out.`}
+            </p>
+          )}
+        {c && <BehaviourTiles consistency={c} risk={risk} />}
       </CardContent>
     </Card>
   )
@@ -556,68 +570,5 @@ export function HowYouTradeTable({
         </TableBody>
       </Table>
     </div>
-  )
-}
-
-/**
- * "How you trade": one table at a time, chosen with a segmented selector. Symbol, side, product
- * and intraday / overnight stay in the Breakdowns card (their existing tables), so this card adds
- * only the entry time of day, entry weekday and holding time.
- */
-export function HowYouTradeCard({
-  breakdowns,
-  formatCurrency,
-  keys,
-}: {
-  breakdowns: TradingBreakdowns
-  formatCurrency: Money
-  /** Tabs with something to compare; the page decides (see breakdownVisibility). */
-  keys?: HowYouTradeKey[]
-}) {
-  const options = HOW_YOU_TRADE_OPTIONS.filter((o) => !keys || keys.includes(o.key))
-  const [picked, setTab] = useState<HowYouTradeKey | null>(null)
-  const tab = options.find((o) => o.key === picked)?.key ?? options[0]?.key
-  if (!tab) return null
-  return (
-    <Card data-testid="how-you-trade">
-      <CardHeader>
-        <CardTitle>How you trade</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <Tabs value={tab} onValueChange={(v) => setTab(v as HowYouTradeKey)}>
-          <TabsList aria-label="Group trades by">
-            {options.map((o) => (
-              <TabsTrigger key={o.key} value={o.key}>
-                {o.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-          {options.map((o) => (
-            <TabsContent key={o.key} value={o.key} className="space-y-2">
-              {o.key === 'time_of_day' && (
-                <NetBarChart
-                  title="Net P&L by entry time (IST), trades in brackets"
-                  bars={timeOfDayBars(breakdowns.time_of_day)}
-                  formatCurrency={formatCurrency}
-                  samples="trade(s)"
-                  emptyText="No completed trades in this range."
-                  testId="time-of-day-chart"
-                />
-              )}
-              <HowYouTradeTable
-                rows={breakdowns[o.key] ?? []}
-                column={o.column}
-                formatCurrency={formatCurrency}
-              />
-              <p className="text-xs text-muted-foreground">{o.note}</p>
-            </TabsContent>
-          ))}
-        </Tabs>
-        <p className="mt-2 text-xs text-muted-foreground">
-          Avg P&amp;L is net of estimated charges, per completed trade. The Trades column is the
-          number of completed trades behind each row.
-        </p>
-      </CardContent>
-    </Card>
   )
 }

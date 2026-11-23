@@ -131,14 +131,14 @@ export function BreakdownTable({
   rows,
   formatCurrency,
 }: {
-  title: string
+  title?: string
   firstColumn: string
   rows: BreakdownRow[]
   formatCurrency: Money
 }) {
   return (
     <div className="min-w-0 overflow-x-auto">
-      <div className="text-sm font-medium mb-2">{title}</div>
+      {title && <div className="text-sm font-medium mb-2">{title}</div>}
       {rows.length === 0 ? (
         <div className="text-sm text-muted-foreground">None in this period</div>
       ) : (
@@ -512,9 +512,9 @@ export function ClosedTradesTable({
                     {(t.opening_unknown || t.has_orphan_fills) && (
                       <p className="mt-2 text-xs text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500">
                         {t.opening_unknown &&
-                          'The fill that opened this position is not in the ledger, so the entry price may be off. '}
+                          'Opening fill not in the ledger; entry price may be off. '}
                         {t.has_orphan_fills &&
-                          `${t.orphan_fills ?? 'Some'} fill(s) of this position could not be placed and are not in its figures.`}
+                          `${t.orphan_fills ?? 'Some'} fill(s) could not be placed and are not counted.`}
                       </p>
                     )}
                     <Button

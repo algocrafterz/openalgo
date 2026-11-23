@@ -10,9 +10,10 @@ import {
   uncollectedInSpan,
 } from '@/lib/discretionaryEquityRange'
 import {
+  chargesInsightHint,
   equityCurveReconciliation,
+  largestLossHint,
   netEquityFromDailyRows,
-  weaknessLine,
 } from '@/lib/discretionaryPnlView'
 import { summary } from '@/test/discretionaryFixtures'
 
@@ -205,8 +206,8 @@ describe('insights over a handful of trades', () => {
   it('never calls a small sample too early or low, and any biggest-trade line names the count', () => {
     const base = summary()
     const few = { ...base, metrics: { ...base.metrics, trades_count: 3 } }
-    const text = weaknessLine(few, money) ?? ''
+    const text = [chargesInsightHint(few, money), largestLossHint(few, money)].join(' ')
     expect(text).not.toMatch(/too early|low sample|indicative/i)
-    if (/biggest/.test(text)) expect(text).toContain('over 3 completed trades')
+    if (/larger than|turned|%/.test(text)) expect(text).toContain('over 3 completed trades')
   })
 })

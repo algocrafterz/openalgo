@@ -29,8 +29,10 @@ export const DISCRETIONARY_SOURCE = 'discretionary'
 /** Mirrors the Performance page's poll interval; quotes=1 polls at the same pace. */
 export const DISCRETIONARY_POLL_MS = 60_000
 
-export const NET_EQUITY_CAPTION =
-  'Net realised P&L after estimated charges, end-of-day value by close date; excludes unrealized P&L. The drawdown strip is end-of-day too, so it can differ from the per-trade drawdown in Risk and consistency'
+export const NET_EQUITY_CAPTION = 'Net P&L after estimated charges, by close date'
+/** Moved-out detail of the chart captions: shown as a tooltip on the caption and axis note. */
+export const EQUITY_CAPTION_DETAIL =
+  'Net realised P&L after estimated charges, end-of-day value by close date. Unrealized P&L is not included. This is not an account balance or a return on capital. The drawdown strip is end-of-day too, so it can differ from the per-trade drawdown in Risk and consistency. A weekday with no dot had no recorded trades: it is a gap, not a day of zero. Hover a point for its time and P&L.'
 export const DRAWDOWN_BASIS = 'gross realized, excludes charges and unrealized'
 export const NET_DRAWDOWN_BASIS = 'net realised, after estimated charges, by close time'
 
@@ -562,8 +564,12 @@ export function reasonText(code: string | null | undefined): string {
 /** Plain-text net definition (the server sends field names; the page shows what they mean). */
 export function netDefinitionText(raw: string | undefined): string {
   if (!raw) return ''
-  return 'Net = gross realized minus estimated charges. Gross realized is before charges; win rate, profit factor, expectancy and the averages are measured on net P&L.'
+  return 'Net = gross realized minus estimated charges.'
 }
+
+/** Tooltip of the net definition line. */
+export const NET_DEFINITION_DETAIL =
+  'Gross realized is before charges. Win rate, profit factor, expectancy and the averages are measured on net P&L, after estimated charges.'
 
 /** True when a net figure leaves out charges it could not estimate. */
 export function netIncomplete(row: {
@@ -615,7 +621,7 @@ export function awaitingAttribution(
 
 /** The empty-state message while every execution of the selection awaits attribution. */
 export function awaitingAttributionText(collected: number, unresolved: number): string {
-  return `No trades to show yet: ${unresolved} of the ${collected} fills in this period could not be matched to a trade, so their P&L is left out.`
+  return `No trades to show yet: ${unresolved} of ${collected} fills are not counted.`
 }
 
 /** Sorted distinct non-empty values, for a filter's choices. */
@@ -714,21 +720,19 @@ export function pendingAttributionLines(pending: PendingAttribution | undefined)
   if (held > 0) {
     const due = (pending.grace_fills ?? []).filter((f) => f.due).length
     const waiting = held - due
-    let text = `${held} execution(s) awaiting attribution: they are inside the ${pending.grace_minutes}-minute safety window that lets a strategy order tag arrive, and are not counted in P&L yet.`
+    let text = `${held} execution(s) await attribution (${pending.grace_minutes}-minute window) and are not in P&L yet.`
     if (waiting > 0 && pending.earliest_attributable_at) {
       const next = (pending.grace_fills ?? []).find((f) => !f.due)
-      text += ` Earliest attribution at ${fmtClock(next?.attributable_from ?? pending.earliest_attributable_at)} IST, at the first ledger sync after it.`
+      text += ` Earliest: ${fmtClock(next?.attributable_from ?? pending.earliest_attributable_at)} IST.`
     }
-    if (due > 0) text += ` ${due} passed the window and wait only for the next ledger sync.`
+    if (due > 0) text += ` ${due} wait only for the next ledger sync.`
     if ((pending.grace_fills ?? []).some((f) => f.affects_open_position)) {
-      text += ' Some belong to an open position, so its quantity may still change.'
+      text += ' An open position may still change.'
     }
     lines.push(text)
   }
   if ((pending.other_today ?? 0) > 0) {
-    lines.push(
-      `${pending.other_today} execution(s) of today stay unresolved for another reason and are excluded from P&L; see the unresolved fills warning.`
-    )
+    lines.push(`${pending.other_today} execution(s) today are unresolved and not in P&L.`)
   }
   return lines
 }
@@ -759,8 +763,7 @@ export function fmtPositionAge(openedAt: string | null | undefined, nowMs: numbe
   return `${Math.floor(hours / 24)}d ${hours % 24}h`
 }
 
-export const DAILY_CHART_CAPTION =
-  'Daily realised net P&L, after estimated charges: the same basis as the equity curve. Hover a bar for its gross P&L and estimated charges. A weekday with no bar had no recorded trades: it is a gap, not a day of zero.'
+export const DAILY_CHART_CAPTION = 'Daily net P&L after estimated charges.'
 
 export interface DailyBar {
   date: string
@@ -837,24 +840,32 @@ export const HOW_YOU_TRADE_OPTIONS: {
   label: string
   column: string
   note: string
+  /** Full explanation, shown as a tooltip on the note. */
+  detail: string
 }[] = [
   {
     key: 'time_of_day',
     label: 'Time of day',
     column: 'Entry time (IST)',
-    note: 'By the entry time of the position (IST). Each bucket includes its start and excludes its end; "other" is outside NSE cash hours (before 09:15 or from 15:30: pre-open, MCX evening); it is not an error.',
+    note: 'By entry time (IST). Other: outside 09:15 to 15:30.',
+    detail:
+      'By the entry time of the position (IST). Each bucket includes its start and excludes its end. "Other" is outside NSE cash hours (before 09:15 or from 15:30: pre-open, MCX evening). It is not an error.',
   },
   {
     key: 'weekday',
     label: 'Weekday',
     column: 'Entry day',
-    note: 'By the session date of the entry. A weekend or holiday session is listed under its own weekday.',
+    note: 'By entry session date.',
+    detail:
+      'By the session date of the entry. A weekend or holiday session is listed under its own weekday.',
   },
   {
     key: 'hold_bucket',
     label: 'Holding time',
     column: 'Held',
-    note: 'By the holding time of the trade; a partial exit counts its money in its own bucket. Overnight: closed in a later session than it opened.',
+    note: 'By holding time. Overnight: closed in a later session.',
+    detail:
+      'By the holding time of the trade. A partial exit counts its money in its own bucket. Overnight: closed in a later session than it opened.',
   },
 ]
 
@@ -927,7 +938,7 @@ export function unclassifiedScopeNote(
   if (!c || c.closed.unclassified <= 0) return null
   return category === 'all'
     ? `${c.closed.unclassified} unclassified position(s) are included in All trades only.`
-    : `${c.closed.unclassified} unclassified position(s) are left out of this view; they appear in All trades only.`
+    : `${c.closed.unclassified} unclassified position(s) show in All trades only.`
 }
 
 const STALE_COLLECTION_DAYS = 2
@@ -962,14 +973,37 @@ export function lastSyncFailed(health: SyncHealthLike | null | undefined): boole
   return statuses.length > 0 && !statuses.some(([k]) => SYNC_OK.includes(k))
 }
 
+/**
+ * Fills of the selected range left out of the trades: `unresolved_in_range.total`, or the pending
+ * and unplaced counts of `data_quality` on an older server. 0 when the range has none.
+ */
+export function unmatchedFillCount(
+  summary: Pick<DiscretionarySummary, 'unresolved_in_range' | 'data_quality'>
+): number {
+  const dq = summary.data_quality
+  return (
+    summary.unresolved_in_range?.total ??
+    (dq ? (dq.awaiting_attribution ?? 0) + (dq.not_placed ?? 0) : 0)
+  )
+}
+
+/** The quiet coverage note under the headline figures. */
+export function unmatchedFillsNote(n: number): string {
+  return `${n} ${n === 1 ? 'fill' : 'fills'} in this period ${n === 1 ? 'is' : 'are'} not counted, so P&L and trade count may be incomplete.`
+}
+
+/** Tooltip of the note: the technical reason, kept out of the line itself. */
+export const UNMATCHED_FILLS_REASON =
+  'These fills could not be matched to a manual trade, so they are left out of P&L, trade count and win rate.'
+
 type SyncHealthLike = { runs_by_day?: Record<string, Record<string, number>> }
 
 /**
  * The one warning shown when missing or doubtful source data changes the P&L of the SELECTED
  * report, in trader words. Null when nothing is wrong. Driven only by fields the server already
  * sends; each part is shown only when the problem touches the selected range:
- * - `unresolved_in_range.total` (fills of the range left out of the trades; the pending and
- *   unplaced counts of `data_quality` on an older server);
+ * - fills of the range left out of the trades are NOT here: they have their own quiet note
+ *   (`unmatchedFillCount`, `unmatchedFillsNote`) under the headline figures;
  * - `data_quality.prices.missing` (open positions with no price, when prices were requested);
  * - `sync_health.days_without_sync` (weekdays of the range whose fills may be absent);
  * - `positions` that are MIS, opened on a day before today and still open (a closing fill is
@@ -988,9 +1022,6 @@ export function materialDataWarning(
   const dq = summary.data_quality
   const rangeStart = summary.period?.start?.slice(0, 10)
   const rangeEnd = summary.period?.end?.slice(0, 10)
-  const left =
-    summary.unresolved_in_range?.total ??
-    (dq ? (dq.awaiting_attribution ?? 0) + (dq.not_placed ?? 0) : 0)
   const noPrice = dq?.prices?.requested ? (dq.prices.missing ?? 0) : 0
   const days = (summary.sync_health?.days_without_sync ?? []).filter(
     (d) => (!rangeStart || d >= rangeStart) && (!rangeEnd || d <= rangeEnd)
@@ -1021,11 +1052,6 @@ export function materialDataWarning(
   if (lastSyncFailed(summary.sync_health)) {
     parts.push(
       'Your last sync with the broker did not complete. Recent trades may be missing. Use Refresh to try again.'
-    )
-  }
-  if (left > 0) {
-    parts.push(
-      `${left} ${left === 1 ? 'fill' : 'fills'} in this period could not be matched to a trade and ${left === 1 ? 'is' : 'are'} left out, so your P&L and trade count may be incomplete.`
     )
   }
   if (noPrice > 0) {
@@ -1435,9 +1461,9 @@ export function equityCurveBasis(curve: { used: number; incompleteDays: number }
   const days = `${curve.used} trading day${curve.used === 1 ? '' : 's'} with realised P&L`
   const incomplete =
     curve.incompleteDays > 0
-      ? ` ${curve.incompleteDays} day(s) include trades without a charge estimate, so their net is not complete.`
+      ? ` ${curve.incompleteDays} day(s) include trades without a charge estimate.`
       : ''
-  return `Cumulative net P&L: the running total of daily realised net P&L after estimated charges, over ${days}. Unrealized P&L is not included, and this is not an account balance or a return on capital. Days with no closed trades are not shown.${incomplete}`
+  return `Cumulative net P&L after estimated charges, over ${days}.${incomplete}`
 }
 
 export interface EquityReconciliation {
@@ -1461,7 +1487,7 @@ export function equityCurveReconciliation(
   }
   return {
     kind: 'mismatch',
-    text: `The last point (${money(curve.latestEquity)}) differs from the realised net P&L of ${scope} (${money(periodNet)}). Trades without a charge estimate are not complete in either figure.`,
+    text: `The last point (${money(curve.latestEquity)}) differs from the net P&L of ${scope} (${money(periodNet)}). Trades without a charge estimate are incomplete in both.`,
   }
 }
 
@@ -1520,14 +1546,14 @@ export function drawdownReconciliation(args: {
     }
     return {
       kind: 'day_curve',
-      text: `The chart's largest drawdown (${curveDd}) is measured on end-of-day totals, so a fall inside a day is not drawn. The Risk figure (${money(risk.max_drawdown)}) is measured on each closed trade in close order.`,
+      text: 'Drawdown pane uses end-of-day totals; Max drawdown uses each closed trade.',
     }
   }
   if (!risk) return { kind: 'no_risk', text: '' }
   if (tradesTotal > tradesShown) {
     return {
       kind: 'truncated',
-      text: `The chart shows your latest ${tradesShown} of ${tradesTotal} closed trades, so its largest drawdown (${curveDd}) can differ from the Risk figure for all ${tradesTotal} (${money(risk.max_drawdown)}).`,
+      text: `Chart drawdown (${curveDd}) covers the latest ${tradesShown} of ${tradesTotal} trades; Max drawdown (${money(risk.max_drawdown)}) covers all.`,
     }
   }
   const same =
@@ -1539,7 +1565,7 @@ export function drawdownReconciliation(args: {
   }
   return {
     kind: 'mismatch',
-    text: `The chart's largest drawdown (${curveDd}) differs from the Risk figure (${money(risk.max_drawdown)}) because they count different trades: ${curve.used} on the chart, ${risk.positions} in the Risk figure. Trades without a net P&L are left out.`,
+    text: `Chart drawdown (${curveDd}) counts ${curve.used} ${curve.used === 1 ? 'trade' : 'trades'}; Max drawdown (${money(risk.max_drawdown)}) counts ${risk.positions}. Trades without net P&L are left out.`,
   }
 }
 
@@ -1549,25 +1575,20 @@ export type ProfileName = 'session' | 'short' | 'medium' | 'long'
 
 export interface PeriodProfile {
   profile: ProfileName
-  showMonthly: boolean
-  showWeekday: boolean
   showByPeriodTabs: boolean
-  /** Which tabs of "P&L by period" are offered, in order. */
-  byPeriodTabs: ('daily' | 'weekly' | 'monthly')[]
-  showDailyBars: boolean
-  showBreakdownTables: boolean
-  /** Secondary breakdowns sit under a "More breakdowns" toggle. */
-  collapseSecondary: boolean
-  /** The curve is one point per closed position (otherwise end-of-day). */
+  /** Which tabs of "P&L by period" are offered, in order. Days are the calendar's, so no Daily tab. */
+  byPeriodTabs: ('weekly' | 'monthly')[]
+  /** The curve is one point per closed position, for 7 or fewer close dates; else end-of-day. */
   perPositionCurve: boolean
-  /** One visible line naming what is hidden or collapsed and why; null when nothing is. */
+  /** One visible line naming what is hidden and why; null when nothing is. */
   note: string | null
 }
 
 /**
  * Which sections make sense for the data on screen. `closeDates` = distinct dates with a closed
  * position; `months` = number of calendar months in the monthly rows. A 1-day period is always
- * the session profile.
+ * the session profile. One cumulative-net curve is shown: per closed trade for 7 or fewer close
+ * dates, per day beyond that.
  */
 export function periodProfile(input: {
   period: string
@@ -1578,27 +1599,17 @@ export function periodProfile(input: {
   if (period === '1d' || closeDates <= 1) {
     return {
       profile: 'session',
-      showMonthly: false,
-      showWeekday: false,
       showByPeriodTabs: false,
       byPeriodTabs: [],
-      showDailyBars: false,
-      showBreakdownTables: true,
-      collapseSecondary: true,
       perPositionCurve: true,
-      note: 'Month, weekday and period tables are hidden because this view covers one trading day. Symbol, side and product breakdowns are under More breakdowns.',
+      note: 'Weekly and monthly tables are hidden for one trading day.',
     }
   }
   if (closeDates > 31 || months >= 3) {
     return {
       profile: 'long',
-      showMonthly: true,
-      showWeekday: true,
       showByPeriodTabs: true,
-      byPeriodTabs: ['daily', 'weekly', 'monthly'],
-      showDailyBars: true,
-      showBreakdownTables: true,
-      collapseSecondary: false,
+      byPeriodTabs: ['weekly', 'monthly'],
       perPositionCurve: false,
       note: null,
     }
@@ -1606,44 +1617,20 @@ export function periodProfile(input: {
   if (closeDates <= 7) {
     return {
       profile: 'short',
-      showMonthly: false,
-      showWeekday: true,
-      showByPeriodTabs: true,
-      byPeriodTabs: ['daily'],
-      showDailyBars: true,
-      showBreakdownTables: true,
-      collapseSecondary: true,
+      showByPeriodTabs: false,
+      byPeriodTabs: [],
       perPositionCurve: true,
-      note: `The monthly table and the weekly and monthly period tabs are hidden because the range has only ${closeDates} trading days. Symbol, side and product breakdowns are under More breakdowns.`,
+      note: `Weekly and monthly tables are hidden: only ${closeDates} trading days.`,
     }
   }
   const monthly = months >= 2
   return {
     profile: 'medium',
-    showMonthly: monthly,
-    showWeekday: true,
     showByPeriodTabs: true,
-    byPeriodTabs: monthly ? ['daily', 'weekly', 'monthly'] : ['daily', 'weekly'],
-    showDailyBars: true,
-    showBreakdownTables: true,
-    collapseSecondary: true,
-    perPositionCurve: true,
-    note: monthly
-      ? 'Symbol, side and product breakdowns are under More breakdowns.'
-      : 'The monthly table and tab are hidden because the range sits in one calendar month. Symbol, side and product breakdowns are under More breakdowns.',
+    byPeriodTabs: monthly ? ['weekly', 'monthly'] : ['weekly'],
+    perPositionCurve: false,
+    note: monthly ? null : 'Monthly table is hidden: range is within one month.',
   }
-}
-
-const MORE_BREAKDOWNS_SENTENCE = 'Symbol, side and product breakdowns are under More breakdowns.'
-
-/**
- * The profile note, without the pointer to "More breakdowns" when that section is not on
- * screen (nothing in it has a comparison), so the page never points at a section it does not have.
- */
-export function profileNoteText(note: string | null, moreBreakdownsShown: boolean): string | null {
-  if (!note || moreBreakdownsShown) return note
-  const rest = note.replace(MORE_BREAKDOWNS_SENTENCE, '').trim()
-  return rest.length > 0 ? rest : null
 }
 
 /** Distinct close dates: server daily rows with closed positions, else the shown trades' dates. */
@@ -1657,48 +1644,55 @@ export function closeDateCount(
 }
 
 /**
- * The single biggest weakness, taken only from fields the server already sends, in this order:
- * charges turning a gross profit into a net loss; charges taking 30% or more of gross profit;
- * the largest loss bigger than the largest win; a current fall below the period's highest
- * point. Every line states how many completed trades it rests on, and there is no minimum
- * count. Null when none applies. A description of the results, not advice.
+ * Hint under the Charges tile when charges matter: they turned a gross profit into a net loss,
+ * or take 30% or more of the gross profit of the winning trades. Facts from fields the server
+ * already sends, each with the number of completed trades it rests on (no minimum count). Null
+ * when neither applies. A description of the results, not advice.
  */
-export function weaknessLine(
+export function chargesInsightHint(
   summary: Pick<
     DiscretionarySummary,
-    'realized_gross' | 'realized_net_of_charges' | 'metrics' | 'consistency' | 'costs' | 'risk'
+    'realized_gross' | 'realized_net_of_charges' | 'metrics' | 'costs'
   >,
   formatCurrency: (v: number) => string
 ): string | null {
-  if (summary.metrics.trades_count === 0) return null
-  const net = cleanMoney(summary.realized_net_of_charges)
   const count = summary.metrics.trades_count
+  if (count === 0) return null
+  const net = cleanMoney(summary.realized_net_of_charges)
   const sampleText = `over ${count} completed trade${count === 1 ? '' : 's'}`
   if (summary.realized_gross > 0 && net < 0) {
-    return `Estimated charges turned a gross profit of ${formatCurrency(summary.realized_gross)} into a net loss, ${sampleText}.`
+    return `turned a gross profit of ${formatCurrency(summary.realized_gross)} into a net loss, ${sampleText}`
   }
   const pct = summary.costs?.charges_pct_of_gross_profit
   if (pct != null && pct >= 30) {
-    return `Estimated charges are ${pct.toFixed(1)}% of the gross profit of your winning trades, ${sampleText}.`
+    return `${pct.toFixed(1)}% of the gross profit of your winning trades, ${sampleText}`
   }
+  return null
+}
+
+/**
+ * Hint under the Largest loser tile: the worst trade is larger than the best, or no trade won.
+ * Net only: a trade without a net P&L is unavailable, never compared on gross. Null otherwise.
+ */
+export function largestLossHint(
+  summary: Pick<DiscretionarySummary, 'metrics' | 'consistency'>,
+  formatCurrency: (v: number) => string
+): string | null {
+  const count = summary.metrics.trades_count
+  if (count === 0) return null
+  const sampleText = `over ${count} completed trade${count === 1 ? '' : 's'}`
   const win = summary.consistency?.largest_win
   const loss = summary.consistency?.largest_loss
   if (win && loss) {
-    // Net only: a trade without a net P&L is unavailable, never compared on gross.
     if (win.net_pnl != null && loss.net_pnl != null) {
       const w = win.net_pnl
       const l = Math.abs(loss.net_pnl)
       if (l > w) {
-        return `Your biggest losing trade (${formatCurrency(l)}) is larger than your biggest winning trade (${formatCurrency(w)}), ${sampleText}.`
+        return `larger than your largest winner (${formatCurrency(w)}), ${sampleText}`
       }
     }
   } else if (loss && !win && loss.net_pnl != null) {
-    return `Your biggest losing trade is ${formatCurrency(Math.abs(loss.net_pnl))} and none of your ${count} completed trade${count === 1 ? '' : 's'} won.`
-  }
-  // A missing drawdown is unavailable, not zero.
-  const cur = summary.risk?.current_drawdown
-  if (cur != null && cur > 0) {
-    return `Your net P&L is ${formatCurrency(cur)} below its highest point in this period, ${sampleText}.`
+    return `none of your ${count} completed trade${count === 1 ? '' : 's'} won`
   }
   return null
 }
@@ -1738,15 +1732,70 @@ export function progressionText(
 
 // ---------------------------------------------------------------- breakdown visibility
 
+export type BreakdownTabKey =
+  | 'symbol'
+  | 'side'
+  | 'time_of_day'
+  | 'weekday'
+  | 'hold_bucket'
+  | 'product'
+  | 'holding'
+
+/**
+ * The tabs of the one "Where and when" card, in order. `table` says which existing table shows
+ * the rows: `how` (trades, win rate, average net P&L, profit factor, gross, charges, net) or
+ * `group` (trades, win rate, profit factor, average hold, gross, net).
+ */
+export const BREAKDOWN_TABS: {
+  key: BreakdownTabKey
+  label: string
+  column: string
+  table: 'how' | 'group'
+  note: string
+  detail?: string
+}[] = [
+  {
+    key: 'symbol',
+    label: 'Symbol',
+    column: 'Symbol',
+    table: 'group',
+    note: 'By symbol, closed trades.',
+  },
+  {
+    key: 'side',
+    label: 'Long / Short',
+    column: 'Side',
+    table: 'group',
+    note: 'By direction of the trade.',
+  },
+  ...HOW_YOU_TRADE_OPTIONS.map((o) => ({ ...o, table: 'how' as const })),
+  {
+    key: 'product',
+    label: 'Product',
+    column: 'Product',
+    table: 'group',
+    note: 'By product (MIS, NRML, CNC).',
+  },
+  {
+    key: 'holding',
+    label: 'Intraday vs overnight',
+    column: 'Holding',
+    table: 'group',
+    note: 'Intraday: closed in the session it opened. Overnight: closed in a later session.',
+  },
+]
+
 export interface BreakdownVisibility {
   symbol: boolean
   side: boolean
   product: boolean
   holding: boolean
   points: boolean
-  /** "How you trade" tabs that have something to compare. */
+  /** "How you trade" tabs (entry time, weekday, holding time) that have something to compare. */
   patterns: HowYouTradeKey[]
-  /** True when no table of the More breakdowns section is shown. */
+  /** Every tab of the one breakdown card that has something to compare, in order. */
+  tabs: BreakdownTabKey[]
+  /** True when no tab of the breakdown card is shown. */
   noneShown: boolean
 }
 
@@ -1754,19 +1803,41 @@ function populatedRows(rows: BreakdownRow[] | undefined): number {
   return (rows ?? []).filter((r) => r.trades > 0).length
 }
 
+/** The rows behind one breakdown tab. */
+export function breakdownTabRows(
+  summary: DiscretionarySummary,
+  key: BreakdownTabKey
+): BreakdownRow[] {
+  switch (key) {
+    case 'symbol':
+      return summary.by_symbol ?? []
+    case 'side':
+      return summary.by_side ?? []
+    case 'product':
+      return summary.by_product ?? []
+    case 'holding':
+      return holdingRows(summary.by_holding)
+    default:
+      return summary.breakdowns?.[key] ?? []
+  }
+}
+
 /**
  * Which analytical breakdowns have a real comparison in them. One symbol, one product or one
- * direction compares nothing against nothing, so at least two groups are needed.
+ * direction compares nothing against nothing, so at least two groups are needed. Product and
+ * Intraday vs overnight are tabs only when they have two or more groups.
  */
 export function breakdownVisibility(summary: DiscretionarySummary): BreakdownVisibility {
-  const sides = populatedRows(summary.by_side)
   const patterns = HOW_YOU_TRADE_OPTIONS.map((o) => o.key).filter(
     (k) => populatedRows(summary.breakdowns?.[k]) > 1
   )
   const symbol = populatedRows(summary.by_symbol) > 1
-  const side = sides > 1
+  const side = populatedRows(summary.by_side) > 1
   const product = populatedRows(summary.by_product) > 1
   const holding = populatedRows(holdingRows(summary.by_holding)) > 1
+  const tabs = BREAKDOWN_TABS.map((t) => t.key).filter(
+    (k) => populatedRows(breakdownTabRows(summary, k)) > 1
+  )
   return {
     symbol,
     side,
@@ -1774,31 +1845,17 @@ export function breakdownVisibility(summary: DiscretionarySummary): BreakdownVis
     holding,
     points: (summary.points_by_instrument?.length ?? 0) > 1,
     patterns,
-    noneShown: !(symbol || side || product || holding),
+    tabs,
+    noneShown: tabs.length === 0,
   }
 }
 
-// ---------------------------------------------------------------- weekday / month visibility
+// ---------------------------------------------------------------- month table (position basis)
 
-function populatedCalendarRows(rows: CalendarRow[] | null | undefined): CalendarRow[] {
-  return (rows ?? []).filter((r) => r.positions > 0)
+/** At least two months with a completed position: the month table has something to compare. */
+export function monthTableVisible(rows: CalendarRow[] | null | undefined): boolean {
+  return (rows ?? []).filter((r) => r.positions > 0).length > 1
 }
-
-/**
- * Whether the month and weekday charts have a comparison in them: at least two months, or two
- * weekdays, with a completed position. The rows of a visible chart are shown as the server
- * sends them (a weekday without a position keeps its dash).
- */
-export function calendarVisibility(
-  summary: Pick<DiscretionarySummary, 'monthly' | 'weekday'>,
-  profile: { showMonthly: boolean; showWeekday: boolean }
-): { monthly: boolean; weekday: boolean; any: boolean } {
-  const monthly = profile.showMonthly && populatedCalendarRows(summary.monthly).length > 1
-  const weekday = profile.showWeekday && populatedCalendarRows(summary.weekday).length > 1
-  return { monthly, weekday, any: monthly || weekday }
-}
-
-// ---------------------------------------------------------------- monthly note, reliable start
 
 /**
  * Whether the month table's total differs from the headline net by more than 0.01. The table
@@ -1815,7 +1872,11 @@ export function monthlyTotalDiffers(
 }
 
 export const MONTHLY_TABLE_NOTE =
+  'Counted by final close month; the total can differ from net P&L above.'
+export const MONTHLY_TABLE_DETAIL =
   'This table counts completed positions by the month of their final close. Partial exits of positions that are still open are not included, so its total can differ from the net P&L above and from the calendar.'
+
+// ---------------------------------------------------------------- reliable start
 
 const FIXED_WINDOW_DAYS: Record<string, number> = { '7d': 7, '15d': 15, '30d': 30, '90d': 90 }
 

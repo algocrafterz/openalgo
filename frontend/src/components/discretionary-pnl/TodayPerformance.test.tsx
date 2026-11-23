@@ -1,16 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { emptyToday, todayClosed } from '@/test/discretionaryFixtures'
-import { render, screen, userEvent, within } from '@/test/test-utils'
-import { TodayPerformance } from './TodayPerformance'
+import { render, screen, userEvent } from '@/test/test-utils'
+import { TodayLine } from './TodayPerformance'
 
 const money = (v: number) => `Rs ${v.toFixed(2)}`
-
-/** The big number of the card with this label inside the Today section. */
-function cardValue(label: string): string {
-  const section = screen.getByTestId('discretionary-today')
-  const el = within(section).getByText(label, { selector: 'div' })
-  return el.parentElement?.querySelector('.font-mono')?.textContent ?? ''
-}
 
 const grace = (extra = {}) => ({
   id: 7,
@@ -29,26 +22,26 @@ const grace = (extra = {}) => ({
   ...extra,
 })
 
-describe('TodayPerformance', () => {
-  it('shows zeros and the empty text when nothing happened today', () => {
-    render(<TodayPerformance today={emptyToday()} formatCurrency={money} />)
-    expect(screen.getByText("Today's Performance")).toBeInTheDocument()
-    expect(cardValue('Realised (gross)')).toBe('Rs 0.00')
-    expect(cardValue('Net after est. charges')).toBe('Rs 0.00')
-    expect(cardValue('Unrealised')).toBe('—')
-    expect(cardValue('Completed positions')).toBe('0')
-    expect(cardValue('Open positions')).toBe('0')
-    expect(cardValue('Partially closed')).toBe('0')
-    expect(screen.getByTestId('today-closed-empty')).toHaveTextContent(
-      'No trades closed today yet'
+describe('TodayLine', () => {
+  it('is one line, with the empty text when nothing was closed today', () => {
+    render(<TodayLine today={emptyToday()} formatCurrency={money} />)
+    const line = screen.getByTestId('today-line')
+    expect(screen.getByTestId('today-summary')).toHaveTextContent(
+      `Today (${emptyToday().session_date}): no closed trades, 0 open.`
     )
+    // no panel, no tiles and no second closed-trades table
+    expect(screen.queryByText("Today's Performance")).not.toBeInTheDocument()
+    expect(screen.queryByTestId('today-closed-table')).not.toBeInTheDocument()
+    expect(line.querySelectorAll('table')).toHaveLength(0)
+    // no net figure is invented for a day with no closed trade
+    expect(screen.queryByTestId('today-net')).not.toBeInTheDocument()
     expect(screen.queryByTestId('today-pending')).not.toBeInTheDocument()
     expect(screen.queryByTestId('today-charges-incomplete')).not.toBeInTheDocument()
   })
 
-  it('shows an open, a partially closed and a closed position with their figures', () => {
+  it('shows net, closed and open in the line, and demotes the other counts to hint text', () => {
     render(
-      <TodayPerformance
+      <TodayLine
         today={emptyToday({
           realized_gross: 650,
           charges: 20,
@@ -67,40 +60,22 @@ describe('TodayPerformance', () => {
         formatCurrency={money}
       />
     )
-    expect(cardValue('Realised (gross)')).toBe('Rs 650.00')
-    expect(screen.getByText('2 exit fills (incl. partial exits)')).toBeInTheDocument()
-    expect(cardValue('Net after est. charges')).toBe('Rs 630.00')
-    expect(screen.getByText('after Rs 20.00 charges')).toBeInTheDocument()
-    expect(cardValue('Unrealised')).toBe('Rs -250.00')
+    expect(screen.getByTestId('today-summary')).toHaveTextContent(
+      'net Rs 630.00 after estimated charges, 1 closed, 2 open.'
+    )
+    const hint = screen.getByTestId('today-hint')
+    expect(hint).toHaveTextContent('gross Rs 650.00')
+    expect(hint).toHaveTextContent('2 exit fills (incl. partial exits)')
+    expect(hint).toHaveTextContent('1 partially closed')
+    expect(hint).toHaveTextContent('1 wins / 0 losses')
+    expect(hint).toHaveTextContent('charges Rs 20.00')
+    expect(hint).toHaveTextContent('unrealised Rs -250.00')
     expect(screen.getByTestId('today-price-badge')).toHaveTextContent('Live')
-    expect(cardValue('Completed positions')).toBe('1')
-    expect(screen.getByText('1 wins / 0 losses')).toBeInTheDocument()
-    expect(cardValue('Open positions')).toBe('2')
-    expect(cardValue('Partially closed')).toBe('1')
-    const row = screen.getByTestId('today-closed-row')
-    const cells = within(row)
-      .getAllByRole('cell')
-      .map((c) => c.textContent)
-    expect(cells).toEqual([
-      'SBINNSE MIS',
-      'Long',
-      '45',
-      '100.00',
-      '110.00',
-      '09:30',
-      '10:15',
-      'Rs 450.00',
-      'Rs 12.50',
-      'Rs 437.50',
-      'Closed',
-      'A1',
-      'flattrade',
-    ])
   })
 
-  it('marks net as incomplete and the row charges unavailable when charges are missing', () => {
+  it('marks net as incomplete with the unchanged "counted as 0" disclosure', () => {
     render(
-      <TodayPerformance
+      <TodayLine
         today={emptyToday({
           realized_gross: 100,
           net: 100,
@@ -119,26 +94,24 @@ describe('TodayPerformance', () => {
       'title',
       '1 exit fills have no charge estimate: counted as 0'
     )
-    const cells = within(screen.getByTestId('today-closed-row')).getAllByRole('cell')
-    expect(cells[8]).toHaveTextContent('unavailable')
-    expect(cells[9]).toHaveTextContent('—')
   })
 
-  it('says unrealised is not requested by default', () => {
+  it('says unrealised is not requested by default, without a number', () => {
     render(
-      <TodayPerformance
+      <TodayLine
         today={emptyToday({ open_positions: 1, price_statuses: { not_requested: 1 } })}
         formatCurrency={money}
       />
     )
-    expect(cardValue('Unrealised')).toBe('—')
-    expect(screen.getByTestId('today-price-badge')).toHaveTextContent('Not requested')
-    expect(screen.getByText('turn on Fetch live prices')).toBeInTheDocument()
+    expect(screen.getByTestId('today-hint')).toHaveTextContent(
+      'unrealised: turn on Fetch live prices'
+    )
+    expect(screen.queryByTestId('today-price-badge')).not.toBeInTheDocument()
   })
 
   it('explains fills held by the grace window with the earliest attribution time', () => {
     render(
-      <TodayPerformance
+      <TodayLine
         today={emptyToday({
           open_positions: 1,
           pending_attribution: {
@@ -157,54 +130,23 @@ describe('TodayPerformance', () => {
       />
     )
     const note = screen.getByTestId('today-pending')
-    expect(note).toHaveTextContent('2 execution(s) awaiting attribution')
-    expect(note).toHaveTextContent('30-minute safety window')
-    expect(note).toHaveTextContent('not counted in P&L yet')
-    expect(note).toHaveTextContent('Earliest attribution at 11:20 IST')
-    expect(note).toHaveTextContent('1 passed the window and wait only for the next ledger sync')
-    expect(note).toHaveTextContent('Some belong to an open position')
-    expect(note).toHaveTextContent('1 execution(s) of today stay unresolved for another reason')
-    // no figure moves: realised stays zero
-    expect(cardValue('Realised (gross)')).toBe('Rs 0.00')
+    expect(note).toHaveTextContent('2 execution(s) await attribution')
+    expect(note).toHaveTextContent('30-minute window')
+    expect(note).toHaveTextContent('not in P&L yet')
+    expect(note).toHaveTextContent('Earliest: 11:20 IST')
+    expect(note).toHaveTextContent('1 wait only for the next ledger sync')
+    expect(note).toHaveTextContent('An open position may still change')
+    expect(note).toHaveTextContent('1 execution(s) today are unresolved and not in P&L')
+    // no figure moves: nothing was closed, so no net is shown
+    expect(screen.queryByTestId('today-net')).not.toBeInTheDocument()
   })
 
-  it('shows the entry date of a carried position and explains the gross figure', () => {
-    render(
-      <TodayPerformance
-        today={emptyToday({
-          realized_gross: 60,
-          net: 60,
-          completed_positions: 1,
-          closed_positions: [
-            todayClosed({
-              product: 'CNC',
-              opened_at: '2026-11-16 10:00:00',
-              opened_session: '2026-11-16',
-              gross_pnl: 76,
-              realized_today: 60,
-              legs: 2,
-            }),
-          ],
-        })}
-        formatCurrency={money}
-      />
-    )
-    const cells = within(screen.getByTestId('today-closed-row')).getAllByRole('cell')
-    expect(cells[2]).toHaveTextContent('45(2 exit fills)')
-    expect(cells[5]).toHaveTextContent('2026-11-16 10:00')
-    expect(screen.getByText(/exits made on earlier days are in those days/)).toBeInTheDocument()
-  })
-
-  it('opens the fills of a closed row through onSelectClosed', async () => {
-    const onSelect = vi.fn()
-    render(
-      <TodayPerformance
-        today={emptyToday({ completed_positions: 1, closed_positions: [todayClosed()] })}
-        formatCurrency={money}
-        onSelectClosed={onSelect}
-      />
-    )
-    await userEvent.click(screen.getByTestId('today-closed-row'))
-    expect(onSelect).toHaveBeenCalledWith(11)
+  it("offers to show today's trades only when the page can make today the report date", async () => {
+    const onShow = vi.fn()
+    const { rerender } = render(<TodayLine today={emptyToday()} formatCurrency={money} />)
+    expect(screen.queryByRole('button', { name: /show today/i })).not.toBeInTheDocument()
+    rerender(<TodayLine today={emptyToday()} formatCurrency={money} onShowToday={onShow} />)
+    await userEvent.click(screen.getByRole('button', { name: /show today/i }))
+    expect(onShow).toHaveBeenCalledTimes(1)
   })
 })

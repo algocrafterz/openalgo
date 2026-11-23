@@ -435,7 +435,7 @@ describe('D5: one plain-language data warning', () => {
     expect(screen.queryByTestId('data-warning')).not.toBeInTheDocument()
   })
 
-  it('shows one warning with the count and a details button when fills are left out', async () => {
+  it('shows one quiet note with the count and a details button when fills are left out', async () => {
     summaryFn.mockResolvedValue(
       rich({
         unresolved_in_range: unresolvedInRange({ unresolved_fills: 5, orphan_fills: 0, total: 5 }),
@@ -445,13 +445,14 @@ describe('D5: one plain-language data warning', () => {
       })
     )
     renderIt(false, '7d')
-    const banner = await screen.findByTestId('data-warning')
-    expect(banner).toHaveTextContent(
-      '5 fills in this period could not be matched to a trade and are left out, so your P&L and trade count may be incomplete.'
+    const note = await screen.findByTestId('unmatched-fills-note')
+    expect(note).toHaveTextContent(
+      '5 fills in this period are not counted, so P&L and trade count may be incomplete.'
     )
-    expect(within(banner).getByRole('button', { name: 'View details' })).toBeInTheDocument()
-    expect(banner).not.toHaveTextContent(/attribut|ledger|sync|reconcil|collected/i)
-    expect(screen.getAllByTestId('data-warning')).toHaveLength(1)
+    expect(within(note).getByRole('button', { name: 'View details' })).toBeInTheDocument()
+    expect(note).not.toHaveTextContent(/attribut|ledger|sync|reconcil|collected/i)
+    // a coverage note, not the amber warning banner
+    expect(screen.queryByTestId('data-warning')).not.toBeInTheDocument()
     expect(screen.queryByTestId('discretionary-warnings')).not.toBeInTheDocument()
   })
 

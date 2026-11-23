@@ -1,9 +1,7 @@
 import type {
   CalendarRow,
-  CostsBlock,
   DiscretionaryCategory,
   PointsByInstrumentRow,
-  TradeManagementBlock,
 } from '@/api/discretionaryPnl'
 import { CATEGORY_CHOICES } from '@/api/discretionaryPnl'
 import { Button } from '@/components/ui/button'
@@ -15,10 +13,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { fmtPct, fmtPoints, fmtWinRate, pnlTextClass } from '@/lib/discretionaryPnlView'
-import { fmtDuration } from '@/lib/strategyPnlView'
+import { fmtPoints, fmtWinRate, pnlTextClass } from '@/lib/discretionaryPnlView'
 import { cn } from '@/lib/utils'
-import { StripTile, Unavailable } from './DiscretionaryInsights'
 
 type Money = (value: number) => string
 
@@ -189,108 +185,6 @@ export function CalendarTable({
           ))}
         </TableBody>
       </Table>
-    </div>
-  )
-}
-
-function Duration({
-  stat,
-}: {
-  stat: { count: number; mean_minutes: number | null; median_minutes: number | null }
-}) {
-  if (stat.count === 0) return <Unavailable reason="none in this range" />
-  return <>{fmtDuration(stat.mean_minutes)}</>
-}
-
-/** Holding time of winners and losers, median net P&L and what charges take from gross profit. */
-export function TradeManagementStrip({
-  management,
-  costs,
-  formatCurrency,
-  compact = false,
-}: {
-  /** Half-width card: fewer tile columns. */
-  compact?: boolean
-  management: TradeManagementBlock | null | undefined
-  costs: CostsBlock | null | undefined
-  formatCurrency: Money
-}) {
-  if (!management && !costs) return null
-  return (
-    <div data-testid="trade-management">
-      <div
-        className={
-          compact
-            ? 'grid grid-cols-2 gap-2 lg:grid-cols-3'
-            : 'grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6'
-        }
-      >
-        {management && (
-          <>
-            <StripTile
-              label="Winners: average hold"
-              testId="tm-winner-hold"
-              hint={
-                management.winners.count > 0
-                  ? `median ${fmtDuration(management.winners.median_minutes)}, ${management.winners.count} position(s)`
-                  : undefined
-              }
-            >
-              <Duration stat={management.winners} />
-            </StripTile>
-            <StripTile
-              label="Losers: average hold"
-              testId="tm-loser-hold"
-              hint={
-                management.losers.count > 0
-                  ? `median ${fmtDuration(management.losers.median_minutes)}, ${management.losers.count} position(s)`
-                  : undefined
-              }
-            >
-              <Duration stat={management.losers} />
-            </StripTile>
-            <StripTile
-              label="Median net P&L"
-              testId="tm-median-net"
-              hint={`per position, ${management.net_basis_positions} with a net`}
-            >
-              {management.median_net_pnl == null ? (
-                <Unavailable reason="no position with a net" />
-              ) : (
-                <span className={pnlTextClass(management.median_net_pnl)}>
-                  {formatCurrency(management.median_net_pnl)}
-                </span>
-              )}
-            </StripTile>
-          </>
-        )}
-        {costs && (
-          <StripTile
-            label="Est. charges as % of winners' gross profit"
-            testId="cost-pct"
-            hint={
-              costs.charges_unavailable_positions > 0
-                ? `${costs.charges_unavailable_positions} position(s) without a charge estimate are not in the charges`
-                : undefined
-            }
-          >
-            {costs.charges_pct_of_gross_profit == null ? (
-              <Unavailable reason={costs.reason ?? 'not available'} />
-            ) : (
-              fmtPct(costs.charges_pct_of_gross_profit)
-            )}
-          </StripTile>
-        )}
-      </div>
-      {management &&
-        (management.break_even_excluded > 0 || management.net_unavailable_positions > 0) && (
-          <p className="mt-1 text-xs text-muted-foreground">
-            {management.break_even_excluded > 0 &&
-              `${management.break_even_excluded} break-even position(s) are in neither winners nor losers. `}
-            {management.net_unavailable_positions > 0 &&
-              `${management.net_unavailable_positions} position(s) without a net P&L are left out.`}
-          </p>
-        )}
     </div>
   )
 }

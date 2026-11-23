@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { consistency, riskBlock, summary, tradingBreakdowns } from '@/test/discretionaryFixtures'
-import { render, screen, userEvent, within } from '@/test/test-utils'
-import { DailyPnlChart, HowYouTradeCard, RiskStrip, SampleNote } from './DiscretionaryInsights'
+import {
+  breakdownRow,
+  consistency,
+  riskBlock,
+  summary,
+  tradingBreakdowns,
+} from '@/test/discretionaryFixtures'
+import { render, screen, within } from '@/test/test-utils'
+import { DiscretionaryBreakdowns } from './DiscretionaryBreakdowns'
+import { RiskStrip, SampleNote } from './DiscretionaryInsights'
 
 const money = (v: number) => `Rs ${v.toFixed(2)}`
 
@@ -67,42 +74,14 @@ describe('SampleNote', () => {
   })
 })
 
-describe('DailyPnlChart', () => {
-  it('draws one bar per day with charges and net in the tooltip, and counts the days', () => {
-    const rows = summary().by_period.daily
-    const second = {
-      ...rows[0],
-      period: '2026-11-17',
-      label: '2026-11-17',
-      realized_gross: -30,
-      net_of_charges: -35,
-      charges: 5,
-      charges_unavailable_trades: 0,
-      net_charges_complete: true,
-    }
-    render(<DailyPnlChart rows={[rows[0], second]} formatCurrency={money} />)
-    const bars = screen.getAllByTestId('daily-pnl-bar')
-    expect(bars).toHaveLength(2)
-    expect(bars[0]).toHaveAttribute(
-      'title',
-      '2026-11-16: net Rs 47.50 (incomplete: some charges unavailable); gross Rs 60.00; est. charges Rs 12.50'
-    )
-    expect(bars[1].getAttribute('title')).toContain('gross Rs -30.00')
-    expect(screen.getByTestId('daily-pnl-days')).toHaveTextContent('1 profitable / 1 losing day(s)')
-    expect(screen.getByText(/same basis as the equity curve/)).toBeInTheDocument()
-  })
-
-  it('renders nothing without daily rows', () => {
-    const { container } = render(<DailyPnlChart rows={[]} formatCurrency={money} />)
-    expect(container).toBeEmptyDOMElement()
-  })
-})
-
 describe('RiskStrip', () => {
   it('shows the risk and consistency figures once, without the summary figures', () => {
     render(<RiskStrip consistency={consistency()} formatCurrency={money} />)
-    expect(screen.getByTestId('risk-avg-daily')).toHaveTextContent('Rs 30.00')
-    expect(screen.getByTestId('risk-avg-daily')).toHaveTextContent('net Rs 23.75 (incomplete)')
+    // net first, like the rest of the page; the gross figure is the hint
+    expect(screen.getByTestId('risk-avg-daily')).toHaveTextContent('Avg daily P&L (net)')
+    expect(screen.getByTestId('risk-avg-daily')).toHaveTextContent('Rs 23.75')
+    expect(screen.getByTestId('risk-avg-daily')).toHaveTextContent('incomplete')
+    expect(screen.getByTestId('risk-avg-daily')).toHaveTextContent('gross Rs 30.00')
     expect(screen.getByTestId('risk-days')).toHaveTextContent('1 / 1')
     expect(screen.getByTestId('risk-hold')).toHaveTextContent('45m')
     // largest win / loss and the maximum drawdown live in the summary only
@@ -112,7 +91,7 @@ describe('RiskStrip', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 
-  it('uses the net current drawdown and streaks of the risk block when given, in rupees', () => {
+  it('uses the net streaks of the risk block when given, and states no drawdown (the summary does)', () => {
     render(
       <RiskStrip
         consistency={consistency()}
@@ -120,8 +99,9 @@ describe('RiskStrip', () => {
         formatCurrency={money}
       />
     )
-    expect(screen.getByTestId('risk-current-drawdown')).toHaveTextContent('-Rs 120.00')
+    expect(screen.queryByTestId('risk-current-drawdown')).not.toBeInTheDocument()
     expect(screen.queryByTestId('risk-drawdown')).not.toBeInTheDocument()
+    expect(screen.getByTestId('risk-strip')).not.toHaveTextContent(/drawdown (?!recovery)/i)
     expect(screen.getByTestId('risk-current-streak')).toHaveTextContent('1 win')
     expect(screen.getByTestId('risk-win-streak')).toHaveTextContent('3')
     expect(screen.getByTestId('risk-strip').textContent).not.toMatch(/\d%/)
@@ -143,36 +123,93 @@ describe('RiskStrip', () => {
   })
 })
 
-describe('HowYouTradeCard', () => {
-  it('switches between time of day, weekday and holding time', async () => {
-    render(<HowYouTradeCard breakdowns={tradingBreakdowns()} formatCurrency={money} />)
-    const card = screen.getByTestId('how-you-trade')
+describe('DiscretionaryBreakdowns (one card, every section stacked)', () => {
+  const withRows = () =>
+    summary({
+      breakdowns: tradingBreakdowns(),
+      by_symbol: [breakdownRow('RELIANCE'), breakdownRow('INFY')],
+    })
+  const tabs = ['symbol', 'time_of_day', 'weekday', 'hold_bucket'] as const
+
+  it('shows every section given at once, in order, with its heading and table and no tabs', () => {
+    render(<DiscretionaryBreakdowns summary={withRows()} tabs={[...tabs]} formatCurrency={money} />)
+    const card = screen.getByTestId('breakdowns-card')
+    expect(within(card).queryByRole('tab')).not.toBeInTheDocument()
+    expect(within(card).queryByRole('tablist')).not.toBeInTheDocument()
+    expect(
+      within(card)
+        .getAllByRole('heading', { level: 3 })
+        .map((h) => h.textContent)
+    ).toEqual(['Symbol', 'Time of day', 'Weekday', 'Holding time'])
+    expect(card.querySelectorAll('table')).toHaveLength(4)
+    for (const key of tabs) {
+      const section = within(card).getByTestId(`breakdown-section-${key}`)
+      expect(section.querySelectorAll('table')).toHaveLength(1)
+    }
+    // every table is readable at once: no click needed
+    expect(within(card).getByText('RELIANCE')).toBeInTheDocument()
     expect(within(card).getByRole('columnheader', { name: 'Entry time (IST)' })).toBeInTheDocument()
     expect(within(card).getByText('09:15-10:00')).toBeInTheDocument()
     expect(
       within(card).getByText('Other (outside NSE cash hours, 09:15-15:30)')
     ).toBeInTheDocument()
-    // the profit factor is shown plainly: no low-sample marker and no rule in the card
-    expect(within(card).queryByTestId('low-sample-mark')).not.toBeInTheDocument()
-    expect(card).not.toHaveTextContent(/low sample|indicative|edge-check/i)
     expect(within(card).getAllByText('1.50').length).toBeGreaterThan(0)
-
-    await userEvent.click(screen.getByRole('tab', { name: 'Weekday' }))
-    expect(await within(card).findByText('Monday')).toBeInTheDocument()
-    expect(within(card).getByText('1.50')).toBeInTheDocument() // the weekday row's profit factor is shown plainly
-
-    await userEvent.click(screen.getByRole('tab', { name: 'Holding time' }))
-    expect(await within(card).findByText('15-60 min')).toBeInTheDocument()
+    expect(within(card).getByRole('columnheader', { name: 'Entry day' })).toBeInTheDocument()
+    expect(within(card).getByText('Monday')).toBeInTheDocument()
+    expect(within(card).getByText('15-60 min')).toBeInTheDocument()
     expect(within(card).getByText('Overnight')).toBeInTheDocument()
-    for (const name of ['Trades', 'Win rate', 'Avg P&L (net)', 'Profit factor', 'Net of charges']) {
-      expect(within(card).getByRole('columnheader', { name })).toBeInTheDocument()
+    // per-bucket sample, gross and charges columns are kept
+    for (const name of [
+      'Trades',
+      'Win rate',
+      'Avg P&L (net)',
+      'Profit factor',
+      'Gross P&L',
+      'Est. charges',
+      'Net of charges',
+    ]) {
+      expect(within(card).getAllByRole('columnheader', { name }).length).toBeGreaterThan(0)
     }
+    // no second representation of the same rows: no bar chart
+    expect(within(card).queryByTestId('time-of-day-chart')).not.toBeInTheDocument()
+    expect(within(card).queryByTestId('net-bar')).not.toBeInTheDocument()
+  })
+
+  it('has a single weekday table, by entry day (the close-date weekday table is gone)', () => {
+    render(
+      <DiscretionaryBreakdowns
+        summary={withRows()}
+        tabs={['weekday', 'symbol']}
+        formatCurrency={money}
+      />
+    )
+    expect(screen.getAllByRole('heading', { name: /weekday/i })).toHaveLength(1)
+    expect(screen.queryByText(/close date/i)).not.toBeInTheDocument()
+  })
+
+  it('renders only the sections it is given, in the fixed order, and nothing without any', () => {
+    const { container, rerender } = render(
+      <DiscretionaryBreakdowns
+        summary={withRows()}
+        tabs={['product', 'side']}
+        formatCurrency={money}
+      />
+    )
+    expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual([
+      'Long / Short',
+      'Product',
+    ])
+    expect(screen.queryByRole('heading', { name: 'Symbol' })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('breakdown-section-weekday')).not.toBeInTheDocument()
+    rerender(<DiscretionaryBreakdowns summary={withRows()} tabs={[]} formatCurrency={money} />)
+    expect(container).toBeEmptyDOMElement()
   })
 
   it('says when a breakdown has no rows', () => {
     render(
-      <HowYouTradeCard
-        breakdowns={{ time_of_day: [], weekday: [], hold_bucket: [] }}
+      <DiscretionaryBreakdowns
+        summary={summary({ breakdowns: { time_of_day: [], weekday: [], hold_bucket: [] } })}
+        tabs={['time_of_day']}
         formatCurrency={money}
       />
     )

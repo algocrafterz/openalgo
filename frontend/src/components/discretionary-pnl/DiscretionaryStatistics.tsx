@@ -1,12 +1,15 @@
 import type { DiscretionarySummary as Summary, TradeRef } from '@/api/discretionaryPnl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
+  chargesInsightHint,
   fmtAvgByCount,
   fmtNetMoney,
   fmtPayoffRatio,
   fmtProfitFactor,
   fmtStamp,
   hasNoClosedActivity,
+  largestLossHint,
+  NET_DEFINITION_DETAIL,
   netDefinitionText,
   pnlTextClass,
 } from '@/lib/discretionaryPnlView'
@@ -41,7 +44,7 @@ function Stat({
   label: string
   tooltip: string
   tone?: Tone
-  hint?: string
+  hint?: React.ReactNode
   testId?: string
   /** primary: the figures that decide whether the way you trade works; support: the rest. */
   size?: 'primary' | 'support'
@@ -107,64 +110,25 @@ function Largest({
   )
 }
 
-/** Average win against average loss, drawn to one scale, so the size of each is visible. */
-function WinLossBars({ avgWin, avgLoss }: { avgWin: number | null; avgLoss: number | null }) {
-  if (avgWin == null || avgLoss == null) return null
-  const win = Math.abs(avgWin)
-  const loss = Math.abs(avgLoss)
-  const peak = Math.max(win, loss)
-  if (peak === 0) return null
-  return (
-    <div
-      className="space-y-1 rounded-md border p-3"
-      data-testid="stat-win-loss-bars"
-      role="img"
-      aria-label="Average winning trade compared with average losing trade, to one scale"
-    >
-      <div className="flex h-2 items-center">
-        <div
-          className="h-2 rounded-r bg-green-600/80"
-          style={{ width: `${(win / peak) * 100}%` }}
-        />
-      </div>
-      <div className="flex h-2 items-center">
-        <div className="h-2 rounded-r bg-red-600/80" style={{ width: `${(loss / peak) * 100}%` }} />
-      </div>
-      <div className="text-[11px] text-muted-foreground">
-        Average win (green) vs average loss (red)
-      </div>
-    </div>
-  )
-}
-
 /**
- * Trading statistics: the one home of gross P&L, estimated charges, profit factor, expectancy,
- * average winning / losing trade, largest winner / loser and the maximum drawdown. Net P&L, the
- * trade count and the win rate stay in the summary cards above, so they are not repeated here.
- * Every value comes from the summary the rest of the page uses; nothing is computed here.
+ * The second row under the headline summary: net expectancy, profit factor and the maximum
+ * drawdown. The labels, tooltips, hints, sample sizes and the n/a and dash rules are the ones the
+ * Trading statistics card used before they moved here; nothing is computed differently.
  */
-export function DiscretionaryStatistics({
+export function KeyFigures({
   summary,
   formatCurrency,
-  onSelectTrade,
 }: {
   summary: Summary
   formatCurrency: Money
-  /** Opens the fills of the largest winner / loser. */
-  onSelectTrade?: (trade: TradeRef) => void
 }) {
   const m = summary.metrics
   const noTrades = m.trades_count === 0
   const noMoney = hasNoClosedActivity(summary)
-  const c = summary.consistency
   const risk = summary.risk
-  const charges = summary.costs?.total_charges ?? summary.charges
-  const gross = summary.realized_gross
-
   // Only the net drawdown by position close is shown. A server without it sends no drawdown
   // tile at all: the gross daily figure is a different basis and a missing value is never 0.
   const drawdownTone: Tone = risk && risk.max_drawdown > 0 ? 'negative' : 'neutral'
-
   const pf = m.profit_factor
   const wins = m.winning_trades
   const losses = m.losing_trades
@@ -182,6 +146,101 @@ export function DiscretionaryStatistics({
           : pf < 1
             ? 'negative'
             : 'neutral'
+  return (
+    <div
+      className={cn(
+        'grid grid-cols-1 gap-3',
+        risk && !noMoney ? 'sm:grid-cols-3' : 'sm:grid-cols-2'
+      )}
+      data-testid="summary-key-stats"
+    >
+      <Stat
+        size="support"
+        label="Expectancy (net)"
+        tooltip="The average net result of one completed trade, after estimated charges."
+        tone={noTrades ? 'neutral' : toneOf(m.expectancy)}
+        hint="net, per trade"
+      >
+        {noTrades ? (
+          '—'
+        ) : (
+          <span className={pnlTextClass(m.expectancy ?? 0)}>
+            {fmtNetMoney(m.expectancy, formatCurrency)}
+          </span>
+        )}
+      </Stat>
+      <Stat
+        size="support"
+        label="Profit factor (net)"
+        tooltip="Total won divided by total lost, after estimated charges. Above 1.00 means winners outweigh losers."
+        tone={pfTone}
+        hint={
+          noMoney
+            ? 'total won / total lost'
+            : `won ${formatCurrency(m.gross_profit)} / lost ${formatCurrency(m.gross_loss)} (net, completed trades)`
+        }
+      >
+        {noTrades
+          ? '—'
+          : fmtProfitFactor(pf, wins, losses, !m.count_unavailable_reason && hasNetBasis)}
+      </Stat>
+      {risk && !noMoney && (
+        <Stat
+          size="support"
+          label="Max drawdown (net)"
+          tooltip="The largest fall of your cumulative net realised P&L (after estimated charges, in close order) from its highest point so far, in rupees."
+          testId="summary-drawdown"
+          tone={drawdownTone}
+          hint={
+            <>
+              {`over ${risk.positions} trade${risk.positions === 1 ? '' : 's'}${risk.max_drawdown_at ? `, at ${fmtStamp(risk.max_drawdown_at)}` : ''}`}
+              <span className="block" data-testid="summary-current-drawdown">
+                {risk.current_drawdown > 0
+                  ? `now ${formatCurrency(risk.current_drawdown)} below the highest point (net, by close time)`
+                  : 'now at its highest point (net, by close time)'}
+              </span>
+            </>
+          }
+        >
+          <span className={risk.max_drawdown > 0 ? 'text-red-600 dark:text-red-400' : undefined}>
+            {risk.max_drawdown > 0 ? '-' : ''}
+            {formatCurrency(Math.abs(risk.max_drawdown))}
+          </span>
+        </Stat>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Trading statistics: the one home of gross P&L, estimated charges, average winning / losing
+ * trade, payoff ratio and largest winner / loser. Net P&L, the trade count and the win rate are
+ * the summary cards; net expectancy, profit factor (with total won and lost) and the maximum
+ * drawdown (with the current one) are the row under them (KeyFigures), so each figure is shown
+ * once.
+ * Every value comes from the summary the rest of the page uses; nothing is computed here.
+ */
+export function DiscretionaryStatistics({
+  summary,
+  formatCurrency,
+  onSelectTrade,
+}: {
+  summary: Summary
+  formatCurrency: Money
+  /** Opens the fills of the largest winner / loser. */
+  onSelectTrade?: (trade: TradeRef) => void
+}) {
+  const m = summary.metrics
+  const noTrades = m.trades_count === 0
+  const noMoney = hasNoClosedActivity(summary)
+  const c = summary.consistency
+  const charges = summary.costs?.total_charges ?? summary.charges
+  const gross = summary.realized_gross
+
+  const wins = m.winning_trades
+  const losses = m.losing_trades
+  // No position has a net P&L: every net figure is unknown (a dash), not "n/a".
+  const hasNetBasis = (m.net_basis_trades ?? m.trades_count) > 0 && !m.count_unavailable_reason
   const largestWin = c?.largest_win
   const largestLoss = c?.largest_loss
 
@@ -189,64 +248,9 @@ export function DiscretionaryStatistics({
     <Card data-testid="discretionary-statistics" className="gap-3 py-4">
       <CardHeader className="pb-0">
         <CardTitle className="text-base">Trading statistics</CardTitle>
-        <p className="text-xs text-muted-foreground">
-          Net P&amp;L, completed trades and win rate are in the summary above. Hover a figure for
-          what it means.
-        </p>
+        <p className="text-xs text-muted-foreground">Hover a figure for its meaning.</p>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div
-          className={cn(
-            'grid grid-cols-1 gap-3',
-            risk && !noMoney ? 'sm:grid-cols-3' : 'sm:grid-cols-2'
-          )}
-          data-testid="stats-primary"
-        >
-          <Stat
-            size="primary"
-            label="Expectancy (net)"
-            tooltip="The average net result of one completed trade, after estimated charges."
-            tone={noTrades ? 'neutral' : toneOf(m.expectancy)}
-            hint="net, per trade"
-          >
-            {noTrades ? (
-              '—'
-            ) : (
-              <span className={pnlTextClass(m.expectancy ?? 0)}>
-                {fmtNetMoney(m.expectancy, formatCurrency)}
-              </span>
-            )}
-          </Stat>
-          <Stat
-            size="primary"
-            label="Profit factor (net)"
-            tooltip="Total won divided by total lost, after estimated charges. Above 1.00 means winners outweigh losers."
-            tone={pfTone}
-            hint="total won / total lost"
-          >
-            {noTrades
-              ? '—'
-              : fmtProfitFactor(pf, wins, losses, !m.count_unavailable_reason && hasNetBasis)}
-          </Stat>
-          {risk && !noMoney && (
-            <Stat
-              size="primary"
-              label="Max drawdown (net)"
-              tooltip="The largest fall of your cumulative net realised P&L (after estimated charges, in close order) from its highest point so far, in rupees."
-              testId="summary-drawdown"
-              tone={drawdownTone}
-              hint={`over ${risk.positions} trade${risk.positions === 1 ? '' : 's'}${risk.max_drawdown_at ? `, at ${fmtStamp(risk.max_drawdown_at)}` : ''}`}
-            >
-              <span
-                className={risk.max_drawdown > 0 ? 'text-red-600 dark:text-red-400' : undefined}
-              >
-                {risk.max_drawdown > 0 ? '-' : ''}
-                {formatCurrency(Math.abs(risk.max_drawdown))}
-              </span>
-            </Stat>
-          )}
-        </div>
-
         <div
           className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7"
           data-testid="stats-supporting"
@@ -263,11 +267,14 @@ export function DiscretionaryStatistics({
             label="Charges (est.)"
             tooltip="Brokerage, taxes and exchange fees, estimated for the completed trades. They reduce your net P&L."
             testId="summary-charges"
-            hint={
+            hint={[
               summary.charges_unavailable_trades > 0
                 ? `${summary.charges_unavailable_trades} trade(s) without an estimate`
-                : 'estimated'
-            }
+                : 'estimated',
+              chargesInsightHint(summary, formatCurrency),
+            ]
+              .filter(Boolean)
+              .join('; ')}
           >
             {noMoney ? '—' : formatCurrency(charges)}
           </Stat>
@@ -317,6 +324,7 @@ export function DiscretionaryStatistics({
             tooltip="Your worst completed trade in this period. Select it to see its fills."
             testId="summary-largest-loss"
             tone={largestLoss ? 'negative' : 'neutral'}
+            hint={largestLossHint(summary, formatCurrency) ?? undefined}
           >
             <Largest
               trade={largestLoss}
@@ -327,23 +335,18 @@ export function DiscretionaryStatistics({
           </Stat>
         </div>
 
-        <WinLossBars
-          avgWin={noTrades || wins === 0 ? null : m.avg_win}
-          avgLoss={noTrades || losses === 0 ? null : m.avg_loss}
-        />
-
         <SampleNote sample={summary.sample} />
         {(m.net_unavailable_trades ?? 0) > 0 && (
           <p
             className="text-xs text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
             data-testid="net-unavailable-note"
           >
-            {m.net_unavailable_trades} completed trade(s) have no net P&amp;L (no charge estimate)
-            and are left out of win rate, profit factor, expectancy and the averages.
+            {m.net_unavailable_trades} completed trade(s) have no charge estimate and are left out
+            of net statistics.
           </p>
         )}
         {summary.net_definition && (
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-muted-foreground" title={NET_DEFINITION_DETAIL}>
             {netDefinitionText(summary.net_definition)}
           </p>
         )}

@@ -771,7 +771,13 @@ export default function StrategyDailyPerformance() {
   const bySymbol = daily?.by_symbol ?? []
 
   return (
-    <div className="space-y-6">
+    <div
+      className={
+        isDisc
+          ? 'space-y-6 2xl:relative 2xl:left-1/2 2xl:w-[max(100%,min(1600px,calc(100vw_-_3rem)))] 2xl:-translate-x-1/2'
+          : 'space-y-6'
+      }
+    >
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">

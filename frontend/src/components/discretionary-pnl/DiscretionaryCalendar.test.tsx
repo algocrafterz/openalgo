@@ -220,10 +220,12 @@ describe('breakdown visibility on the page', () => {
       by_product: [breakdownRow('MIS'), breakdownRow('NRML')],
     })
     renderIt()
-    const section = await screen.findByTestId('performance-breakdowns')
-    expect(within(section).getByText('Long vs Short')).toBeInTheDocument()
-    expect(within(section).getByText('By product')).toBeInTheDocument()
-    expect(within(section).getByText('By symbol')).toBeInTheDocument()
+    const section = await screen.findByTestId('breakdowns-card')
+    // one card, one section per dimension with two or more groups, no tabs
+    for (const name of ['Symbol', 'Long / Short', 'Product']) {
+      expect(within(section).getByRole('heading', { name })).toBeInTheDocument()
+    }
+    expect(within(section).queryByRole('tab')).not.toBeInTheDocument()
   })
 
   it('keeps the trade-by-trade chart for a one-day report', async () => {

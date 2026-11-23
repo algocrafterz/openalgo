@@ -116,7 +116,7 @@ export function ExcursionPanel({
   ]
   return (
     <div className="space-y-3" data-testid="excursion-panel">
-      <p className="text-xs" data-testid="excursions-coverage">
+      <p className="text-xs" data-testid="excursions-coverage" title={agg.precision_note}>
         <span className="font-medium">
           Based on {agg.coverage.available} of {agg.coverage.total} completed positions with
           1-minute price data
@@ -168,9 +168,6 @@ export function ExcursionPanel({
           </TableBody>
         </Table>
       </div>
-      <p className="text-xs text-muted-foreground" data-testid="excursions-precision">
-        {agg.precision_note}
-      </p>
       {points.length >= 2 && <MaeMfeScatter points={points} formatCurrency={formatCurrency} />}
     </div>
   )

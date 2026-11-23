@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  MONTHLY_TABLE_DETAIL,
   MONTHLY_TABLE_NOTE,
   monthlyTotalDiffers,
   reliableStartNotice,
@@ -140,18 +141,21 @@ describe('monthly table note', () => {
   }
 
   async function openMonths() {
-    const toggle = await screen.findByTestId('performance-breakdowns-toggle')
+    const toggle = await screen.findByTestId('advanced-analysis-toggle')
     if (toggle.getAttribute('aria-expanded') !== 'true') await userEvent.click(toggle)
-    return screen.findByTestId('monthly-chart')
+    await userEvent.click(await screen.findByRole('tab', { name: 'Monthly (by position close)' }))
   }
 
   it('is shown under the table when the table total differs from the net above', async () => {
     summaryFn.mockResolvedValue(withMonths(400))
     renderCustom()
     await openMonths()
-    expect(await screen.findByTestId('monthly-table-note')).toHaveTextContent(MONTHLY_TABLE_NOTE)
+    const note = await screen.findByTestId('monthly-table-note')
+    expect(note).toHaveTextContent(MONTHLY_TABLE_NOTE)
     expect(MONTHLY_TABLE_NOTE).toContain('final close')
-    expect(MONTHLY_TABLE_NOTE).toContain('Partial exits')
+    // the partial-exit detail moved to the tooltip of the note
+    expect(note).toHaveAttribute('title', MONTHLY_TABLE_DETAIL)
+    expect(MONTHLY_TABLE_DETAIL).toContain('Partial exits')
   })
 
   it('is not shown when the table total equals the net above', async () => {

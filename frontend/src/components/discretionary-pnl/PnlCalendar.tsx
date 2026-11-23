@@ -23,6 +23,10 @@ import { cn } from '@/lib/utils'
 
 type Money = (value: number) => string
 
+/** Detail moved out of the caption: shown on hover of the calendar title and legend. */
+export const CALENDAR_DETAIL =
+  'Realised P&L after estimated charges, by the day a trade closed. Open positions are not included. Select a day to open its report.'
+
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 const CELL_TONE: Record<CalendarDay['status'], string> = {
@@ -159,7 +163,9 @@ export function PnlCalendar({
   return (
     <Card data-testid="pnl-calendar" className="gap-3 py-4">
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-0">
-        <CardTitle className="text-base">P&amp;L calendar</CardTitle>
+        <CardTitle className="text-base" title={CALENDAR_DETAIL}>
+          P&amp;L calendar
+        </CardTitle>
         <div className="flex items-center gap-1">
           <Button
             type="button"
@@ -223,7 +229,7 @@ export function PnlCalendar({
                     pnlTextClass(totals.net)
                   )}
                   data-testid="calendar-total-net"
-                  title="Realised P&L after estimated charges, summed over the days shown. Open positions are not included."
+                  title="Net P&L after estimated charges for the days shown. Open positions are not included."
                 >
                   {fmtNetMoney(totals.net, formatCurrency)}
                   {totals.incompleteDays > 0 ? '*' : ''}
@@ -285,15 +291,17 @@ export function PnlCalendar({
               </div>
             </div>
 
-            <p className="text-xs text-muted-foreground" data-testid="calendar-legend">
-              Realised P&amp;L after estimated charges, by the day a trade was closed. Open
-              positions are not included. Grey days had no trades. Dashed amber days may have
-              missing data.
-              {totals.incompleteDays > 0
-                ? ' * means part of the figure is missing (some trades have no charge estimate or were not collected).'
-                : ''}{' '}
-              Select a day to open its report.
-            </p>
+            <div
+              className="space-y-0.5 text-xs text-muted-foreground"
+              data-testid="calendar-legend"
+              title={CALENDAR_DETAIL}
+            >
+              <p data-testid="calendar-caption">
+                Net P&amp;L by close day, after estimated charges.
+              </p>
+              <p>Grey: no trades. Dashed amber: data may be missing.</p>
+              {totals.incompleteDays > 0 && <p>* Charges or trades are missing.</p>}
+            </div>
           </>
         )}
       </CardContent>

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { summarizeUnrealized, totalCard } from '@/lib/discretionaryPnlView'
 import { consistency, riskBlock, summary } from '@/test/discretionaryFixtures'
 import { render, screen } from '@/test/test-utils'
 import { RiskStrip } from './DiscretionaryInsights'
-import { DiscretionaryStatistics } from './DiscretionaryStatistics'
+import { DiscretionaryStatistics, KeyFigures } from './DiscretionaryStatistics'
 import { DiscretionaryHeader } from './DiscretionarySummary'
 
 const money = (v: number) => `Rs ${v.toFixed(2)}`
@@ -21,7 +22,15 @@ describe('win rate card', () => {
       losing_trades: 6,
       win_rate: 41.7,
     })
-    render(<DiscretionaryHeader summary={s} formatCurrency={money} chargesHint="" />)
+    render(
+      <DiscretionaryHeader
+        summary={s}
+        formatCurrency={money}
+        chargesHint=""
+        unrealized={summarizeUnrealized(s)}
+        total={totalCard(s.realized_net_of_charges, summarizeUnrealized(s), 0)}
+      />
+    )
     expect(screen.getByTestId('win-rate-counts')).toHaveTextContent(
       '5 wins / 6 losses / 1 break-even of 12 trades'
     )
@@ -37,7 +46,15 @@ describe('win rate card', () => {
       losing_trades: 15,
       win_rate: 50,
     })
-    render(<DiscretionaryHeader summary={s} formatCurrency={money} chargesHint="" />)
+    render(
+      <DiscretionaryHeader
+        summary={s}
+        formatCurrency={money}
+        chargesHint=""
+        unrealized={summarizeUnrealized(s)}
+        total={totalCard(s.realized_net_of_charges, summarizeUnrealized(s), 0)}
+      />
+    )
     expect(screen.queryByTestId('win-rate-small-sample')).not.toBeInTheDocument()
   })
 })
@@ -71,7 +88,12 @@ describe('average win, average loss and payoff', () => {
       profit_factor: 0,
       expectancy: 0,
     })
-    render(<DiscretionaryStatistics summary={s} formatCurrency={money} />)
+    render(
+      <>
+        <KeyFigures summary={s} formatCurrency={money} />
+        <DiscretionaryStatistics summary={s} formatCurrency={money} />
+      </>
+    )
     expect(screen.getByText('Profit factor (net)').parentElement).toHaveTextContent('n/a')
     expect(screen.getByTestId('stat-avg-win')).toHaveTextContent('n/a')
     expect(screen.getByTestId('stat-avg-loss')).toHaveTextContent('n/a')

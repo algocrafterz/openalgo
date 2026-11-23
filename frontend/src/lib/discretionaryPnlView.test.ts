@@ -309,7 +309,7 @@ describe('book helpers', () => {
 
   it('words the unmatched-fills message in trader language', () => {
     expect(awaitingAttributionText(5, 5)).toBe(
-      'No trades to show yet: 5 of the 5 fills in this period could not be matched to a trade, so their P&L is left out.'
+      'No trades to show yet: 5 of 5 fills are not counted.'
     )
   })
 
@@ -340,7 +340,8 @@ describe('plain-text labels', () => {
     const text = netDefinitionText('net and realized_net_of_charges = realized_gross minus x')
     expect(text).not.toContain('_')
     expect(text).toMatch(/^Net = gross realized minus estimated charges/)
-    expect(text).toContain('measured on net P&L')
+    // the detail moved to the tooltip of the line
+    expect(view.NET_DEFINITION_DETAIL).toContain('measured on net P&L')
     expect(text).not.toContain('gross metrics')
     expect(netDefinitionText(undefined)).toBe('')
   })
@@ -456,8 +457,8 @@ describe('today helpers', () => {
       other_today: 2,
     })
     expect(lines).toEqual([
-      '1 execution(s) awaiting attribution: they are inside the 30-minute safety window that lets a strategy order tag arrive, and are not counted in P&L yet. Earliest attribution at 11:20 IST, at the first ledger sync after it.',
-      '2 execution(s) of today stay unresolved for another reason and are excluded from P&L; see the unresolved fills warning.',
+      '1 execution(s) await attribution (30-minute window) and are not in P&L yet. Earliest: 11:20 IST.',
+      '2 execution(s) today are unresolved and not in P&L.',
     ])
   })
 })
@@ -752,23 +753,26 @@ describe('chart and table helpers', () => {
     } as never
     expect(view.materialDataWarning(healthy)).toBeNull()
     const u = { unresolved_fills: 1, orphan_fills: 0, total: 1, start: 'a', end: 'b' }
+    // unmatched fills have their own quiet note now, not the warning banner
     expect(
       view.materialDataWarning({ ...(healthy as object), unresolved_in_range: u } as never)
-    ).toBe(
-      '1 fill in this period could not be matched to a trade and is left out, so your P&L and trade count may be incomplete.'
-    )
+    ).toBeNull()
     expect(
-      view.materialDataWarning({
+      view.unmatchedFillCount({ ...(healthy as object), unresolved_in_range: u } as never)
+    ).toBe(1)
+    expect(
+      view.unmatchedFillCount({
         ...(healthy as object),
         unresolved_in_range: { ...u, total: 4 },
       } as never)
-    ).toContain('4 fills in this period could not be matched to a trade and are left out')
+    ).toBe(4)
+    expect(view.unmatchedFillCount(healthy as never)).toBe(0)
     // older server: the pending and unplaced counts of the period stand in
-    const old = view.materialDataWarning({
+    const old = view.unmatchedFillCount({
       ...(healthy as object),
       data_quality: dataQuality({ awaiting_attribution: 2, not_placed: 1 }),
     } as never)
-    expect(old).toContain('3 fills in this period')
+    expect(old).toBe(3)
     // missing prices count only when prices were requested
     const px = (requested: boolean) =>
       ({
@@ -951,7 +955,18 @@ describe('chart and table helpers', () => {
         } as never,
         NOW
       )
-      expect(text).toContain('2 fills')
+      expect(
+        view.unmatchedFillCount({
+          unresolved_in_range: {
+            unresolved_fills: 1,
+            orphan_fills: 1,
+            total: 2,
+            start: 'a',
+            end: 'b',
+          },
+          data_quality: dataQuality(),
+        } as never)
+      ).toBe(2)
       expect(text).toContain('no current price')
       expect(text).toContain('Trades after 2026-11-02')
       expect(text).toContain('intraday position')

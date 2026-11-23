@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { breakdownVisibility, calendarVisibility, weaknessLine } from '@/lib/discretionaryPnlView'
+import {
+  breakdownVisibility,
+  chargesInsightHint,
+  largestLossHint,
+} from '@/lib/discretionaryPnlView'
 import {
   breakdownRow,
   calendarRow,
@@ -12,9 +16,8 @@ import {
 } from '@/test/discretionaryFixtures'
 import { render, screen } from '@/test/test-utils'
 import { CalendarTable } from './DiscretionaryBlocks'
-import { DiscretionaryGroups } from './DiscretionaryGroups'
-import { DailyPnlChart } from './DiscretionaryInsights'
-import { DiscretionaryStatistics } from './DiscretionaryStatistics'
+import { RiskStrip } from './DiscretionaryInsights'
+import { DiscretionaryStatistics, KeyFigures } from './DiscretionaryStatistics'
 import { ExcursionPanel } from './ExcursionPanel'
 
 const money = (v: number) => `Rs ${v.toFixed(2)}`
@@ -96,16 +99,17 @@ describe('MAE / MFE shows its coverage at the point of use', () => {
 
 describe('unsupported items are not rendered', () => {
   it('shows no gross drawdown stand-in when the net risk block is missing', () => {
-    render(
-      <DiscretionaryStatistics summary={{ ...summary(), risk: null }} formatCurrency={money} />
-    )
+    render(<KeyFigures summary={{ ...summary(), risk: null }} formatCurrency={money} />)
     expect(screen.queryByTestId('summary-drawdown')).not.toBeInTheDocument()
     expect(screen.queryByText(/Max drawdown/)).not.toBeInTheDocument()
+    // the figures that remain in the row are still there
+    expect(screen.getByText('Expectancy (net)')).toBeInTheDocument()
+    expect(screen.getByText('Profit factor (net)')).toBeInTheDocument()
   })
 
   it('labels the net drawdown with the number of trades it rests on', () => {
     render(
-      <DiscretionaryStatistics
+      <KeyFigures
         summary={{ ...summary(), risk: riskBlock({ positions: 7 }) }}
         formatCurrency={money}
       />
@@ -116,13 +120,7 @@ describe('unsupported items are not rendered', () => {
 
   it('renders no placeholder card when the risk block is not sent', () => {
     const { container } = render(
-      <DiscretionaryGroups
-        summary={{ ...summary(), consistency: null }}
-        unrealized={{ kind: 'none', value: 0, unpriced: 0, badge: null }}
-        total={{ label: 'Total', value: 0, hint: '' }}
-        formatCurrency={money}
-        part="analysis"
-      />
+      <RiskStrip consistency={null} risk={null} formatCurrency={money} />
     )
     expect(screen.queryByText(/Not sent by the server/)).not.toBeInTheDocument()
     expect(screen.queryByTestId('group-risk-missing')).not.toBeInTheDocument()
@@ -137,19 +135,19 @@ describe('unsupported items are not rendered', () => {
   })
 })
 
-describe('insights state their sample', () => {
+describe('tile hints state their sample', () => {
   const s = (extra = {}) => {
     const base = summary(extra)
     return { ...base, metrics: { ...base.metrics, trades_count: 12 } }
   }
 
-  it('names the completed trades behind a charges insight', () => {
+  it('names the completed trades behind a charges hint', () => {
     expect(
-      weaknessLine(s({ costs: costsBlock({ charges_pct_of_gross_profit: 42.5 }) }), money)
+      chargesInsightHint(s({ costs: costsBlock({ charges_pct_of_gross_profit: 42.5 }) }), money)
     ).toContain('over 12 completed trades')
-    expect(weaknessLine(s({ realized_gross: 50, realized_net_of_charges: -10 }), money)).toContain(
-      'over 12 completed trades'
-    )
+    expect(
+      chargesInsightHint(s({ realized_gross: 50, realized_net_of_charges: -10 }), money)
+    ).toContain('over 12 completed trades')
   })
 
   it('compares largest win and loss at any trade count and names the count', () => {
@@ -162,57 +160,20 @@ describe('insights state their sample', () => {
         largest_loss: { ...c.largest_loss!, net_pnl: -250 },
       },
     })
-    expect(weaknessLine(big, money)).toContain('over 12 completed trades')
+    expect(largestLossHint(big, money)).toContain('over 12 completed trades')
     const few = { ...big, metrics: { ...big.metrics, trades_count: 3 } }
-    expect(weaknessLine(few, money)).toContain('biggest losing trade')
-    expect(weaknessLine(few, money)).toContain('over 3 completed trades')
+    expect(largestLossHint(few, money)).toContain('larger than your largest winner')
+    expect(largestLossHint(few, money)).toContain('over 3 completed trades')
   })
 })
 
-describe('charts with a single point show nothing', () => {
-  it('draws no daily bar chart for one day', () => {
-    const { container } = render(
-      <DailyPnlChart
-        rows={[
-          {
-            period: '2026-11-20',
-            label: '2026-11-20',
-            start: '2026-11-20',
-            end: '2026-11-20',
-            trades: 1,
-            wins: 1,
-            losses: 0,
-            realized_gross: 100,
-            charges: 10,
-            charges_unavailable_trades: 0,
-            net_of_charges: 90,
-            net_charges_complete: true,
-          },
-        ]}
-        formatCurrency={money}
-      />
-    )
-    expect(container).toBeEmptyDOMElement()
-  })
-})
-
-describe('a weekday table needs two weekdays to compare, not a trade or day count', () => {
-  const rows = [calendarRow('Mon'), calendarRow('Tue')]
-  const profile = { showMonthly: true, showWeekday: true }
+describe('the weekday tab needs two weekdays to compare, not a trade or day count', () => {
   const sample = (trading_days: number) => ({
     completed_trades: 40,
     trading_days,
     min_trades: 30,
     min_days: 10,
     sufficient: trading_days >= 10,
-  })
-
-  it('shows the close-date weekday table over 3 trading days, and not with one weekday', () => {
-    expect(
-      calendarVisibility({ monthly: null, weekday: rows, sample: sample(3) } as never, profile)
-        .weekday
-    ).toBe(true)
-    expect(calendarVisibility({ monthly: null, weekday: [rows[0]] }, profile).weekday).toBe(false)
   })
 
   it('shows the entry-day weekday tab over 3 trading days, and not with one weekday', () => {

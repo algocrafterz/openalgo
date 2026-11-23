@@ -40,6 +40,7 @@ export function NetBarChart({
         <>
           <ul
             className="space-y-1"
+            title="Net P&L in rupees (Rs), after estimated charges. Green to the right is a gain, red to the left a loss."
             aria-label={`${title}, net P&L in rupees (Rs) after estimated charges`}
           >
             {ordered.map((b) => (
@@ -76,8 +77,7 @@ export function NetBarChart({
             ))}
           </ul>
           <p className="mt-1 text-[11px] text-muted-foreground">
-            Net P&amp;L in rupees (Rs), after estimated charges; green to the right is a gain, red
-            to the left a loss.{' '}
+            Net, after estimated charges.{' '}
             {bars.length > maxRows
               ? `Showing the ${maxRows} largest of ${bars.length}.`
               : `${bars.length} shown.`}

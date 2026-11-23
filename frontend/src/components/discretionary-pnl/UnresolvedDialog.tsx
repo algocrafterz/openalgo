@@ -106,9 +106,8 @@ export function UnresolvedDialog({
         <DialogHeader>
           <DialogTitle>Fills left out of your figures</DialogTitle>
           <DialogDescription>
-            Executions that could not be reliably attributed are excluded from completed-trade
-            statistics until they are attributed. This list covers every date for the current
-            broker, account and symbol filters.
+            Not counted in trade statistics until attributed. Covers all dates for the current
+            filters.
           </DialogDescription>
         </DialogHeader>
         {query.isLoading ? (

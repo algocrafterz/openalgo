@@ -160,7 +160,7 @@ describe('empty and error states', () => {
     summaryFn.mockResolvedValue(emptySummary())
     renderIt()
     expect(await screen.findByText('No discretionary trades yet')).toBeInTheDocument()
-    expect(screen.getByText(/check that you are logged in to your broker/i)).toBeInTheDocument()
+    expect(screen.getByText(/check your broker login/i)).toBeInTheDocument()
     expect(screen.queryByText('Net realized (after est. charges)')).not.toBeInTheDocument()
   })
 
@@ -194,23 +194,21 @@ describe('empty and error states', () => {
     renderIt()
     const block = await screen.findByTestId('discretionary-awaiting-attribution')
     expect(
-      within(block).getByText(
-        'No trades to show yet: 5 of the 5 fills in this period could not be matched to a trade, so their P&L is left out.'
-      )
+      within(block).getByText('No trades to show yet: 5 of 5 fills are not counted.')
     ).toBeInTheDocument()
-    expect(within(block).getByText(/Use View details in the warning above/)).toBeInTheDocument()
+    expect(within(block).getByText(/Select View details above/)).toBeInTheDocument()
     expect(within(block).queryByText(/Unresolved fills below/)).not.toBeInTheDocument()
     expect(screen.queryByText('No discretionary trades yet')).not.toBeInTheDocument()
-    expect(screen.queryByText(/logged in to your broker/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/check your broker login/i)).not.toBeInTheDocument()
     expect(screen.queryByText('Net realized (after est. charges)')).not.toBeInTheDocument()
     // the standalone section is gone; the one-line warning opens the list on demand
     expect(screen.queryByTestId('discretionary-unresolved')).not.toBeInTheDocument()
     expect(unresolvedFn).not.toHaveBeenCalled()
     await userEvent.click(screen.getByRole('button', { name: 'View details' }))
     expect(await screen.findByText('TCS')).toBeInTheDocument()
-    expect(screen.getByText(/excluded from completed-trade statistics until/)).toBeInTheDocument()
+    expect(screen.getByText(/Not counted in trade statistics until attributed/)).toBeInTheDocument()
     // the range banner carries the count; the ledger-wide backend line is not repeated
-    expect(screen.getByTestId('data-warning')).toHaveTextContent('5 fills in this period')
+    expect(screen.getByTestId('unmatched-fills-note')).toHaveTextContent('5 fills in this period')
     expect(screen.queryByTestId('discretionary-warnings')).not.toBeInTheDocument()
   })
 
@@ -222,9 +220,7 @@ describe('empty and error states', () => {
     })
     renderIt()
     expect(
-      await screen.findByText(
-        'No trades to show yet: 2 of the 7 fills in this period could not be matched to a trade, so their P&L is left out.'
-      )
+      await screen.findByText('No trades to show yet: 2 of 7 fills are not counted.')
     ).toBeInTheDocument()
   })
 
@@ -236,7 +232,7 @@ describe('empty and error states', () => {
     })
     renderIt()
     expect(await screen.findByText('No discretionary trades yet')).toBeInTheDocument()
-    expect(screen.getByText(/check that you are logged in to your broker/i)).toBeInTheDocument()
+    expect(screen.getByText(/check your broker login/i)).toBeInTheDocument()
     expect(screen.queryByTestId('discretionary-awaiting-attribution')).not.toBeInTheDocument()
     // the unresolved list stays collapsed
     expect(screen.queryByText('No unresolved fills.')).not.toBeInTheDocument()
@@ -257,7 +253,7 @@ describe('empty and error states', () => {
     renderIt()
     await screen.findByText('Closed trades')
     summaryFn.mockResolvedValue(emptySummary())
-    await userEvent.type(screen.getByLabelText('Symbol'), 'ZZZ{Enter}')
+    await userEvent.type(screen.getByRole('textbox', { name: 'Symbol' }), 'ZZZ{Enter}')
     expect(
       await screen.findByText('No discretionary trades match these filters')
     ).toBeInTheDocument()
@@ -327,14 +323,14 @@ describe('populated view', () => {
     await screen.findByText('Net realized (after est. charges)')
     expect(cardValue('Net realized (after est. charges)')).toBe('Rs 47.50')
     expect(cardValue('Gross realized')).toBe('Rs 60.00')
-    expect(cardValue('Total')).toBe('Rs 47.50')
-    expect(cardValue('Unrealized')).toBe('—')
-    expect(screen.getByTestId('unrealized-price-badge')).toHaveTextContent('Not requested')
-    expect(
-      screen.getByText(
-        'net realized only: live prices not requested; net incomplete: 1 trade(s) without a charge estimate'
-      )
-    ).toBeInTheDocument()
+    // the Performance card is gone: unrealized is one line under the net tile, never a number
+    const line = screen.getByTestId('summary-unrealized')
+    expect(line).toHaveTextContent('Unrealized: not requested. Turn on Fetch live prices.')
+    // the "realized only" detail moved to the tooltip of the line
+    expect(line.querySelector('[title="The net above is realized only."]')).not.toBeNull()
+    expect(line).not.toHaveTextContent('Rs')
+    expect(screen.queryByTestId('summary-total')).not.toBeInTheDocument()
+    expect(screen.queryByText('Performance', { selector: '[data-slot="card-title"]' })).toBeNull()
     expect(screen.queryByText(/unrealized not included/)).not.toBeInTheDocument()
     expect(screen.getAllByText(/1 trade\(s\) without a charge estimate/).length).toBeGreaterThan(0)
   })
@@ -361,9 +357,9 @@ describe('populated view', () => {
     // (no charge estimate) is skipped and said so
     expect(screen.getByTestId('equity-chart')).toHaveTextContent('1 points')
     const caption = screen.getByTestId('net-equity-caption')
-    expect(caption).toHaveTextContent('Net realised P&L after estimated charges')
-    expect(caption).toHaveTextContent('Based on 1 completed trade(s)')
-    expect(caption).toHaveTextContent('1 without a net P&L (no charge estimate) are left out')
+    expect(caption).toHaveTextContent('Net P&L after estimated charges')
+    expect(caption).toHaveTextContent('1 completed trade(s)')
+    expect(caption).toHaveTextContent('1 left out (no charge estimate)')
   })
 
   it('shows win rate as a percent and the profit factor', async () => {
@@ -373,21 +369,21 @@ describe('populated view', () => {
     expect(cardValue('Profit factor (net)')).toBe('2.50')
   })
 
-  it('switches the period table between daily, weekly and monthly', async () => {
-    // 10 close dates over 2 months: the medium profile offers all three tabs
+  it('switches the period table between weekly and monthly, with no Daily tab', async () => {
+    // 10 close dates over 2 months: the medium profile offers Weekly and Monthly
     summaryFn.mockResolvedValue(withDays(10, { monthly: monthRows() }))
     renderIt()
     await openAdvanced()
-    await screen.findByRole('tab', { name: 'Daily' })
-    // every one of the 10 fixture days is flagged incomplete
-    expect(screen.getAllByText('incomplete')).toHaveLength(10)
+    await screen.findByRole('tab', { name: 'Weekly' })
+    // the calendar is the per-day view
+    expect(screen.queryByRole('tab', { name: 'Daily' })).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('tab', { name: 'Weekly' }))
     expect(await screen.findByText('2026-W47')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('tab', { name: 'Monthly' }))
     expect(await screen.findAllByText('2026-11')).not.toHaveLength(0)
   })
 
-  it('shows the breakdown tables and the holding durations', async () => {
+  it('shows every breakdown section at once and the holding durations', async () => {
     // every comparison has two or more groups with enough trades behind them
     summaryFn.mockResolvedValue(
       summary({
@@ -400,15 +396,17 @@ describe('populated view', () => {
       })
     )
     renderIt()
+    const card = await screen.findByTestId('breakdowns-card')
+    expect(within(card).queryByRole('tab')).not.toBeInTheDocument()
+    for (const name of ['Symbol', 'Long / Short', 'Product', 'Intraday vs overnight']) {
+      expect(within(card).getByRole('heading', { name })).toBeInTheDocument()
+    }
+    // no click needed: the direction and holding tables are already on the page
+    expect(within(card).getAllByText('Long').length).toBeGreaterThan(0)
+    expect(within(card).getByText('Overnight')).toBeInTheDocument()
     await openAdvanced()
-    await screen.findByText('By symbol')
-    expect(screen.getByText('Long vs Short')).toBeInTheDocument()
-    expect(screen.getByText('By product')).toBeInTheDocument()
-    expect(screen.getByText('Intraday vs overnight')).toBeInTheDocument()
-    expect(screen.getAllByText('Long').length).toBeGreaterThan(0)
-    expect(screen.getByText('Overnight')).toBeInTheDocument()
     const hold = screen.getByTestId('hold-durations')
-    expect(within(hold).getByText('Winners')).toBeInTheDocument()
+    expect(within(hold).getByText('Winners: average hold')).toBeInTheDocument()
     expect(within(hold).getByText('30m')).toBeInTheDocument()
   })
 
@@ -434,7 +432,7 @@ describe('populated view', () => {
     )
     renderIt()
     expect(await screen.findByTestId('trades-truncated')).toHaveTextContent(
-      'Showing 2 of 900 trades'
+      'Showing the newest 2 of 900 trades'
     )
   })
 })
@@ -474,12 +472,15 @@ describe('open positions and price states', () => {
     expect(within(card).getByText('Stale 10m')).toBeInTheDocument()
     expect(within(card).getByText('Cached 2m')).toBeInTheDocument()
     expect(within(card).getByText('No price')).toBeInTheDocument()
-    // The Unrealized card shows the worst price state and flags the unpriced position.
-    expect(screen.getByTestId('unrealized-price-badge')).toHaveTextContent('No price')
-    expect(screen.getByText('1 position(s) unpriced or not listed')).toBeInTheDocument()
-    // a non-zero Unrealized card never sits beside a Total that says it is not included
+    // The Unrealized line shows the worst price state and flags the unpriced position.
+    const line = screen.getByTestId('summary-unrealized')
+    expect(within(line).getByTestId('unrealized-price-badge')).toHaveTextContent('No price')
+    expect(line).toHaveTextContent('Unrealized: Rs 300.00 (1 position(s) unpriced)')
+    // a non-zero Unrealized never sits beside a Total that says it is not included
     expect(screen.queryByText(/unrealized not included/)).not.toBeInTheDocument()
-    expect(cardValue('Net realized + unrealized (partial: 1 positions unpriced)')).toBe('Rs 347.50')
+    expect(screen.getByTestId('summary-total')).toHaveTextContent(
+      'Net realized + unrealized (partial: 1 positions unpriced): Rs 347.50'
+    )
   })
 
   it('adds a fully priced unrealized figure into the total', async () => {
@@ -491,8 +492,9 @@ describe('open positions and price states', () => {
       })
     )
     renderIt()
-    await screen.findByText(/^net realized \+ unrealized; net incomplete/)
-    expect(cardValue('Total')).toBe('Rs 297.50')
+    const total = await screen.findByTestId('summary-total')
+    expect(total).toHaveTextContent('Total: Rs 297.50')
+    expect(screen.getByTestId('summary-unrealized')).toHaveTextContent('Unrealized: Rs 250.00')
   })
 
   it('flags an opening position that is unknown', async () => {
@@ -516,7 +518,7 @@ describe('filters', () => {
   it('sends the symbol filter on Enter', async () => {
     renderIt()
     await screen.findByText('Closed trades')
-    await userEvent.type(screen.getByLabelText('Symbol'), 'TCS{Enter}')
+    await userEvent.type(screen.getByRole('textbox', { name: 'Symbol' }), 'TCS{Enter}')
     await waitFor(() =>
       expect(summaryFn).toHaveBeenLastCalledWith(
         '30d',
@@ -557,12 +559,12 @@ describe('filters', () => {
   it('clears the filters', async () => {
     renderIt()
     await screen.findByText('Closed trades')
-    await userEvent.type(screen.getByLabelText('Symbol'), 'TCS{Enter}')
+    await userEvent.type(screen.getByRole('textbox', { name: 'Symbol' }), 'TCS{Enter}')
     await userEvent.click(await screen.findByRole('button', { name: 'Clear filters' }))
     await waitFor(() =>
       expect(summaryFn).toHaveBeenLastCalledWith('30d', undefined, {}, false, 'all')
     )
-    expect(screen.getByLabelText('Symbol')).toHaveValue('')
+    expect(screen.getByRole('textbox', { name: 'Symbol' })).toHaveValue('')
   })
 
   it('passes a custom range through', async () => {
@@ -595,9 +597,13 @@ describe('unresolved fills warning', () => {
   it('shows a one-line warning with the count only when fills in the range are unattributed', async () => {
     summaryFn.mockResolvedValue(summary({ unresolved_in_range: unresolvedInRange() }))
     renderIt()
-    const banner = await screen.findByTestId('data-warning')
+    const banner = await screen.findByTestId('unmatched-fills-note')
     expect(banner).toHaveTextContent(
-      '3 fills in this period could not be matched to a trade and are left out, so your P&L and trade count may be incomplete.'
+      '3 fills in this period are not counted, so P&L and trade count may be incomplete.'
+    )
+    expect(banner).toHaveAttribute(
+      'title',
+      expect.stringContaining('could not be matched to a manual trade')
     )
     // nothing is read until the details are asked for
     expect(unresolvedFn).not.toHaveBeenCalled()
@@ -612,13 +618,14 @@ describe('unresolved fills warning', () => {
     renderIt()
     await screen.findByText('Closed trades')
     expect(screen.queryByTestId('data-warning')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('unmatched-fills-note')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'View details' })).not.toBeInTheDocument()
   })
 
   it('removes the old standalone Unresolved fills section', async () => {
     summaryFn.mockResolvedValue(summary({ unresolved_in_range: unresolvedInRange() }))
     renderIt()
-    await screen.findByTestId('data-warning')
+    await screen.findByTestId('unmatched-fills-note')
     expect(screen.queryByTestId('discretionary-unresolved')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Unresolved fills' })).not.toBeInTheDocument()
   })
@@ -727,7 +734,7 @@ describe('trade fills dialog', () => {
         .map((e) => e.textContent)
     ).toEqual(['+10', '0'])
     expect(
-      within(dialog).getByText(/Every fill that opened, added to, reduced or closed this trade/)
+      within(dialog).getByText(/Fills by broker order, with net position after each/)
     ).toBeInTheDocument()
     expect(within(dialog).queryByText(/legs/)).not.toBeInTheDocument()
     expect(fillsFn).toHaveBeenCalledWith(11, 'b1')
@@ -912,13 +919,15 @@ describe('incomplete net in the tables', () => {
       })
     )
     renderIt()
-    await openAdvanced()
-    const bySymbol = (await screen.findByText('By symbol')).parentElement as HTMLElement
-    expect(within(bySymbol).getAllByText('incomplete')).toHaveLength(1)
-    const bySide = screen.getByText('Long vs Short').parentElement as HTMLElement
-    expect(within(bySide).getAllByText('incomplete')).toHaveLength(1)
-    const byProduct = screen.getByText('By product').parentElement as HTMLElement
-    expect(within(byProduct).queryByText('incomplete')).not.toBeInTheDocument()
+    const card = await screen.findByTestId('breakdowns-card')
+    // the Symbol and Long / Short sections each carry one mark; Product has none
+    const symbol = within(card).getByTestId('breakdown-section-symbol')
+    expect(within(symbol).getAllByText('incomplete')).toHaveLength(1)
+    expect(within(card).getAllByText('incomplete')).toHaveLength(2)
+    const side = within(card).getByTestId('breakdown-section-side')
+    expect(within(side).getAllByText('incomplete')).toHaveLength(1)
+    const product = within(card).getByTestId('breakdown-section-product')
+    expect(within(product).queryByText('incomplete')).not.toBeInTheDocument()
   })
 
   it('flags the Total as incomplete and as partial when positions are unpriced', async () => {
@@ -931,10 +940,12 @@ describe('incomplete net in the tables', () => {
       })
     )
     renderIt()
-    await screen.findByText('Net realized + unrealized (partial: 1 positions unpriced)')
-    expect(
-      screen.getByText('partial total; net incomplete: 1 trade(s) without a charge estimate')
-    ).toBeInTheDocument()
+    const total = await screen.findByTestId('summary-total')
+    expect(total).toHaveTextContent('Net realized + unrealized (partial: 1 positions unpriced)')
+    // the incompleteness of the net stays on the net tile
+    expect(screen.getByTestId('summary-net')).toHaveTextContent(
+      '1 trade(s) without a charge estimate: not complete'
+    )
   })
 })
 
@@ -949,11 +960,15 @@ describe('labels and layout', () => {
       'Avg win (net)',
       'Avg loss (net)',
       'Expectancy (net)',
-      'Total won (net)',
-      'Total lost (net)',
     ]) {
       expect(screen.getByText(label, { selector: 'div' })).toBeInTheDocument()
     }
+    // total won and total lost are the hint of the Profit factor tile (net, completed trades)
+    expect(screen.getByTestId('summary-key-stats')).toHaveTextContent(
+      /won Rs [\d.,-]+ \/ lost Rs [\d.,-]+ \(net, completed trades\)/
+    )
+    expect(screen.queryByText('Total won (net)')).not.toBeInTheDocument()
+    expect(screen.queryByText('Total lost (net)')).not.toBeInTheDocument()
     // the old gross labels would misstate the basis
     for (const label of ['Avg win (gross)', 'Avg loss (gross)', 'Gross profit', 'Gross loss']) {
       expect(screen.queryByText(label)).not.toBeInTheDocument()
@@ -981,23 +996,27 @@ describe('labels and layout', () => {
 
   it('keeps every breakdown column reachable: one column layout, scrollable tables', async () => {
     renderIt()
-    await openAdvanced()
-    const bySymbol = (await screen.findByText('By symbol')).parentElement as HTMLElement
-    for (const name of ['Gross P&L', 'Net of charges', 'Trades']) {
-      expect(within(bySymbol).getByRole('columnheader', { name })).toBeInTheDocument()
+    const card = await screen.findByTestId('breakdowns-card')
+    const tables = within(card).getAllByRole('table')
+    expect(tables.length).toBeGreaterThan(0)
+    for (const table of tables) {
+      for (const name of ['Gross P&L', 'Net of charges', 'Trades']) {
+        expect(within(table).getByRole('columnheader', { name })).toBeInTheDocument()
+      }
+      expect(table.closest('.min-w-0.overflow-x-auto')).not.toBeNull()
     }
-    expect(bySymbol).toHaveClass('min-w-0', 'overflow-x-auto')
-    expect(bySymbol.parentElement).toHaveClass('grid-cols-1')
-    expect(bySymbol.parentElement?.className).not.toMatch(/(^|\s)lg:grid-cols-2/)
+    expect(card.querySelectorAll('table')).toHaveLength(tables.length)
   })
 
   it('lets the section subtitles wrap on a narrow screen', async () => {
     renderIt()
-    for (const id of ['advanced-analysis-toggle', 'performance-breakdowns-toggle']) {
+    for (const id of ['advanced-analysis-toggle']) {
       const toggle = await screen.findByTestId(id)
       expect(toggle).toHaveClass('h-auto', 'whitespace-normal')
       expect(toggle.querySelector('span')).toHaveClass('min-w-0', 'break-words')
     }
+    // the breakdowns are one card now, with no collapsible toggle of their own
+    expect(screen.queryByTestId('performance-breakdowns-toggle')).not.toBeInTheDocument()
   })
 
   it('lets a keyboard or screen reader user open a trade: a real button expands the detail row', async () => {
@@ -1185,7 +1204,7 @@ describe('completed trades (a position from flat to flat)', () => {
 })
 
 describe("today's performance", () => {
-  it('is shown above the metric cards and opens the fills of a closed row with the build id', async () => {
+  it('is one line under the headline figures, with no panel and no second closed-trades table', async () => {
     summaryFn.mockResolvedValue(
       summary({
         today: emptyToday({
@@ -1197,15 +1216,16 @@ describe("today's performance", () => {
       })
     )
     renderIt()
-    const section = await screen.findByTestId('discretionary-today')
-    expect(within(section).getByText("Today's closed trades")).toBeInTheDocument()
-    // Today's figures sit in the summary header, right after the headline figures and before the groups
+    const line = await screen.findByTestId('today-line')
+    expect(line).toHaveTextContent('net Rs 437.50 after estimated charges, 1 closed')
+    expect(screen.queryByTestId('discretionary-today')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('today-closed-table')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('today-closed-row')).not.toBeInTheDocument()
+    // the line sits right after the headline figures
     const cards = screen.getByText('Net realized (after est. charges)')
-    expect(cards.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    const groups = screen.getByTestId('discretionary-groups-performance')
-    expect(section.compareDocumentPosition(groups) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    await userEvent.click(within(section).getByTestId('today-closed-row'))
-    await waitFor(() => expect(fillsFn).toHaveBeenCalledWith(11, 'b1'))
+    expect(cards.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // the closed trade is reached in the Closed trades table (row click opens its fills)
+    expect(screen.getByTestId('ledger-card')).toBeInTheDocument()
   })
 
   it('coexists with the awaiting-attribution state: zeros and the pending note', async () => {
@@ -1240,17 +1260,15 @@ describe("today's performance", () => {
     })
     renderIt()
     expect(await screen.findByTestId('discretionary-awaiting-attribution')).toBeInTheDocument()
-    const section = screen.getByTestId('discretionary-today')
-    expect(within(section).getByTestId('today-pending')).toHaveTextContent(
-      'Earliest attribution at 11:20 IST'
-    )
-    expect(within(section).getByText('No trades closed today yet')).toBeInTheDocument()
+    const section = screen.getByTestId('today-line')
+    expect(within(section).getByTestId('today-pending')).toHaveTextContent('Earliest: 11:20 IST')
+    expect(within(section).getByTestId('today-summary')).toHaveTextContent('no closed trades')
   })
 
   it('is absent when an older server sends no today block', async () => {
     renderIt()
     await screen.findByText('Net realized (after est. charges)')
-    expect(screen.queryByTestId('discretionary-today')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('today-line')).not.toBeInTheDocument()
   })
 })
 
@@ -1278,16 +1296,18 @@ describe('dashboard additions', () => {
     await screen.findByTestId('discretionary-summary')
     await openAdvanced()
     const risk = screen.getByTestId('risk-strip')
-    const how = screen.getByTestId('how-you-trade')
-    expect(screen.getByTestId('daily-pnl-chart')).toBeInTheDocument()
+    const how = screen.getByTestId('breakdowns-card')
+    expect(screen.queryByTestId('daily-pnl-chart')).not.toBeInTheDocument()
     expect(screen.getByTestId('discretionary-sample-note')).toHaveTextContent(
       'Ratios based on 2 completed trades over 1 trading day.'
     )
-    // How you trade is under Performance breakdowns, above the risk strip in Advanced analysis
+    // the one breakdown card is above the risk strip in Advanced analysis
     expect(how.compareDocumentPosition(risk) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    // the existing breakdown tables stay, so no table is shown twice
-    expect(screen.getByText('By symbol')).toBeInTheDocument()
-    expect(within(how).queryByText('By symbol')).not.toBeInTheDocument()
+    // each section shows one table, and no section appears twice
+    expect(how.querySelectorAll('table')).toHaveLength(
+      how.querySelectorAll('[data-testid^="breakdown-section-"]').length
+    )
+    expect(how.querySelectorAll('[role="tab"]')).toHaveLength(0)
   })
 
   it('opens the fills of the largest win with the summary build id', async () => {
@@ -1338,9 +1358,7 @@ describe('dashboard additions', () => {
     })
     renderIt()
     const block = await screen.findByTestId('discretionary-awaiting-attribution')
-    expect(block).toHaveTextContent(
-      'No trades to show yet: 5 of the 5 fills in this period could not be matched to a trade, so their P&L is left out.'
-    )
+    expect(block).toHaveTextContent('No trades to show yet: 5 of 5 fills are not counted.')
     expect(screen.queryByTestId('provisional-panel')).not.toBeInTheDocument()
     expect(screen.queryByText(/Pending attribution: provisional figures/)).not.toBeInTheDocument()
     expect(screen.queryByTestId('dq-awaiting')).not.toBeInTheDocument()
@@ -1480,7 +1498,11 @@ describe('category selector', () => {
     const block = await screen.findByTestId('classification')
     expect(block).toHaveTextContent('1 intraday, 0 swing, 1 unclassified')
     expect(block).toHaveTextContent('1 unclassified position(s) are included in All trades only.')
-    expect(block).toHaveTextContent('unclassified (reason shown) is never guessed')
+    // the server's full category note moved to the tooltip of the short line
+    expect(block).toHaveTextContent('Intraday: closed in its opening session')
+    expect(
+      block.querySelector('[title*="unclassified (reason shown) is never guessed"]')
+    ).not.toBeNull()
     expect(within(block).getByTestId('unclassified-count')).toHaveAttribute(
       'title',
       '1: the fill that opened it is not in the ledger'
@@ -1493,9 +1515,7 @@ describe('category selector', () => {
     )
     renderIt()
     await userEvent.click(await screen.findByRole('button', { name: 'Swing' }))
-    expect(await screen.findByTestId('classification')).toHaveTextContent(
-      'are left out of this view; they appear in All trades only'
-    )
+    expect(await screen.findByTestId('classification')).toHaveTextContent('show in All trades only')
   })
 
   it('does not break when the classification block is null', async () => {
@@ -1550,16 +1570,20 @@ describe('new analysis blocks', () => {
     expect(rows[1]).toHaveTextContent('—')
   })
 
-  it('shows drawdown in rupees without a percentage, and the streaks', async () => {
+  it('shows the drawdown once, in rupees without a percentage, and the streaks', async () => {
     summaryFn.mockResolvedValue(withBlocks())
     renderIt()
     await openAdvanced()
     const strip = await screen.findByTestId('risk-strip')
-    // the maximum drawdown is in the summary only; the strip keeps the current drawdown
+    // one net drawdown pair, in the summary's Max drawdown tile; the strip carries none
     expect(within(strip).queryByTestId('risk-drawdown')).not.toBeInTheDocument()
+    expect(within(strip).queryByTestId('risk-current-drawdown')).not.toBeInTheDocument()
     expect(screen.getByTestId('summary-drawdown')).toHaveTextContent('-Rs 320.50')
-    expect(within(strip).getByTestId('risk-current-drawdown')).toHaveTextContent('-Rs 120.00')
-    expect(strip.textContent).not.toMatch(/%/)
+    expect(screen.getByTestId('summary-current-drawdown')).toHaveTextContent(
+      'now Rs 120.00 below the highest point (net, by close time)'
+    )
+    // no drawdown percentage anywhere (there is no equity baseline)
+    expect(strip.textContent).not.toMatch(/drawdown[^.]*\d%/i)
     expect(within(strip).getByTestId('risk-win-streak')).toHaveTextContent('3')
     expect(within(strip).getByTestId('risk-loss-streak')).toHaveTextContent('2')
     expect(within(strip).getByTestId('risk-current-streak')).toHaveTextContent('2 losses')
@@ -1590,7 +1614,7 @@ describe('new analysis blocks', () => {
     expect(within(tm).getByTestId('tm-median-net')).toHaveTextContent('Rs 42.50')
     expect(within(tm).getByTestId('cost-pct')).toHaveTextContent('no gross profit')
     expect(within(tm).getByTestId('cost-pct')).not.toHaveTextContent(/\d%/)
-    expect(tm).toHaveTextContent('1 break-even position(s)')
+    expect(screen.getByTestId('risk-strip')).toHaveTextContent('1 break-even position(s)')
   })
 
   it('shows the charges percentage when there is gross profit', async () => {
@@ -1603,8 +1627,8 @@ describe('new analysis blocks', () => {
     expect(screen.getByTestId('summary-charges')).toBeInTheDocument()
   })
 
-  it('shows the monthly and weekday tables and bars, with signs and the close-date basis', async () => {
-    // 10 close dates over 2 months: monthly and weekday tables are part of this profile
+  it('has no month or close-date weekday chart or card; the month table keeps positions and win rate', async () => {
+    // 10 close dates over 2 months: the month table is part of this profile
     const base = withBlocks()
     summaryFn.mockResolvedValue({
       ...base,
@@ -1613,25 +1637,26 @@ describe('new analysis blocks', () => {
     })
     renderIt()
     await openAdvanced()
-    const card = await screen.findByTestId('calendar-card')
+    await screen.findByTestId('period-card')
+    expect(screen.queryByTestId('calendar-card')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('monthly-chart')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('weekday-chart')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Net P&L by weekday/)).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('tab', { name: 'Monthly (by position close)' }))
+    const card = screen.getByTestId('period-card')
+    // the month rows only: the weekday (close date) rows are not in the table
     const rows = within(card).getAllByTestId('calendar-row')
-    expect(rows).toHaveLength(5)
+    expect(rows).toHaveLength(2)
     expect(rows[0]).toHaveTextContent('2026-10')
     expect(rows[0]).toHaveTextContent('75.0%')
     expect(rows[1]).toHaveTextContent('Rs -150.00')
-    // a weekday without positions shows a dash for win rate and net
-    expect(rows[3]).toHaveTextContent('Tue')
-    expect(rows[3]).toHaveTextContent('—')
-    expect(within(card).getByRole('columnheader', { name: 'Weekday' })).toBeInTheDocument()
-    const monthly = within(card).getByTestId('monthly-chart')
-    const bars = within(monthly).getAllByTestId('net-bar')
-    expect(bars[0]).toHaveTextContent('+Rs 460.00')
-    expect(bars[1]).toHaveTextContent('-Rs 150.00')
-    expect(monthly).toHaveTextContent('Net P&L in rupees (Rs)')
-    expect(within(card).getByTestId('weekday-chart')).toBeInTheDocument()
+    expect(within(card).getByRole('columnheader', { name: 'Positions' })).toBeInTheDocument()
+    expect(within(card).getByRole('columnheader', { name: 'Win rate' })).toBeInTheDocument()
+    expect(within(card).queryByRole('columnheader', { name: 'Weekday' })).not.toBeInTheDocument()
+    expect(within(card).queryByTestId('net-bar')).not.toBeInTheDocument()
   })
 
-  it('shows the symbol chart from the by-symbol breakdown', async () => {
+  it('shows the symbol table from the by-symbol breakdown, with no bar chart', async () => {
     summaryFn.mockResolvedValue(
       withBlocks({
         by_symbol: [
@@ -1641,12 +1666,14 @@ describe('new analysis blocks', () => {
       })
     )
     renderIt()
-    await openAdvanced()
-    const chart = await screen.findByTestId('symbol-chart')
-    const bars = within(chart).getAllByTestId('net-bar')
-    expect(bars[0]).toHaveTextContent('RELIANCE')
-    expect(bars[0]).toHaveTextContent('+Rs 300.00')
-    expect(bars[1]).toHaveTextContent('-Rs 80.00')
+    const card = await screen.findByTestId('breakdowns-card')
+    expect(screen.queryByTestId('symbol-chart')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('net-bar')).not.toBeInTheDocument()
+    const rows = within(card).getAllByRole('row').slice(1)
+    expect(rows[0]).toHaveTextContent('RELIANCE')
+    expect(rows[0]).toHaveTextContent('Rs 300.00')
+    expect(rows[0]).toHaveTextContent('3')
+    expect(rows[1]).toHaveTextContent('Rs -80.00')
   })
 
   it('does not crash and shows nothing misleading when every new block is null', async () => {
@@ -1681,7 +1708,7 @@ describe('new analysis blocks', () => {
     )
     renderIt()
     expect(await screen.findByTestId('net-unavailable-note')).toHaveTextContent(
-      '1 completed trade(s) have no net P&L'
+      '1 completed trade(s) have no charge estimate'
     )
   })
 
@@ -1721,8 +1748,10 @@ describe('MAE / MFE', () => {
     expect(within(panel).getByTestId('excursions-coverage')).toHaveTextContent(
       'unsupported segment'
     )
-    expect(within(panel).getByTestId('excursions-precision')).toHaveTextContent(
-      'Minute-bar based lower bound'
+    // the precision note moved to the tooltip of the coverage line
+    expect(within(panel).getByTestId('excursions-coverage')).toHaveAttribute(
+      'title',
+      expect.stringContaining('Minute-bar based lower bound')
     )
   })
 
@@ -1804,7 +1833,10 @@ describe('MAE / MFE', () => {
     expect(panel).not.toHaveTextContent('best move for you')
     expect(screen.queryByTestId('profit-capture-block')).not.toBeInTheDocument()
     // the lower-bound text stays
-    expect(screen.getByTestId('excursions-precision')).toHaveTextContent('lower bound')
+    expect(screen.getByTestId('excursions-coverage')).toHaveAttribute(
+      'title',
+      expect.stringContaining('lower bound')
+    )
   })
 
   it('shows dashes while the excursions have not loaded, not zero', async () => {
@@ -2101,7 +2133,7 @@ describe('closed trades table', () => {
     )
     renderIt()
     expect(await screen.findByTestId('trades-truncated')).toHaveTextContent(
-      'Showing 500 of 640 trades'
+      'Showing the newest 500 of 640 trades'
     )
   })
 
@@ -2117,7 +2149,7 @@ describe('export CSV', () => {
     const { summaryParams } = await import('@/api/discretionaryPnl')
     renderIt({ period: 'custom', range: { start: '2026-11-01', end: '2026-11-10' } })
     await screen.findByText('Closed trades')
-    await userEvent.type(screen.getByLabelText('Symbol'), 'TCS{Enter}')
+    await userEvent.type(screen.getByRole('textbox', { name: 'Symbol' }), 'TCS{Enter}')
     await userEvent.click(screen.getByRole('button', { name: 'Intraday' }))
     await waitFor(() =>
       expect(screen.getByTestId('export-csv').getAttribute('href')).toContain('category=intraday')
@@ -2207,8 +2239,7 @@ describe('no net P&L: ratios are null, shown as a dash and never as 0', () => {
     expect(screen.getByText('no completed trade has a net P&L')).toBeInTheDocument()
     expect(screen.queryByText('0.0%')).not.toBeInTheDocument()
     expect(screen.queryByText('0.00')).not.toBeInTheDocument()
-    await openAdvanced()
-    const bySymbol = (await screen.findByText('By symbol')).parentElement as HTMLElement
-    expect(within(bySymbol).getAllByText('—').length).toBeGreaterThan(0)
+    const card = await screen.findByTestId('breakdowns-card')
+    expect(within(card).getAllByText('—').length).toBeGreaterThan(0)
   })
 })

@@ -94,9 +94,10 @@ describe('empty range states', () => {
     expect(screen.queryByText(/No trades to show yet/)).not.toBeInTheDocument()
     // the fills counted belong to the first reliable day, not to the range asked for
     expect(screen.queryByTestId('data-warning')).not.toBeInTheDocument()
-    expect(screen.queryByText(/could not be matched to a trade, so/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/are not counted/)).not.toBeInTheDocument()
+    expect(screen.queryByTestId('unmatched-fills-note')).not.toBeInTheDocument()
     expect(screen.queryByText('No discretionary trades yet')).not.toBeInTheDocument()
-    expect(screen.queryByText(/logged in to your broker/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/check your broker login/i)).not.toBeInTheDocument()
   })
 
   it('an empty range of a ledger that has trades elsewhere says so and not "no trades yet"', async () => {
@@ -125,7 +126,7 @@ describe('empty range states', () => {
     summaryFn.mockResolvedValue(emptySummary())
     renderIt({ period: 'all', range: undefined })
     expect(await screen.findByText('No discretionary trades yet')).toBeInTheDocument()
-    expect(screen.getByText(/logged in to your broker/i)).toBeInTheDocument()
+    expect(screen.getByText(/check your broker login/i)).toBeInTheDocument()
     expect(screen.queryByText(NO_CLOSED)).not.toBeInTheDocument()
   })
 
@@ -176,7 +177,7 @@ describe('empty range states', () => {
     expect(within(header).getByTestId('summary-count')).toHaveTextContent('0')
     const stats = screen.getByTestId('discretionary-statistics')
     expect(stats.textContent ?? '').not.toContain('Rs 0.00')
-    expect(screen.getByTestId('group-performance').textContent ?? '').not.toContain('Rs 0.00')
+    expect(screen.getByTestId('summary-unrealized').textContent ?? '').not.toContain('Rs 0.00')
     // the summary cards (the Today panel is the real current session and keeps its own figures)
     for (const id of ['summary-net', 'summary-count', 'summary-win-rate']) {
       expect(within(header).getByTestId(id).textContent ?? '').not.toContain('Rs 0.00')

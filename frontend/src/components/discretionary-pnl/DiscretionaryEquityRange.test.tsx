@@ -7,6 +7,7 @@ import {
   monthRows,
   riskBlock,
   summary,
+  trade,
   tradingBreakdowns,
   weekdayRows,
 } from '@/test/discretionaryFixtures'
@@ -142,9 +143,9 @@ describe('Equity Curve range choices', () => {
     for (const key of ['period', '1m', '3m', '6m', 'all']) {
       expect(within(choices).getByTestId(`equity-range-${key}`)).toBeEnabled()
     }
-    expect(within(card).getByTestId('equity-range-label')).toHaveTextContent(
-      'Report period: 16 Nov 2026 to 23 Nov 2026.'
-    )
+    // 3 close dates: one curve, drawn per closed trade; the report period is stated above it
+    expect(within(card).getByTestId('equity-chart')).toHaveAttribute('data-mode', 'position')
+    expect(within(card).queryByTestId('equity-range-label')).not.toBeInTheDocument()
     const netBefore = screen.getByTestId('summary-net').textContent
 
     await userEvent.click(within(card).getByTestId('equity-range-3m'))
@@ -176,13 +177,11 @@ describe('Equity Curve range choices', () => {
     expect(screen.getByText(/16 Nov 2026 - 23 Nov 2026/)).toBeInTheDocument()
     // and it says why its total is not the report period's net
     expect(within(card).getByTestId('equity-range-label')).toHaveTextContent(
-      'This range is separate from the report period above (16 Nov 2026 to 23 Nov 2026), so its total can differ'
+      'Differs from the report period (16 Nov 2026 to 23 Nov 2026)'
     )
-    expect(within(card).getByTestId('equity-net-reconciliation')).toHaveAttribute(
-      'data-kind',
-      'match'
-    )
-    expect(within(card).getByTestId('equity-net-reconciliation')).toHaveTextContent('of this range')
+    // the last point equals the range's net: nothing to warn about, so no line is shown
+    expect(within(card).queryByTestId('equity-net-reconciliation')).not.toBeInTheDocument()
+    expect(chart).toHaveAttribute('data-mode', 'day')
   })
 
   it('starts All at the first tracked date', async () => {
@@ -263,7 +262,7 @@ describe('Equity Curve range choices', () => {
     )
     await userEvent.click(screen.getByTestId('equity-range-6m'))
     expect(await screen.findByTestId('equity-range-empty', {}, SLOW)).toHaveTextContent(
-      'fewer than two trading days'
+      'Fewer than two trading days'
     )
     expect(screen.getByTestId('equity-curve-card')).not.toHaveTextContent('Rs 0.00')
   })
@@ -274,13 +273,18 @@ describe('Equity Curve range choices', () => {
     await screen.findByText(/Range shown/, {}, SLOW)
     summaryFn.mockClear()
     await userEvent.click(screen.getByTestId('equity-range-period'))
-    expect(await screen.findByText(/Report period: 16 Nov 2026 to 23 Nov 2026/)).toBeInTheDocument()
+    // back on the report period's own curve (per trade for 3 dates), with no new request
+    expect(
+      await within(screen.getByTestId('equity-curve-card')).findByTestId('equity-chart')
+    ).toHaveAttribute('data-mode', 'position')
+    expect(screen.queryByText(/Range shown/)).not.toBeInTheDocument()
     expect(screen.queryByText(/This range is separate/)).not.toBeInTheDocument()
+    expect(summaryFn).not.toHaveBeenCalled()
   })
 })
 
 describe('missing days are flagged, never zero', () => {
-  it('names days whose broker trades were not collected and leaves them out of the daily bars', async () => {
+  it('names days whose broker trades were not collected, on the day curve', async () => {
     serve('2026-11-16', {
       sync_health: {
         last_successful_sync: null,
@@ -290,27 +294,14 @@ describe('missing days are flagged, never zero', () => {
     })
     renderIt()
     const card = await screen.findByTestId('equity-curve-card')
-    expect(within(card).getByTestId('equity-uncollected-days')).toHaveTextContent(
+    // 3 close dates draw per trade; the day curve (and its flagged gaps) is the range curve
+    await userEvent.click(within(card).getByTestId('equity-range-1m'))
+    expect(await within(card).findByTestId('equity-uncollected-days', {}, SLOW)).toHaveTextContent(
       'Your broker trades were not collected on 18 Nov. Those days have no point'
     )
-    // 16, 17, 19 are bars; 18 is a flagged gap, 20 (a weekday with no row) a plain gap
-    expect(within(card).getAllByTestId('daily-pnl-bar')).toHaveLength(3)
-    expect(within(card).getAllByTestId('daily-pnl-uncollected')).toHaveLength(1)
-    expect(within(card).getByTestId('daily-pnl-uncollected')).toHaveAttribute(
-      'title',
-      expect.stringContaining('no figure for this day')
-    )
-    expect(within(card).queryByTestId('daily-pnl-gap')).not.toBeInTheDocument()
-  })
-
-  it('leaves a gap for a weekday without a row, between the real days', async () => {
-    renderIt()
-    const card = await screen.findByTestId('equity-curve-card')
-    const bars = within(card).getAllByTestId('daily-pnl-bar')
-    expect(bars).toHaveLength(3)
-    // 18 November (Wednesday) is a gap with no bar and no zero
-    expect(within(card).getAllByTestId('daily-pnl-gap').length).toBeGreaterThanOrEqual(1)
-    expect(within(card).getByTestId('daily-pnl-chart')).toHaveTextContent('not a day of zero')
+    expect(within(card).getByTestId('equity-chart')).toHaveAttribute('data-mode', 'day')
+    expect(within(card).queryByTestId('daily-pnl-chart')).not.toBeInTheDocument()
+    expect(card).not.toHaveTextContent('Rs 0.00')
   })
 })
 
@@ -319,8 +310,15 @@ describe('calendar month, equity curve end and report period net agree on the sa
     summaryFn.mockImplementation(
       (_p: string, range: { start: string; end: string } | undefined) => {
         const r = range ?? { start: '2026-11-01', end: TODAY }
+        const start = r.start < '2026-11-01' ? '2026-11-01' : r.start
+        const rows = ALL_ROWS.filter(([d]) => d >= start && d <= r.end)
         return Promise.resolve(
-          answer(ALL_ROWS, r.start < '2026-11-01' ? '2026-11-01' : r.start, r.end)
+          answer(ALL_ROWS, start, r.end, {
+            // the trades behind the rows, so the per-trade curve ends at the same net
+            trades: rows.map(([d, n], i) =>
+              trade({ id: i + 1, trade_date: d, closed_at: `${d} 10:00:00`, net_pnl: n })
+            ),
+          })
         )
       }
     )
@@ -330,20 +328,25 @@ describe('calendar month, equity curve end and report period net agree on the sa
     const curve = within(screen.getByTestId('equity-curve-card')).getByTestId('equity-chart')
     expect(Number(curve.getAttribute('data-last'))).toBeCloseTo(85.5, 2)
     expect(screen.getByTestId('summary-net')).toHaveTextContent('Rs 85.50')
+    // all three agree, so there is no reconciliation line at all
     expect(
-      within(screen.getByTestId('equity-curve-card')).getByTestId('equity-net-reconciliation')
-    ).toHaveAttribute('data-kind', 'match')
+      within(screen.getByTestId('equity-curve-card')).queryByTestId('equity-net-reconciliation')
+    ).not.toBeInTheDocument()
   })
 })
 
 describe('Trading statistics hierarchy', () => {
-  it('puts expectancy, profit factor and drawdown above the supporting figures, without repeating the summary', async () => {
+  it('puts expectancy, profit factor and drawdown in a compact row under the headline, once, and the supporting figures in the card', async () => {
     renderIt()
     const stats = await screen.findByTestId('discretionary-statistics')
-    const primary = within(stats).getByTestId('stats-primary')
+    const header = screen.getByTestId('discretionary-summary')
+    const keyRow = within(header).getByTestId('summary-key-stats')
+    const headline = within(header).getByTestId('summary-net').parentElement as HTMLElement
     const support = within(stats).getByTestId('stats-supporting')
+    expect(within(stats).queryByTestId('stats-primary')).not.toBeInTheDocument()
     for (const label of ['Expectancy (net)', 'Profit factor (net)', 'Max drawdown (net)']) {
-      expect(within(primary).getByText(label)).toBeInTheDocument()
+      expect(within(keyRow).getByText(label)).toBeInTheDocument()
+      expect(within(stats).queryByText(label)).not.toBeInTheDocument()
     }
     for (const label of [
       'Gross realized',
@@ -354,17 +357,20 @@ describe('Trading statistics hierarchy', () => {
       'Largest loser',
     ]) {
       expect(within(support).getByText(label)).toBeInTheDocument()
-      expect(within(primary).queryByText(label)).not.toBeInTheDocument()
+      expect(within(keyRow).queryByText(label)).not.toBeInTheDocument()
     }
-    expect(primary.compareDocumentPosition(support) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    // the primary tiles are marked larger; one home per metric, and nothing of the summary here
+    // the row follows the three headline cards directly, and the statistics card is below it
+    expect(headline.compareDocumentPosition(keyRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(keyRow.compareDocumentPosition(stats) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // compact tiles, and nothing of the headline repeated in the row or the card
     expect(
-      [...primary.querySelectorAll('[data-size]')].every(
-        (e) => e.getAttribute('data-size') === 'primary'
+      [...keyRow.querySelectorAll('[data-size]')].every(
+        (e) => e.getAttribute('data-size') === 'support'
       )
     ).toBe(true)
     for (const label of ['Net realized', 'Completed trades', 'Win rate']) {
       expect(within(stats).queryByText(new RegExp(`^${label}`))).not.toBeInTheDocument()
+      expect(within(keyRow).queryByText(new RegExp(`^${label}`))).not.toBeInTheDocument()
     }
     for (const label of ['Expectancy (net)', 'Profit factor (net)', 'Max drawdown (net)']) {
       expect(screen.getAllByText(label)).toHaveLength(1)
@@ -403,7 +409,7 @@ describe('breakdowns appear only with something to compare', () => {
     renderIt()
     await screen.findByTestId('discretionary-statistics')
     expect(screen.queryByTestId('calendar-card')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('performance-breakdowns')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('breakdowns-card')).not.toBeInTheDocument()
     expect(screen.queryByText('Performance breakdowns')).not.toBeInTheDocument()
     expect(screen.queryByTestId('more-breakdowns')).not.toBeInTheDocument()
     expect(screen.queryByText(/Net P&L by weekday/)).not.toBeInTheDocument()
@@ -413,7 +419,7 @@ describe('breakdowns appear only with something to compare', () => {
     summaryFn.mockResolvedValue(rich({ weekday: [], monthly: [] }))
     renderIt()
     await screen.findByTestId('discretionary-statistics')
-    expect(screen.queryByTestId('performance-breakdowns')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('breakdowns-card')).not.toBeInTheDocument()
   })
 
   it('does not point at More breakdowns when that section is not shown', async () => {
@@ -424,14 +430,13 @@ describe('breakdowns appear only with something to compare', () => {
     if (note) expect(note).not.toHaveTextContent('More breakdowns')
   })
 
-  it('shows the weekday chart, titled for what is in it, once two weekdays have trades', async () => {
-    summaryFn.mockResolvedValue(rich({ weekday: weekdayRows() }))
+  it('has no month or close-date weekday card even when the server sends their rows', async () => {
+    summaryFn.mockResolvedValue(rich({ weekday: weekdayRows(), monthly: monthRows() }))
     renderIt()
-    const section = await screen.findByTestId('performance-breakdowns')
-    const card = within(section).getByTestId('calendar-card')
-    expect(card).toHaveTextContent('Net P&L by weekday')
-    expect(card).not.toHaveTextContent('Net P&L by month')
-    expect(within(card).queryByTestId('monthly-chart')).not.toBeInTheDocument()
-    expect(within(card).getByTestId('weekday-chart')).toBeInTheDocument()
+    await screen.findByTestId('discretionary-statistics')
+    expect(screen.queryByTestId('calendar-card')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('weekday-chart')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('monthly-chart')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Net P&L by (month|weekday)/)).not.toBeInTheDocument()
   })
 })

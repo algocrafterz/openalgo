@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DiscretionaryTrade } from '@/api/discretionaryPnl'
 import { exportCsvUrl } from '@/api/discretionaryPnl'
+import { fmtNetMoney, fmtProfitFactor } from '@/lib/discretionaryPnlView'
 import {
   breakdownRow,
   consistency,
@@ -143,10 +144,12 @@ describe('summary header', () => {
     // the supporting row moved: nothing of it is in the header any more
     expect(screen.queryByTestId('summary-support')).not.toBeInTheDocument()
     const stats = screen.getByTestId('discretionary-statistics')
+    // the second row under the headline carries these three, once, and not the statistics card
+    for (const label of ['Profit factor (net)', 'Expectancy (net)', 'Max drawdown (net)']) {
+      expect(within(header).getAllByText(label)).toHaveLength(1)
+      expect(within(stats).queryByText(label)).not.toBeInTheDocument()
+    }
     for (const label of [
-      'Profit factor (net)',
-      'Expectancy (net)',
-      'Max drawdown (net)',
       'Gross realized',
       'Charges (est.)',
       'Avg win (net)',
@@ -157,44 +160,67 @@ describe('summary header', () => {
       expect(within(header).queryByText(label)).not.toBeInTheDocument()
       expect(within(stats).getAllByText(label)).toHaveLength(1)
     }
-    // the drawdown figure is the Risk card's
-    expect(within(stats).getByTestId('summary-drawdown')).toHaveTextContent('-Rs 320.50')
+    // the drawdown figure is in the second row under the headline
+    expect(within(header).getByTestId('summary-drawdown')).toHaveTextContent('-Rs 320.50')
     expect(within(header).getByRole('link', { name: 'Jump to closed trades' })).toHaveAttribute(
       'href',
       '#discretionary-ledger'
     )
   })
 
-  it('names one weakness from existing fields only', async () => {
-    // 12 completed trades: enough for the fall from the peak to be stated
-    summaryFn.mockResolvedValue(fullRich(3, 1))
-    renderIt()
-    // charges are 12.5% of gross profit and the largest loss is smaller than the largest win here,
-    // so the first applicable rule is the current drawdown
-    expect(await screen.findByTestId('summary-weakness')).toHaveTextContent(
-      'Needs attention: Your net P&L is Rs 120.00 below its highest point in this period, over 12 completed trades.'
-    )
-  })
-
-  it('states a fall from a peak over a handful of trades, with the trade count', async () => {
-    summaryFn.mockResolvedValue(full(3, 1))
+  it('has no Trading insights card: its rules are hints on the Charges and Largest loser tiles', async () => {
+    const f = fullRich(3, 1)
+    const c = f.consistency!
+    summaryFn.mockResolvedValue({
+      ...f,
+      costs: costsBlock({ charges_pct_of_gross_profit: 42.5 }),
+      consistency: {
+        ...c,
+        largest_win: { ...c.largest_win!, net_pnl: 100 },
+        largest_loss: { ...c.largest_loss!, net_pnl: -250 },
+      },
+    })
     renderIt()
     await screen.findByTestId('discretionary-statistics')
-    const line = screen.queryByText(/below its highest point/)
-    if (line) expect(line).toHaveTextContent(/over \d+ completed trades?\./)
-    expect(screen.queryByText(/too early to rely on|low sample/i)).not.toBeInTheDocument()
+    expect(screen.queryByTestId('trading-insights')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('summary-weakness')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Needs attention|Trading insights/)).not.toBeInTheDocument()
+    expect(screen.getByTestId('summary-charges')).toHaveTextContent(
+      '42.5% of the gross profit of your winning trades, over 12 completed trades'
+    )
+    expect(screen.getByTestId('summary-largest-loss')).toHaveTextContent(
+      'larger than your largest winner (Rs 100.00), over 12 completed trades'
+    )
+    // the former drawdown rule is not restated anywhere: the Max drawdown tile carries it
+    expect(document.body.textContent ?? '').not.toMatch(/below its highest point in this period/)
   })
 
-  it("merges today's session into one line and keeps every figure one click away", async () => {
-    summaryFn.mockResolvedValue(full(3, 1))
+  it('states no charges or loser hint when neither rule applies', async () => {
+    summaryFn.mockResolvedValue(fullRich(3, 1))
     renderIt()
+    await screen.findByTestId('discretionary-statistics')
+    expect(screen.getByTestId('summary-charges')).not.toHaveTextContent(
+      /turned a gross profit|% of the gross profit/
+    )
+    expect(screen.getByTestId('summary-largest-loss')).not.toHaveTextContent(/larger than/)
+  })
+
+  it("shows today's session as one line, without a panel, tiles or a second closed-trades table", async () => {
+    const onSelectDate = vi.fn()
+    summaryFn.mockResolvedValue(full(3, 1))
+    renderIt({ onSelectDate })
     const line = await screen.findByTestId('today-line')
-    expect(line).toHaveTextContent('Today (2026-11-17): net Rs 20.00 after estimated charges')
-    expect(line.tagName).toBe('DETAILS')
-    const today = within(line).getByTestId('discretionary-today')
-    for (const label of ['Realised (gross)', 'Net after est. charges', 'Completed positions']) {
-      expect(within(today).getByText(label)).toBeInTheDocument()
-    }
+    expect(line).toHaveTextContent(
+      'Today (2026-11-17): net Rs 20.00 after estimated charges, 1 closed, 0 open.'
+    )
+    expect(line.tagName).toBe('DIV')
+    expect(line.querySelectorAll('table')).toHaveLength(0)
+    expect(screen.queryByTestId('discretionary-today')).not.toBeInTheDocument()
+    expect(screen.queryByText("Today's Performance")).not.toBeInTheDocument()
+    // exit-fill count and partially closed are hint text
+    expect(within(line).getByTestId('today-hint')).toHaveTextContent(/exit fills.*partially closed/)
+    await userEvent.click(within(line).getByRole('button', { name: /show today's trades/i }))
+    expect(onSelectDate).toHaveBeenCalledWith('2026-11-17')
   })
 
   it('shows no second Today panel when the report date is today, and names the date', async () => {
@@ -218,105 +244,152 @@ describe('summary header', () => {
   })
 })
 
-describe('four groups and the metric inventory', () => {
-  it('shows the four groups, in two columns from md and one column below', async () => {
+describe('metric inventory after removing duplicates', () => {
+  it('has one Risk and consistency card with trade management inside it, and no other group cards', async () => {
     summaryFn.mockResolvedValue(full(10, 2))
     renderIt()
-    // Performance sits with the summary; risk and management are in Advanced analysis
-    const perf = await screen.findByTestId('discretionary-groups-performance')
-    expect(within(perf).getByTestId('group-performance')).toBeInTheDocument()
+    await screen.findByTestId('discretionary-statistics')
+    expect(screen.queryByTestId('group-performance')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('discretionary-groups-performance')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('discretionary-groups-analysis')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('group-trade-management')).not.toBeInTheDocument()
     await openAdvanced()
-    const groups = await screen.findByTestId('discretionary-groups-analysis')
-    expect(groups.className).toContain('grid-cols-1')
-    expect(groups.className).toContain('md:grid-cols-2')
-    for (const id of ['risk-strip', 'group-trade-management']) {
-      expect(within(groups).getByTestId(id)).toBeInTheDocument()
-    }
+    const risk = await screen.findByTestId('risk-strip')
+    expect(within(risk).getByTestId('trade-management')).toBeInTheDocument()
+    expect(screen.getAllByTestId('trade-management')).toHaveLength(1)
     // MAE / MFE and profit capture are in the MAE / MFE card only
     expect(screen.queryByTestId('group-trade-quality')).not.toBeInTheDocument()
   })
 
-  it('still shows every metric label the page showed before the regrouping', async () => {
-    summaryFn.mockResolvedValue(fullRich(40, 4))
+  it('still shows every metric the page showed, each in its place and none twice as a label', async () => {
+    const rich = fullRich(40, 4)
+    summaryFn.mockResolvedValue({
+      ...rich,
+      breakdowns: tradingBreakdowns({
+        weekday: [breakdownRow('Mon', { trades: 3 }), breakdownRow('Tue', { trades: 4 })],
+        hold_bucket: [
+          breakdownRow('15-60m', { trades: 3 }),
+          breakdownRow('overnight', { trades: 2 }),
+        ],
+      }),
+    })
     renderIt()
-    await screen.findByTestId('discretionary-groups-performance')
+    await screen.findByTestId('discretionary-statistics')
     await openAdvanced()
-    const previous = [
-      // the twelve former metric cards
+    const labels = [
       'Net realized (after est. charges)',
       'Gross realized',
-      'Unrealized',
-      'Total won (net)',
-      'Total lost (net)',
       'Win rate (net)',
       'Profit factor (net)',
       'Completed trades',
       'Avg win (net)',
       'Avg loss (net)',
       'Expectancy (net)',
-      // risk and consistency (largest win / loss and the maximum drawdown are in the summary only)
       'Largest winner',
       'Largest loser',
-      'Avg daily P&L (gross)',
+      'Avg daily P&L (net)',
       'Profitable / losing days (gross)',
       'Max consecutive winning trades',
       'Max consecutive losing trades',
       'Current streak',
       'Avg holding time',
       'Max drawdown (net)',
-      'Current drawdown',
-      // trade management and costs
       'Winners: average hold',
       'Losers: average hold',
       'Median net P&L',
       'Charges (est.)',
       "Est. charges as % of winners' gross profit",
-      // tables and cards
       'Points by instrument',
       'MAE / MFE',
       'Closed trades',
       'Open positions',
-      'How you trade',
+      'Where and when you make or lose money',
       'P&L by period',
-      'Net P&L by month and weekday',
-      'By symbol',
-      'Long vs Short',
-      'By product',
-      'Intraday vs overnight',
     ]
-    const missing = previous.filter(
-      (label) => screen.queryAllByText(label, { exact: true }).length === 0
-    )
+    const missing = labels.filter((l) => screen.queryAllByText(l, { exact: true }).length === 0)
     expect(missing).toEqual([])
-    // the total card keeps its own label (no unrealized figure requested here)
-    expect(screen.getByText('Total', { selector: 'div' })).toBeInTheDocument()
+    const twice = labels.filter(
+      (l) =>
+        !['Closed trades', 'Open positions', 'Charges (est.)', 'Points by instrument'].includes(
+          l
+        ) && screen.queryAllByText(l, { exact: true }).length > 1
+    )
+    expect(twice).toEqual([])
+    // the removed tiles' figures live in the hints of the tiles they were folded into
+    const text = document.body.textContent ?? ''
+    expect(text).toMatch(/won Rs [\d.,-]+ \/ lost Rs [\d.,-]+/) // Total won / lost, in the Profit factor hint
+    expect(screen.getByTestId('summary-current-drawdown')).toHaveTextContent(
+      /now .*(below the highest point|at its highest point)/
+    )
+    // the sections of the one breakdown card, all shown together
+    for (const name of [
+      'Symbol',
+      'Long / Short',
+      'Time of day',
+      'Weekday',
+      'Holding time',
+      'Product',
+      'Intraday vs overnight',
+    ]) {
+      expect(
+        within(screen.getByTestId('breakdowns-card')).getByRole('heading', { name })
+      ).toBeInTheDocument()
+    }
+    // removed blocks, as titles
+    for (const gone of [
+      'Performance',
+      'Trading insights',
+      'Daily net P&L',
+      'Net P&L by month and weekday',
+      'Trade management and costs',
+      'Current drawdown',
+      'Total won (net)',
+      'Total lost (net)',
+    ]) {
+      expect(screen.queryAllByText(gone, { exact: true })).toHaveLength(0)
+    }
+  })
+
+  it('states the current drawdown once, with its basis, in the Max drawdown tile', async () => {
+    summaryFn.mockResolvedValue(full(3, 1))
+    renderIt()
+    await screen.findByTestId('discretionary-statistics')
+    expect(screen.getAllByTestId('summary-current-drawdown')).toHaveLength(1)
+    expect(screen.getByTestId('summary-current-drawdown')).toHaveTextContent(
+      'now Rs 120.00 below the highest point (net, by close time)'
+    )
+    expect(screen.queryByTestId('risk-current-drawdown')).not.toBeInTheDocument()
+    // no other element names a current drawdown amount
+    expect(document.body.textContent ?? '').not.toMatch(/current drawdown/i)
   })
 
   it('shows each hold figure once: the old Breakdowns duplicate is gone when trade management is sent', async () => {
     summaryFn.mockResolvedValue(full(40, 4))
     renderIt()
     await openAdvanced()
-    await screen.findByTestId('group-trade-management')
+    await screen.findByTestId('risk-strip')
     expect(screen.queryByTestId('hold-durations')).not.toBeInTheDocument()
     expect(screen.getByTestId('tm-winner-hold')).toBeInTheDocument()
+    expect(screen.getByTestId('tm-winner-hold')).toHaveTextContent('median')
+    expect(screen.getByTestId('tm-loser-hold')).toHaveTextContent('median')
     expect(screen.getByTestId('risk-hold')).toBeInTheDocument()
   })
 
-  it('falls back to the hold cards when an older server sends no trade-management block', async () => {
+  it('falls back to the hold tiles when an older server sends no trade-management block', async () => {
     renderIt()
     await openAdvanced()
     const hold = await screen.findByTestId('hold-durations')
-    expect(within(hold).getByText('Winners')).toBeInTheDocument()
+    expect(within(hold).getByText('Winners: average hold')).toBeInTheDocument()
     expect(within(hold).getByText('30m')).toBeInTheDocument()
   })
 })
 
 describe('sections follow the data', () => {
-  it('hides the month, weekday, period and daily-bar sections for one date and says so', async () => {
+  it('hides the period tables for one date and says so, with one per-trade curve', async () => {
     summaryFn.mockResolvedValue(full(1, 1))
     renderIt({ period: '1d' })
     expect(await screen.findByTestId('profile-note')).toHaveTextContent(
-      'Month, weekday and period tables are hidden because this view covers one trading day'
+      'Weekly and monthly tables are hidden for one trading day'
     )
     await openAdvanced()
     expect(screen.queryByTestId('calendar-card')).not.toBeInTheDocument()
@@ -324,36 +397,41 @@ describe('sections follow the data', () => {
     expect(screen.queryByTestId('daily-pnl-chart')).not.toBeInTheDocument()
     expect(screen.getByText('Trade-by-trade P&L')).toBeInTheDocument()
     expect(screen.getByTestId('equity-chart')).toHaveAttribute('data-mode', 'position')
-    // collapsed, not removed
-    expect(screen.getByTestId('more-breakdowns')).not.toHaveAttribute('open')
+    expect(screen.getAllByTestId('equity-chart')).toHaveLength(1)
+    // the breakdown card is not collapsed away
+    expect(screen.queryByTestId('more-breakdowns')).not.toBeInTheDocument()
   })
 
-  it('shows the daily tab for 2 to 7 dates, with the note, and the weekday chart once two weekdays have trades', async () => {
+  it('shows no period tabs for 2 to 7 dates, with the note, and one per-trade curve', async () => {
     summaryFn.mockResolvedValue(full(5, 2))
     renderIt({ period: '7d' })
     await openAdvanced()
-    await screen.findByTestId('period-card')
-    expect(screen.queryByTestId('monthly-chart')).not.toBeInTheDocument()
-    // 5 trading days still give two or more weekdays to compare: shown, no day-count gate
-    expect(screen.getByTestId('weekday-chart')).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Daily' })).toBeInTheDocument()
-    expect(screen.queryByRole('tab', { name: 'Weekly' })).not.toBeInTheDocument()
-    expect(screen.getByTestId('daily-pnl-chart')).toBeInTheDocument()
+    await screen.findByTestId('risk-strip')
+    expect(screen.queryByTestId('period-card')).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Daily' })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('weekday-chart')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('daily-pnl-chart')).not.toBeInTheDocument()
     expect(screen.getByText('Trade-by-trade P&L')).toBeInTheDocument()
+    expect(screen.getAllByTestId('equity-chart')).toHaveLength(1)
     expect(screen.getByTestId('profile-note')).toHaveTextContent('5 trading days')
   })
 
-  it('shows everything, open, for a long range, with the end-of-day curve explained', async () => {
+  it('shows the weekly and monthly tabs (no Daily) and the end-of-day curve for a long range', async () => {
     summaryFn.mockResolvedValue(full(40, 4))
     renderIt({ period: 'all' })
     await openAdvanced()
-    await screen.findByTestId('calendar-card')
-    expect(screen.getByTestId('monthly-chart')).toBeInTheDocument()
+    await screen.findByTestId('period-card')
+    expect(screen.queryByTestId('calendar-card')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('monthly-chart')).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Daily' })).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Weekly' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Monthly' })).toBeInTheDocument()
-    expect(screen.getByTestId('more-breakdowns')).toHaveAttribute('open')
     expect(screen.queryByTestId('profile-note')).not.toBeInTheDocument()
     expect(screen.getByTestId('equity-chart')).toHaveAttribute('data-mode', 'day')
+    expect(screen.getAllByTestId('equity-chart')).toHaveLength(1)
     expect(screen.getByTestId('equity-reconciliation')).toHaveTextContent('end-of-day totals')
+    // the day-curve note carries no drawdown figure: the Max drawdown tile states it
+    expect(screen.getByTestId('equity-reconciliation').textContent).not.toMatch(/Rs \d/)
   })
 
   for (const [name, days, months, period] of [
@@ -369,7 +447,7 @@ describe('sections follow the data', () => {
         warnings: ['1 trade(s) have no charge estimate (instrument not modelled).'],
       })
       renderIt({ period })
-      expect(await screen.findByTestId('data-warning')).toBeInTheDocument()
+      expect(await screen.findByTestId('unmatched-fills-note')).toBeInTheDocument()
       expect(screen.getByTestId('discretionary-filters')).toBeInTheDocument()
       expect(screen.getByTestId('export-csv')).toBeInTheDocument()
     })
@@ -383,7 +461,7 @@ describe('sections follow the data', () => {
     expect(screen.getByTestId('ledger-card')).toHaveAttribute('id', 'discretionary-ledger')
   })
 
-  it('orders the page: summary, session progression, closed trades, insights, advanced analysis', async () => {
+  it('orders the page: summary, calendar, curve, quality, where and when, closed trades, advanced analysis', async () => {
     summaryFn.mockResolvedValue({ ...fullRich(12, 2), data_quality: dataQuality() })
     renderIt({ onSelectDate: () => {} })
     await screen.findByTestId('pnl-calendar')
@@ -391,17 +469,14 @@ describe('sections follow the data', () => {
     await openAdvanced()
     const ids = [
       'discretionary-summary',
-      'discretionary-groups-performance',
       'pnl-calendar',
+      'equity-curve-card',
       'discretionary-statistics',
-      'performance-breakdowns',
-      'how-you-trade',
-      'equity-card',
+      'breakdowns-card',
       'ledger-card',
       'open-positions-card',
-      'trading-insights',
       'advanced-analysis',
-      'discretionary-groups-analysis',
+      'risk-strip',
       'points-card',
       'excursion-card',
     ]
@@ -415,7 +490,7 @@ describe('sections follow the data', () => {
 })
 
 describe('equity captions on the page', () => {
-  it('stays quiet when the curve equals the Risk card', async () => {
+  it('stays quiet when the curve equals the Max drawdown figure', async () => {
     const t = (id: number, net: number): DiscretionaryTrade =>
       trade({
         id,
@@ -450,9 +525,11 @@ describe('equity captions on the page', () => {
     )
     renderIt({ period: '1d' })
     expect(await screen.findByTestId('equity-reconciliation')).toHaveTextContent(
-      'The chart shows your latest 500 of 640 closed trades'
+      'covers the latest 500 of 640 trades'
     )
-    expect(screen.getByTestId('equity-reconciliation')).toHaveTextContent('Risk figure for all 640')
+    expect(screen.getByTestId('equity-reconciliation')).toHaveTextContent(
+      'Max drawdown (Rs 320.50) covers all'
+    )
   })
 
   it('says so when a position has no net and the Risk card counts them differently', async () => {
@@ -462,8 +539,8 @@ describe('equity captions on the page', () => {
     renderIt({ period: '1d' })
     const caption = await screen.findByTestId('equity-reconciliation')
     expect(caption).toHaveAttribute('data-kind', 'mismatch')
-    expect(caption).toHaveTextContent('differs from the Risk figure')
-    expect(caption).toHaveTextContent('they count different trades')
+    expect(caption).toHaveTextContent('Max drawdown (Rs 320.50) counts 2')
+    expect(caption).toHaveTextContent('Chart drawdown (Rs 0.00) counts 1 trade;')
     expect(caption.textContent).not.toMatch(/reconcil|Risk card/i)
   })
 })
@@ -540,6 +617,225 @@ describe('MAE / MFE presentation', () => {
     expect(screen.getByTestId('excursion-panel').textContent ?? '').not.toMatch(
       /profit capture|captured|efficiency/i
     )
-    expect(screen.getByTestId('excursions-precision')).toHaveTextContent('lower bound')
+    // the precision note moved to the tooltip of the coverage line
+    expect(screen.getByTestId('excursions-coverage')).toHaveAttribute(
+      'title',
+      expect.stringMatching(/lower bound/)
+    )
+  })
+})
+
+describe('second metric row, compact open positions and kept coverage notes', () => {
+  it('shows net expectancy, profit factor and max drawdown under the headline with the statistics values', async () => {
+    const s = full(3, 1)
+    summaryFn.mockResolvedValue(s)
+    renderIt()
+    const header = await screen.findByTestId('discretionary-summary')
+    const row = within(header).getByTestId('summary-key-stats')
+    const m = s.metrics
+    expect(row).toHaveTextContent('Expectancy (net)')
+    expect(row).toHaveTextContent(fmtNetMoney(m.expectancy, money))
+    expect(row).toHaveTextContent('net, per trade')
+    expect(row).toHaveTextContent('Profit factor (net)')
+    expect(row).toHaveTextContent(
+      fmtProfitFactor(m.profit_factor, m.winning_trades, m.losing_trades, true)
+    )
+    // total won and lost are folded into this tile's hint
+    expect(row).toHaveTextContent(
+      `won ${money(m.gross_profit)} / lost ${money(m.gross_loss)} (net, completed trades)`
+    )
+    expect(row).toHaveTextContent('Max drawdown (net)')
+    expect(row).toHaveTextContent('-Rs 320.50')
+    expect(row).toHaveTextContent(`over ${s.risk?.positions} trade`)
+    // the current drawdown is folded into the Max drawdown hint, with its basis
+    expect(row).toHaveTextContent(
+      `now ${money(s.risk?.current_drawdown ?? 0)} below the highest point (net, by close time)`
+    )
+    // tooltips are kept
+    expect(within(row).getByText('Profit factor (net)').closest('[title]')).toHaveAttribute(
+      'title',
+      expect.stringContaining('Above 1.00 means winners outweigh losers')
+    )
+    // the row sits directly under the three headline cards
+    expect(header.children[1].querySelectorAll('[data-testid^="summary-"]').length).toBeGreaterThan(
+      2
+    )
+    expect(header.children[2]).toBe(row)
+  })
+
+  it('keeps the headline summary text unchanged', async () => {
+    summaryFn.mockResolvedValue(full(3, 1))
+    renderIt()
+    const header = await screen.findByTestId('discretionary-summary')
+    expect(within(header).getByTestId('summary-net')).toHaveTextContent(
+      'Net realized (after est. charges)Rs 47.501 trade(s) without a charge estimate: not complete'
+    )
+    expect(within(header).getByTestId('summary-count')).toHaveTextContent(
+      'Completed trades21 wins / 1 losses'
+    )
+    expect(within(header).getByTestId('summary-win-rate')).toHaveTextContent(
+      'Win rate (net)50.0%a win is a profit after estimated charges'
+    )
+    expect(within(header).getByTestId('win-rate-counts')).toHaveTextContent('1 wins / 1 losses')
+  })
+
+  it('shows a dash for expectancy and profit factor, and no drawdown, with no completed trades', async () => {
+    const base = full(3, 1)
+    summaryFn.mockResolvedValue({
+      ...base,
+      trades: [],
+      trades_total: 0,
+      metrics: { ...base.metrics, trades_count: 0, winning_trades: 0, losing_trades: 0 },
+    })
+    renderIt()
+    const header = await screen.findByTestId('discretionary-summary')
+    const row = within(header).getByTestId('summary-key-stats')
+    expect(within(row).getByText('Expectancy (net)').parentElement).toHaveTextContent('—')
+    expect(within(row).getByText('Profit factor (net)').parentElement).toHaveTextContent('—')
+  })
+
+  it('renders open positions as one line when there are none, and the card when there are', async () => {
+    summaryFn.mockResolvedValue({ ...full(3, 1), positions: [], positions_total: 0 })
+    const first = renderIt()
+    const line = await screen.findByTestId('open-positions-card')
+    expect(line.tagName).toBe('P')
+    expect(line).toHaveTextContent(/^No open positions\.$/)
+    expect(within(line).queryByRole('table')).not.toBeInTheDocument()
+    first.unmount()
+
+    summaryFn.mockResolvedValue(full(3, 1))
+    renderIt()
+    const card = await screen.findByTestId('open-positions-card')
+    expect(card.tagName).not.toBe('P')
+    expect(card).toHaveTextContent('Open positions')
+    expect(within(card).getByRole('table')).toBeInTheDocument()
+  })
+
+  it('keeps the data warning and the MAE / MFE coverage line', async () => {
+    summaryFn.mockResolvedValue({
+      ...full(3, 2),
+      unresolved_in_range: unresolvedInRange(),
+      warnings: ['1 trade(s) have no charge estimate (instrument not modelled).'],
+    })
+    renderIt()
+    expect(await screen.findByTestId('unmatched-fills-note')).toBeInTheDocument()
+    await openAdvanced()
+    expect(await screen.findByTestId('excursions-coverage')).toHaveTextContent(
+      /\d+ of \d+ completed positions with 1-minute price data/
+    )
+  })
+})
+
+describe('duplicate information is removed from the page', () => {
+  it('has none of the removed blocks, for a long range with every block sent', async () => {
+    summaryFn.mockResolvedValue(fullRich(40, 4))
+    renderIt({ period: 'all', onSelectDate: () => {} })
+    await screen.findByTestId('discretionary-statistics')
+    await openAdvanced()
+    for (const id of [
+      'daily-pnl-chart',
+      'daily-pnl-bar',
+      'calendar-card',
+      'weekday-chart',
+      'monthly-chart',
+      'symbol-chart',
+      'time-of-day-chart',
+      'net-bar',
+      'group-performance',
+      'trading-insights',
+      'summary-weakness',
+      'stat-win-loss-bars',
+      'group-trade-management',
+      'how-you-trade',
+      'more-breakdowns',
+      'performance-breakdowns',
+      'equity-card',
+      'equity-reading',
+      'risk-current-drawdown',
+      'discretionary-today',
+    ]) {
+      expect(screen.queryByTestId(id), id).not.toBeInTheDocument()
+    }
+    expect(screen.queryByRole('tab', { name: 'Daily' })).not.toBeInTheDocument()
+  })
+
+  it('shows one tabbed breakdown card, one table at a time, with the weekday by entry day only', async () => {
+    const rich = fullRich(40, 4)
+    summaryFn.mockResolvedValue({
+      ...rich,
+      breakdowns: tradingBreakdowns({
+        weekday: [breakdownRow('Mon', { trades: 3 }), breakdownRow('Tue', { trades: 4 })],
+      }),
+    })
+    renderIt({ period: 'all' })
+    const card = await screen.findByTestId('breakdowns-card')
+    expect(screen.getAllByTestId('breakdowns-card')).toHaveLength(1)
+    expect(within(card).getAllByRole('heading', { name: /weekday/i })).toHaveLength(1)
+    // the weekday table is on the page without any click
+    expect(within(card).getByRole('columnheader', { name: 'Entry day' })).toBeInTheDocument()
+    expect(within(card).getAllByRole('columnheader', { name: 'Entry day' })).toHaveLength(1)
+    // the page has no other weekday table or chart
+    expect(screen.queryByText(/by weekday/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: 'Weekday' })).not.toBeInTheDocument()
+  })
+
+  it('draws exactly one cumulative-net curve for every range length', async () => {
+    for (const [period, days, months] of [
+      ['1d', 1, 1],
+      ['7d', 5, 1],
+      ['30d', 12, 2],
+      ['all', 40, 4],
+    ] as const) {
+      summaryFn.mockResolvedValue(full(days, months))
+      const view = renderIt({ period })
+      await screen.findByTestId('equity-curve-card')
+      expect(screen.getAllByTestId('equity-chart'), `${period}`).toHaveLength(1)
+      expect(screen.getAllByTestId('equity-curve-card')).toHaveLength(1)
+      view.unmount()
+    }
+  })
+
+  it('keeps the calendar day click and the closed-trades jump link', async () => {
+    summaryFn.mockResolvedValue(full(10, 2))
+    renderIt({ onSelectDate: () => {} })
+    await screen.findByTestId('pnl-calendar')
+    expect(screen.getByRole('link', { name: 'Jump to closed trades' })).toHaveAttribute(
+      'href',
+      '#discretionary-ledger'
+    )
+    expect(document.getElementById('discretionary-ledger')).not.toBeNull()
+    expect(document.getElementById('discretionary-points')).toBeNull() // collapsed until opened
+    await openAdvanced()
+    expect(document.getElementById('discretionary-points')).not.toBeNull()
+    expect(document.getElementById('discretionary-excursion')).not.toBeNull()
+  })
+
+  it('shows the Net realized once, with no second net total printed beside it', async () => {
+    summaryFn.mockResolvedValue(full(3, 1))
+    renderIt()
+    const net = await screen.findByTestId('summary-net')
+    expect(net).toHaveTextContent('Rs 47.50')
+    // the Performance card total and the equity "last point equals" line are gone
+    expect(screen.queryByTestId('summary-total')).not.toBeInTheDocument()
+    expect(screen.queryByText(/The last point .* equals the realised net/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Month net|Net P&L by month/)).toBeNull()
+  })
+
+  it('keeps the coverage warnings: charges incomplete, material warning, MAE / MFE count', async () => {
+    summaryFn.mockResolvedValue({
+      ...full(3, 1),
+      unresolved_in_range: unresolvedInRange(),
+      warnings: ['1 trade(s) have no charge estimate (instrument not modelled).'],
+    })
+    renderIt()
+    expect(await screen.findByTestId('unmatched-fills-note')).toBeInTheDocument()
+    expect(screen.getByTestId('summary-net')).toHaveTextContent(
+      'without a charge estimate: not complete'
+    )
+    expect(screen.getByTestId('summary-charges')).toHaveTextContent('without an estimate')
+    await openAdvanced()
+    expect(await screen.findByTestId('excursions-coverage')).toHaveTextContent(
+      /\d+ of \d+ completed positions with 1-minute price data/
+    )
   })
 })

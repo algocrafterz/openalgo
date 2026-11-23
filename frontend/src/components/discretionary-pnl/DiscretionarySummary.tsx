@@ -1,14 +1,18 @@
-import type { DiscretionaryToday, DiscretionarySummary as Summary } from '@/api/discretionaryPnl'
+import type { DiscretionarySummary as Summary } from '@/api/discretionaryPnl'
+import { Badge } from '@/components/ui/badge'
 import {
   cleanMoney,
   fmtWinRate,
   hasNoClosedActivity,
+  pnlTextClass,
+  type TotalCard,
+  type UnrealizedSummary,
   type WinRateParts,
-  weaknessLine,
   winRateParts,
 } from '@/lib/discretionaryPnlView'
 import { cn } from '@/lib/utils'
 import { JumpLink } from './DiscretionaryInsights'
+import { KeyFigures } from './DiscretionaryStatistics'
 
 type Money = (value: number) => string
 
@@ -59,26 +63,115 @@ function WinRateDetail({ parts }: { parts: WinRateParts }) {
 }
 
 /**
- * The first screen of the page: three large figures (net P&L, completed trades, win rate). The
- * other statistics (gross, charges, profit factor, expectancy, averages, largest winner / loser,
- * maximum drawdown) are in Trading statistics, so each figure has one home. Every value comes
+ * Unrealized P&L and the total with it, under the net tile, only when there is an open position.
+ * Not priced (live prices not requested) says so; a partly priced book says how many are
+ * unpriced. Never a zero stand-in.
+ */
+function UnrealizedLine({
+  unrealized,
+  total,
+  priced,
+  noMoney,
+  partialExits,
+  formatCurrency,
+}: {
+  unrealized: UnrealizedSummary
+  total: TotalCard
+  priced: boolean
+  noMoney: boolean
+  partialExits: number
+  formatCurrency: Money
+}) {
+  if (unrealized.kind === 'none') return null
+  return (
+    <div className="mt-1 space-y-0.5 text-xs" data-testid="summary-unrealized">
+      {priced ? (
+        <>
+          <div>
+            <span className="text-muted-foreground">Unrealized: </span>
+            <span className={cn('font-mono', pnlTextClass(unrealized.value))}>
+              {formatCurrency(unrealized.value)}
+            </span>
+            {unrealized.kind === 'partial' && (
+              <span className="text-muted-foreground">
+                {' '}
+                (
+                {unrealized.unpriced > 0
+                  ? `${unrealized.unpriced} position(s) unpriced`
+                  : 'some positions not shown'}
+                )
+              </span>
+            )}
+            {unrealized.badge && (
+              <Badge
+                variant="outline"
+                className="ml-1.5 text-[11px]"
+                title={unrealized.badge.title}
+                data-testid="unrealized-price-badge"
+              >
+                {unrealized.badge.label}
+              </Badge>
+            )}
+          </div>
+          {!noMoney && (
+            <div data-testid="summary-total">
+              <span className="text-muted-foreground">{total.label}: </span>
+              <span className={cn('font-mono', pnlTextClass(total.value))}>
+                {formatCurrency(total.value)}
+              </span>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="text-muted-foreground" title="The net above is realized only.">
+          Unrealized: not requested. Turn on Fetch live prices.
+        </div>
+      )}
+      {partialExits > 0 && (
+        <div className="text-muted-foreground" data-testid="summary-partial-exits">
+          Net includes exits already made on {partialExits} open position
+          {partialExits === 1 ? '' : 's'}.
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The first screen of the page: three large figures (net P&L, completed trades, win rate) and a
+ * compact row under them (net expectancy, profit factor, maximum drawdown). The other statistics
+ * (gross, charges, averages, largest winner / loser) are in Trading statistics, so each figure has
+ * one home. Every value comes
  * from the summary the rest of the page uses; nothing is computed here.
  */
 export function DiscretionaryHeader({
   summary,
   formatCurrency,
   chargesHint,
+  unrealized,
+  total,
+  coverageNote,
   children,
 }: {
   summary: Summary
   formatCurrency: Money
   chargesHint: string
+  unrealized: UnrealizedSummary
+  total: TotalCard
+  /** Quiet coverage note shown directly under the key figures. */
+  coverageNote?: React.ReactNode
   children?: React.ReactNode
 }) {
   const m = summary.metrics
   const noTrades = m.trades_count === 0
   const noMoney = hasNoClosedActivity(summary)
   const net = summary.realized_net_of_charges
+  const priced = unrealized.kind === 'complete' || unrealized.kind === 'partial'
+  // Exits already made on positions that are still open are in this net (and in the calendar).
+  const partialExits = (summary.positions ?? []).filter(
+    (p) => p.realized_so_far != null && p.realized_so_far !== 0
+  ).length
+  const netHint = noMoney ? 'no trade was closed in this date range' : chargesHint
   return (
     <section className="space-y-3" data-testid="discretionary-summary" aria-label="Summary">
       <p className="text-xs">
@@ -99,8 +192,17 @@ export function DiscretionaryHeader({
                   ? 'loss'
                   : undefined
           }
-          hint={noMoney ? 'no trade was closed in this date range' : chargesHint}
-        />
+          hint={netHint}
+        >
+          <UnrealizedLine
+            unrealized={unrealized}
+            total={total}
+            priced={priced}
+            noMoney={noMoney}
+            partialExits={partialExits}
+            formatCurrency={formatCurrency}
+          />
+        </Primary>
         <Primary
           testId="summary-count"
           label="Completed trades"
@@ -123,77 +225,11 @@ export function DiscretionaryHeader({
         </Primary>
       </div>
 
+      <KeyFigures summary={summary} formatCurrency={formatCurrency} />
+
+      {coverageNote}
+
       {children}
-    </section>
-  )
-}
-
-/**
- * Today's session as one line under the summary. When the selected range is not just today's
- * session it says what today looks like; either way the full Today figures are one click away
- * (children), so nothing is dropped.
- */
-export function TodayLine({
-  today,
-  range,
-  formatCurrency,
-  children,
-}: {
-  today: DiscretionaryToday
-  range: { start: string; end: string } | undefined
-  formatCurrency: Money
-  children: React.ReactNode
-}) {
-  const same = !!range && range.start === today.session_date && range.end === today.session_date
-  return (
-    <details className="rounded-md border" data-testid="today-line">
-      <summary className="cursor-pointer px-3 py-2 text-sm">
-        {same ? (
-          <span>
-            Today&apos;s session ({today.session_date}) is the range shown above. Show today&apos;s
-            figures and closed trades.
-          </span>
-        ) : (
-          <span>
-            Today ({today.session_date}):{' '}
-            {today.completed_positions === 0 && today.exit_legs === 0
-              ? 'no closed trades'
-              : `net ${formatCurrency(today.net)} after estimated charges, ${today.completed_positions} closed`}
-            , {today.open_positions} open. Show today&apos;s figures and closed trades.
-          </span>
-        )}
-      </summary>
-      <div className="border-t p-3">{children}</div>
-    </details>
-  )
-}
-
-/**
- * Trading insights: the one thing to look at, taken from numbers the server already sends. The
- * net P&L, trade count and win rate are in the summary cards, so they are not repeated here.
- * Nothing is rendered when there is nothing to add. Factual only: no inference about discipline.
- */
-export function TradingInsights({
-  summary,
-  formatCurrency,
-}: {
-  summary: Summary
-  formatCurrency: Money
-}) {
-  const weakness = weaknessLine(summary, formatCurrency)
-  if (!weakness) return null
-  return (
-    <section
-      className="rounded-lg border-l-4 border-l-muted-foreground bg-muted/40 px-4 py-3"
-      data-testid="trading-insights"
-      aria-label="Trading insights"
-    >
-      <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        Trading insights
-      </h2>
-      <p className="text-sm" data-testid="summary-weakness">
-        Needs attention: {weakness}
-      </p>
     </section>
   )
 }
