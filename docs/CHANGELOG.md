@@ -8,6 +8,54 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Discretionary Performance
+
+The Performance page for trades you place by hand at your broker now reports
+from completed positions, net of estimated charges.
+
+- A calendar shows net P&L for each day of a month. Select a day to open its
+  report.
+- The equity curve takes a range (report period, 1M, 3M, 6M or All) and shows
+  the running net total by day.
+- Win rate shows wins, losses, break-even and the number of trades behind it.
+- Average win, average loss and profit factor read n/a when there is nothing to
+  average, instead of Rs 0.
+- One warning now names missing or doubtful data that changes the selected
+  report: fills left out, days that may be missing, open positions without a
+  price.
+- When the start date you chose is earlier than the first date your ledger is
+  reliable, the page says so and shows data from that date.
+- The month table says it counts positions by the month of their final close,
+  so partial exits of positions still open are not in it and its total can
+  differ from the net P&L above.
+
+- Every statistic now says how many completed trades it rests on. MAE / MFE
+  says "based on N of M positions with 1-minute price data" and counts only
+  those. A figure OpenAlgo cannot compute is left out, not shown as zero or as
+  "insufficient data".
+- Removed because they were not reliable: profit capture (exit efficiency) and
+  the gross daily drawdown shown when the net drawdown is missing.
+- The page sets no minimum trade count. It is a review of your own decisions,
+  not a strategy test, so every table and figure appears as soon as it can be
+  computed and states its own count (for example "over 12 completed trades" or
+  "across 3 trading days"). The earlier "low sample" tags, the 30-trade note
+  and the 10-trade and 10-day limits on the behaviour block, the weekday tables
+  and the weakness line are gone. A comparison still needs at least two groups
+  (two weekdays, two symbols), and a figure still needs its own ingredients:
+  average win needs a win, re-entry needs a loss followed by an entry.
+- A range with no completed trades no longer shows "Ratios based on 0 completed
+  trades".
+- A weekday or month with no completed position shows dashes in the
+  table and has no bar in the chart, instead of Rs 0.
+- If your last sync with the broker did not complete, the page says that recent
+  trades may be missing and points to Refresh.
+- The cost figure now reads "estimated charges as % of winners' gross profit",
+  which is what it divides.
+
+Not available, because OpenAlgo does not store the data: R-multiple, stop
+adherence, drawdown percent, Sharpe, Sortino and setup attribution. These need
+a planned stop, a capital baseline or a setup tag on each trade.
+
 ## [2.0.2.8] - 2026-10-15
 
 ### Freeze Limits and Full-Screen Terminal Release

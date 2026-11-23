@@ -143,6 +143,17 @@ and record the decision with the result.
   unrelated reformatting, debug code, temporary files, secrets, or unintended generated
   artifacts. Tests and docs must match the behavior change.
 
+### Analytics must be data-backed
+
+- Show a metric, chart, score, percentage or insight only when OpenAlgo stores every input and the calculation is verified.
+- Before shipping, record a mapping: displayed metric, data source, calculation checked against an independent recompute, coverage as included count over total.
+- When data is missing, remove the metric. Never show zero, an estimate, an inference or a placeholder.
+- When coverage is partial, show the included count where the metric appears. If the count would mislead, remove the metric.
+- Never rebuild a missing input by assumption. R-multiple needs a recorded planned stop. Drawdown percent needs an equity baseline. Sharpe and Sortino need a return series. Setup analysis needs setup tags. MAE/MFE needs price coverage.
+- Report a metric that needs data OpenAlgo does not store as a data gap. Collecting that data needs separate approval.
+- Show the sample size and the basis (gross or net) with every metric.
+- Set no minimum trade count. Show the sample size and let the trader judge. The discretionary page is a decision-review tool, not strategy validation.
+
 ### Destructive and external actions
 
 Prefer reversible local actions. Without explicit authorization, do not delete files,
