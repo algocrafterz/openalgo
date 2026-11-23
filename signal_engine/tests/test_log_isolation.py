@@ -21,6 +21,17 @@ def _inside_real_logs(path: str) -> bool:
     return os.path.commonpath([os.path.realpath(path), REAL_LOGS]) == REAL_LOGS
 
 
+def _snapshot_real_logs() -> dict | None:
+    """File sizes under the real logs directory, or None when it does not exist.
+
+    The directory is untracked, so a fresh checkout or worktree has none. Absent is a state to
+    compare, not an error: writing to the real logs would create it.
+    """
+    if not os.path.isdir(REAL_LOGS):
+        return None
+    return {n: os.path.getsize(os.path.join(REAL_LOGS, n)) for n in os.listdir(REAL_LOGS)}
+
+
 @pytest.fixture
 def at_repo_root(monkeypatch):
     """The cwd the suite normally runs from, where the relative path means the real logs."""
@@ -42,12 +53,12 @@ def test_resolved_dirs_are_outside_real_logs(at_repo_root):
 
 def test_setup_logger_from_repo_root_writes_nothing_to_real_logs(at_repo_root, monkeypatch):
     monkeypatch.setattr(logger_setup, "_current_mode", "unknown")
-    before = {n: os.path.getsize(os.path.join(REAL_LOGS, n)) for n in os.listdir(REAL_LOGS)}
+    before = _snapshot_real_logs()
     logger_setup.setup_logger()
     logger.info("log isolation probe")
     logger.error("log isolation probe error")
     logger.complete()
-    after = {n: os.path.getsize(os.path.join(REAL_LOGS, n)) for n in os.listdir(REAL_LOGS)}
+    after = _snapshot_real_logs()
     assert after == before
 
 
