@@ -326,3 +326,32 @@ class TestSurveillanceFetchFallback:
         symbols, failed = wls.fetch_surveillance_symbols()
         assert failed is True
         assert symbols == set()
+
+    @pytest.mark.parametrize("body", [b"", b"<html>Access Denied</html>"])
+    def test_non_json_body_logs_one_warning_without_traceback(self, monkeypatch, caplog, body):
+        """NSE answers the ASM/GSM call with an empty or HTML body on some days. The
+        fallback is unchanged, but it is one WARNING line, not an ERROR with traceback."""
+        import logging
+
+        import httpx
+
+        class EmptyClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def get(self, *a, **kw):
+                return httpx.Response(200, content=body)
+
+        monkeypatch.setattr(httpx, "Client", lambda *a, **kw: EmptyClient())
+        with caplog.at_level(logging.DEBUG):
+            symbols, failed = wls.fetch_surveillance_symbols()
+        assert failed is True
+        assert symbols == set()
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert not [r for r in caplog.records if r.exc_info]
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "fallback" in warnings[0].getMessage()

@@ -203,6 +203,15 @@ def fetch_surveillance_symbols() -> tuple[set[str], bool]:
         symbols |= {row["symbol"] for row in asm["shortterm"]["data"]}
         symbols |= {row["symbol"] for row in gsm}
         return symbols, False
+    except json.JSONDecodeError:
+        # NSE sometimes answers with an empty or HTML body. The fallback below is the
+        # intended behaviour, so this is a warning without a traceback, not an error.
+        from utils.logging import get_logger
+
+        get_logger(__name__).warning(
+            "NSE surveillance list (ASM/GSM) could not be read; the built-in fallback list is used"
+        )
+        return set(), True
     except Exception:
         from utils.logging import get_logger
 
