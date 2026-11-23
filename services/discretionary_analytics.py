@@ -550,7 +550,7 @@ def consistency(
     gross_days = [float(r["realized_gross"]) for r in daily_rows]
     enough = days >= MIN_DAYS_FOR_DAILY
     overall = (hold or {}).get("overall") or {}
-    return {
+    out = {
         "basis": (
             "trade-level items (largest win / loss, streaks) are net of estimated charges; "
             "daily figures and drawdown are gross realized P&L (before charges) unless the "
@@ -584,6 +584,16 @@ def consistency(
         "avg_hold_minutes": overall.get("mean_minutes"),
         "median_hold_minutes": overall.get("median_minutes"),
     }
+    # Additive keys below: each is ABSENT (not null) when it cannot be computed.
+    for name, value in (
+        ("net_days", net_day_stats(daily_rows)),
+        ("trades_per_day", trades_per_day(trades)),
+        ("reentry_after_loss", reentry_after_loss(trades)),
+        ("quantity_by_symbol", quantity_by_symbol(trades)),
+    ):
+        if value:
+            out[name] = value
+    return out
 
 
 # ---------------------------------------------------------------- completed trades
@@ -859,18 +869,40 @@ def drawdown(trades: list[dict]) -> dict:
     equity = peak = worst = 0.0
     worst_at = None
     used = skipped = 0
+    peak_at = None  # close time of the position that set the peak (None: the start at 0)
+    first_open = None
+    first_open_dt = None
+    series: list[tuple] = []  # (closed_at, equity) of every position with a net
+    worst_idx = None
+    worst_peak = 0.0
+    worst_start = None
+    worst_from_zero = False
     for t in _by_close(trades):
         pnl = net_value(t)
         if pnl is None:
             skipped += 1
             continue
         used += 1
+        # Earliest opening among the positions used so far (not the first one to close).
+        opened = _as_datetime(t.get("opened_at"))
+        if opened is not None and (first_open_dt is None or opened < first_open_dt):
+            first_open, first_open_dt = t.get("opened_at"), opened
         equity += pnl
+        series.append((t["closed_at"], equity))
+        if equity > peak:
+            peak_at = t["closed_at"]
         peak = max(peak, equity)
         if peak - equity > worst:
             worst = peak - equity
             worst_at = t["closed_at"]
-    return {
+            worst_idx = len(series) - 1
+            worst_peak = peak
+            worst_start = peak_at if peak_at is not None else first_open
+            worst_from_zero = peak_at is None
+    detail = _drawdown_detail(
+        series, worst_idx, worst, worst_peak, worst_start, started_at_zero=worst_from_zero
+    )
+    out = {
         "basis": "net realised equity by position close time, peak starts at 0",
         "positions": used,
         "net_unavailable_positions": skipped,
@@ -883,6 +915,164 @@ def drawdown(trades: list[dict]) -> dict:
         "current_drawdown_pct": None,
         "percent_unavailable_reason": "no capital basis",
     }
+    if detail:
+        out["max_drawdown_detail"] = detail
+    return out
+
+
+def _minutes_between(start, end) -> float | None:
+    a, b = _as_datetime(start), _as_datetime(end)
+    if a is None or b is None:
+        return None
+    return round(max((b - a).total_seconds(), 0.0) / 60.0, 2)
+
+
+def _drawdown_detail(
+    series: list[tuple], worst_idx, worst: float, peak_level: float, start, started_at_zero: bool
+) -> dict | None:
+    """Timing of the deepest NET drawdown, or None when there is no drawdown (a key that is
+    then absent from ``drawdown``). ``start_at`` is the close of the position that set the
+    peak (or, when the peak is the starting 0, the earliest opening among the positions closed up
+    to the trough),
+    ``trough_at`` the close that reached the depth, ``recovered_at`` the first later close
+    whose equity is back at the peak (absent when never recovered). ``duration_minutes`` runs
+    from the start to the recovery, or to the latest close when not recovered; absent when
+    a time is missing."""
+    if worst_idx is None or round(worst, 2) <= 0:
+        return None
+    recovered_at = next(
+        (c for c, eq in series[worst_idx + 1 :] if clean_money(eq - peak_level) >= 0), None
+    )
+    end = recovered_at if recovered_at is not None else series[-1][0]
+    detail: dict = {
+        "depth": _r(worst, 2),
+        "trough_at": series[worst_idx][0],
+        "recovered": recovered_at is not None,
+        "start_basis": "first position opened" if started_at_zero else "peak close",
+    }
+    if start is not None:
+        detail["start_at"] = start
+    if recovered_at is not None:
+        detail["recovered_at"] = recovered_at
+    duration = _minutes_between(start, end)
+    if duration is not None:
+        detail["duration_minutes"] = duration
+        detail["duration_basis"] = (
+            "start to recovery" if recovered_at is not None else "start to latest close"
+        )
+    return detail
+
+
+# ---------------------------------------------------------------- behaviour (additive)
+
+# A position opened within this many minutes after the close of a losing position counts as
+# a quick re-entry. Objective timing only; it says nothing about why the trader re-entered.
+REENTRY_WINDOW_MINUTES = 15
+
+
+def net_day_stats(daily_rows: list[dict]) -> dict:
+    """Winning / losing / flat days on the NET basis (``net_of_charges`` of each daily row).
+    A day whose charges are incomplete has no reliable net and is counted in
+    ``net_unavailable_days``, not as a win or loss. Empty dict when no day has a net."""
+    nets = []
+    skipped = 0
+    for r in daily_rows:
+        if not r.get("net_charges_complete", True) or r.get("net_of_charges") is None:
+            skipped += 1
+            continue
+        nets.append(clean_money(float(r["net_of_charges"])))
+    if not nets:
+        return {}
+    winning = sum(1 for v in nets if v > 0)
+    return {
+        "basis": "net of estimated charges, by close date",
+        "total_days": len(nets),
+        "winning_days": winning,
+        "losing_days": sum(1 for v in nets if v < 0),
+        "flat_days": sum(1 for v in nets if v == 0),
+        "winning_day_pct": _pct(winning / len(nets)),
+        "net_unavailable_days": skipped,
+    }
+
+
+def trades_per_day(trades: list[dict]) -> dict:
+    """Completed positions per close session date: average over the days with a close and
+    the busiest day (earliest on a tie). Empty dict without trades."""
+    counts: dict[str, int] = {}
+    for t in trades:
+        if not t.get("trade_date"):
+            continue
+        day = str(t["trade_date"])[:10]
+        counts[day] = counts.get(day, 0) + 1
+    if not counts:
+        return {}
+    max_day = min(counts, key=lambda d: (-counts[d], d))
+    return {
+        "basis": "completed positions by close date",
+        "days": len(counts),
+        "avg": _r(sum(counts.values()) / len(counts), 2),
+        "max": counts[max_day],
+        "max_day": max_day,
+    }
+
+
+def reentry_after_loss(trades: list[dict], window_minutes: int = REENTRY_WINDOW_MINUTES) -> dict:
+    """Timing of the next position opened after each losing position (net < 0) closed.
+
+    The next position is the first one, in any symbol, opened at or after the close of the
+    loss (the loss itself never counts). ``reentries_within_window`` counts those opened
+    within ``window_minutes``. Empty dict when no loss is followed by a later entry."""
+    opens = sorted(
+        ((m, t.get("id")) for t in trades if (m := _as_datetime(t.get("opened_at"))) is not None),
+        key=lambda x: x[0],
+    )
+    losses = 0
+    quick = 0
+    shortest = None
+    for t in trades:
+        pnl = net_value(t)
+        closed = _as_datetime(t.get("closed_at"))
+        if pnl is None or pnl >= 0 or closed is None:
+            continue
+        nxt = next((m for m, pid in opens if pid != t.get("id") and m >= closed), None)
+        if nxt is None:
+            continue
+        gap = (nxt - closed).total_seconds() / 60.0
+        losses += 1
+        if gap <= window_minutes:
+            quick += 1
+        shortest = gap if shortest is None else min(shortest, gap)
+    if not losses:
+        return {}
+    return {
+        "window_minutes": window_minutes,
+        "losses_followed_by_entry": losses,
+        "reentries_within_window": quick,
+        "shortest_gap_minutes": _r(shortest, 2),
+    }
+
+
+def quantity_by_symbol(trades: list[dict]) -> list[dict]:
+    """Min / median / max total closed quantity of the completed positions per symbol
+    (exchange and symbol), sorted by symbol. Empty list without trades."""
+    groups: dict[tuple, list[float]] = {}
+    for t in trades:
+        if t.get("symbol") is None or t.get("closed_quantity") is None:
+            continue
+        groups.setdefault((t["symbol"], t.get("exchange") or ""), []).append(
+            float(t["closed_quantity"])
+        )
+    return [
+        {
+            "symbol": sym,
+            "exchange": exch,
+            "positions": len(qs),
+            "min_quantity": min(qs),
+            "median_quantity": _r(statistics.median(qs), 2),
+            "max_quantity": max(qs),
+        }
+        for (sym, exch), qs in sorted(groups.items())
+    ]
 
 
 def risk_block(trades: list[dict]) -> dict:
