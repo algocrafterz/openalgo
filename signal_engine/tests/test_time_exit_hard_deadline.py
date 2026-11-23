@@ -237,12 +237,13 @@ class TestAcceptedCancelBudgetGone:
         assert cancels and (not sends or sends[0] > cancels[0])
         assert b.working() == []  # nothing is left working beside the close
         # The position ends closed, or protected. Never open with its stop gone and no repair.
-        closed = b.qty_of("PFC") == 0
-        protected = h.place.await_count > 0 or any(
-            r["order_status"] == "trigger pending" for r in b.rows.values())
+        # Exact outcome: the position is still open (50 shares), no exit order went out, and the
+        # stop was placed again once, directly in the pass, and its id is tracked.
         pos = tracker.find_position("PFC", STRAT)
-        handed_over = pos is not None and pos.sl_order_id == ""
-        assert closed or protected or handed_over
+        assert b.qty_of("PFC") == 50
+        assert b.count("send") == 0
+        assert h.place.await_count == 1
+        assert pos is not None and pos.sl_order_id == "NEWSTOP"
         assert not any("keeps its stop" in a for a in h.alerts)
 
     async def test_a_hard_deadline_with_the_stop_cancelled_hands_the_stop_to_the_retry(self):
@@ -432,7 +433,7 @@ class TestEverySiteIsBounded:
                 await asyncio.wait_for(tracker._close_strategy(STRAT, {"PFC"}), timeout=3)
         finally:
             lock.release()
-        assert STRAT in getattr(tracker, "_deadline_unclosed", {STRAT: 1})
+        assert tracker._deadline_unclosed == {STRAT}
 
     async def test_send_exit_with_retries_stops_new_attempts(self):
         from signal_engine import main as main_mod

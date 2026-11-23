@@ -111,6 +111,10 @@ _SL_HIT_UNPROVEN_ALERT_INTERVAL_S = 600.0
 #: that time and shortens its wait to it. None (every other caller) changes nothing.
 _exit_time_left: contextvars.ContextVar = contextvars.ContextVar("exit_time_left", default=None)
 
+#: Message of the result _send_exit_with_retries returns when the time exit's deadline leaves no
+#: time for even one send. Nothing was sent; the time exit reads it as "not closed in time".
+DEADLINE_NOT_SENT = "not sent: the time exit's deadline is too near"
+
 
 def _exit_lock_key(symbol: str, strategy: str) -> str:
     return f"{symbol}:{strategy}"
@@ -810,18 +814,36 @@ async def _send_exit_with_retries(exit_order, pos) -> TradeResult:
     reconciles it (the held result is a TIMEOUT, so the caller leaves the position
     registered and the next exit signal or bar tries again).
     """
-    held = await _settle_prior_uncertain_exit(exit_order, pos)
-    if held is not None:
-        return held
+    time_left = _exit_time_left.get()
+    if time_left is None:
+        held = await _settle_prior_uncertain_exit(exit_order, pos)
+        if held is not None:
+            return held
+    else:
+        # The time exit: an unsettled earlier exit is held WITHOUT the settle read. That read can
+        # take about a minute, and the order it would clear for may go out after the deadline,
+        # beside the 14:55 square-off. The sweeper settles it later.
+        pending = order_reconcile.get_uncertain(pos.strategy, pos.symbol)
+        if pending is not None and pending.kind == "EXIT":
+            logger.critical(
+                f"EXIT {pos.symbol} [{pos.strategy}]: an earlier exit is still unconfirmed; the "
+                "time exit sends nothing beside it and does not read the book for it"
+            )
+            return TradeResult(
+                status=OrderStatus.TIMEOUT,
+                message=f"UNCERTAIN: an earlier exit for {pos.symbol} [{pos.strategy}] is unconfirmed; not resent",
+            )
     trade_result = TradeResult(status=OrderStatus.ERROR, message="Not attempted")
     attempt_started = datetime.now(IST).replace(microsecond=0)  # broker stamps are whole seconds
     resent_after_absent = False  # a timed-out copy was proven absent and the exit went out again
-    time_left = _exit_time_left.get()
     for _attempt in range(1, settings.bracket_tp_exit_retries + 1):
-        if _attempt > 1 and time_left is not None and time_left() < settings.order_timeout:
+        if time_left is not None and time_left() < settings.order_timeout:
+            # A send's worst case is order_timeout: it must end before the deadline.
             logger.warning(
                 f"EXIT for {exit_order.symbol}: no new attempt, the time exit's deadline is too near"
             )
+            if _attempt == 1:
+                trade_result = TradeResult(status=OrderStatus.ERROR, message=DEADLINE_NOT_SENT)
             break
         trade_result = await send_order(exit_order)
         if trade_result.status == OrderStatus.SUCCESS:
@@ -835,6 +857,21 @@ async def _send_exit_with_retries(exit_order, pos) -> TradeResult:
         # BUG-019: a core "identical order in flight" rejection means a copy of this exit is
         # still being placed. It is reconciled like a timeout and never answered with a resend.
         in_flight = _is_inflight_rejection(trade_result)
+        if (trade_result.status == OrderStatus.TIMEOUT or in_flight) and time_left is not None:
+            # The time exit has no time for the book reads and the late-fill watch of a
+            # reconcile (about 60 s + 120 s), and nothing may be sent again: mark the exit
+            # unconfirmed and hand it back. The leg stays tracked; the sweeper and the poll
+            # settle it, and a late fill is labelled TIME.
+            order_reconcile.mark_uncertain(
+                order_reconcile.UncertainOrder(
+                    strategy=pos.strategy, symbol=pos.symbol, action=exit_order.action.value,
+                    quantity=exit_order.quantity, since=attempt_started, kind="EXIT",
+                    watch_until=datetime.now(IST) + timedelta(seconds=_LATE_FILL_WATCH_SECONDS),
+                )
+            )
+            return await _hold_uncertain_exit(
+                exit_order, pos, "the time exit's deadline leaves no time to check the order book"
+            )
         if trade_result.status == OrderStatus.TIMEOUT or in_flight:
             # The window restarts at EVERY send. Counted from the first send it was spent by the
             # time attempt 2 timed out (2026-11-04 AXISBANK: attempt 3 left 0.5 s later).
