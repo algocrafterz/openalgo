@@ -875,7 +875,9 @@ def _aggregate_strategy_stats(records) -> dict:
     win/loss classification tracker.py's own day counters use: a TIME exit is counted as a
     trade but excluded from wins/losses (it was force-closed by the clock, not decided by the
     strategy's own exit rule)."""
-    time_exits = sum(1 for r in records if "TIME" in (r.exit_types or []))
+    from signal_engine.db import TIME_EXIT_TYPES
+
+    time_exits = sum(1 for r in records if set(r.exit_types or []) & TIME_EXIT_TYPES)
     decided = [r for r in records if not _is_not_decided(r)]
     wins = sum(1 for r in decided if r.total_pnl >= 0)
     losses = sum(1 for r in decided if r.total_pnl < 0)

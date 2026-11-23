@@ -1,6 +1,7 @@
 """Entry point and pipeline orchestration for the signal engine."""
 
 import asyncio
+import contextvars
 import math
 import os
 import sqlite3
@@ -103,6 +104,12 @@ _exit_locks: dict[str, asyncio.Lock] = {}
 # (time.monotonic()); one alert per position per _SL_HIT_UNPROVEN_ALERT_INTERVAL_S.
 _sl_hit_unproven_alerted: dict[str, float] = {}
 _SL_HIT_UNPROVEN_ALERT_INTERVAL_S = 600.0
+
+
+#: Set by the time exit around its close: a callable returning the seconds left before the
+#: pass's hard deadline. _send_exit_with_retries begins no new attempt it cannot finish in
+#: that time and shortens its wait to it. None (every other caller) changes nothing.
+_exit_time_left: contextvars.ContextVar = contextvars.ContextVar("exit_time_left", default=None)
 
 
 def _exit_lock_key(symbol: str, strategy: str) -> str:
@@ -809,7 +816,13 @@ async def _send_exit_with_retries(exit_order, pos) -> TradeResult:
     trade_result = TradeResult(status=OrderStatus.ERROR, message="Not attempted")
     attempt_started = datetime.now(IST).replace(microsecond=0)  # broker stamps are whole seconds
     resent_after_absent = False  # a timed-out copy was proven absent and the exit went out again
+    time_left = _exit_time_left.get()
     for _attempt in range(1, settings.bracket_tp_exit_retries + 1):
+        if _attempt > 1 and time_left is not None and time_left() < settings.order_timeout:
+            logger.warning(
+                f"EXIT for {exit_order.symbol}: no new attempt, the time exit's deadline is too near"
+            )
+            break
         trade_result = await send_order(exit_order)
         if trade_result.status == OrderStatus.SUCCESS:
             if resent_after_absent:
@@ -842,7 +855,10 @@ async def _send_exit_with_retries(exit_order, pos) -> TradeResult:
                 return outcome
             resent_after_absent = True  # the book stayed clean for the whole watch: resend
         if _attempt < settings.bracket_tp_exit_retries:
-            await asyncio.sleep(settings.bracket_retry_delay)
+            delay = settings.bracket_retry_delay
+            if time_left is not None:
+                delay = min(delay, max(0.0, time_left()))
+            await asyncio.sleep(delay)
     return trade_result
 
 

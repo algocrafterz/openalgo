@@ -396,6 +396,8 @@ EXIT_BAD_FILL_CLOSE = "BAD_FILL_CLOSE"
 #: and average R leave them out; trade counts and net P&L keep them. One set, so the headline
 #: summary and the per-strategy lines cannot disagree.
 NOT_DECIDED_EXIT_TYPES = frozenset({"TIME", "SQUAREOFF", EXIT_BAD_FILL_CLOSE})
+#: The closes the summary counts as time exits ("T:"): the clock or the square-off, not the rule.
+TIME_EXIT_TYPES = frozenset({"TIME", "SQUAREOFF"})
 EXIT_ENTRY_REJECTED_SLIPPAGE = "ENTRY_REJECTED_SLIPPAGE"
 EXIT_ENTRY_REJECTED_TP_OVERSHOT = "ENTRY_REJECTED_TP_OVERSHOT"
 EXIT_ENTRY_REJECTED_STOP_BREACHED = "ENTRY_REJECTED_STOP_BREACHED"

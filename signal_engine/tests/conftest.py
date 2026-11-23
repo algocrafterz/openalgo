@@ -98,6 +98,24 @@ def _never_touch_the_real_trades_db(tmp_path, monkeypatch):
     monkeypatch.setattr("signal_engine.tracker._DAY_SUMMARY_MARKER", str(tmp_path / "day_summary"))
 
 
+@pytest.fixture(autouse=True)
+def _time_exit_clock_before_the_hard_deadline(monkeypatch):
+    """Pin the wall clock the time exit reads to 14:45 IST.
+
+    The time-exit pass ends at 14:54:30 IST by the wall clock (tracker._now_ist), so a test that
+    runs a pass would otherwise pass or fail by the hour it is run at. Tests of the deadline
+    patch `_now_ist` themselves.
+    """
+    from datetime import datetime
+
+    from signal_engine import tracker as _tracker_module
+
+    monkeypatch.setattr(
+        _tracker_module, "_now_ist",
+        lambda: datetime.now(_tracker_module.IST).replace(hour=14, minute=45, second=0, microsecond=0),
+    )
+
+
 async def _blocked_post(self, url, *_args, **_kwargs):
     """Replacement for httpx.AsyncClient.post — see _block_real_openalgo_api_calls.
 
