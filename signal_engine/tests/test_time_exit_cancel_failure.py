@@ -56,7 +56,7 @@ async def _time_exit(cancel_results, books, broker_qty=0):
         return seq.pop(0) if len(seq) > 1 else seq[0]
 
     with (
-        patch("signal_engine.tracker.cancel_all_orders", cancel),
+        patch("signal_engine.api_client.cancel_all_orders", cancel),
         patch("signal_engine.tracker.cancel_order", cancel_one),
         patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value=""),
         patch.object(PositionTracker, "_close_strategy", close),
@@ -164,7 +164,7 @@ class TestCancelAllSkipsTriggerPending:
         cancel_all = AsyncMock(return_value=True)  # "success", but cancels nothing (the core bug)
         cancel_one = AsyncMock(side_effect=cancel_by_id)
         with (
-            patch("signal_engine.tracker.cancel_all_orders", cancel_all),
+            patch("signal_engine.api_client.cancel_all_orders", cancel_all),
             patch("signal_engine.tracker.cancel_order", cancel_one),
             patch.object(
                 PositionTracker,
@@ -213,7 +213,7 @@ class TestNoCloseBesideAnUnconfirmedStop:
         tracker = PositionTracker(engine)
         tracker.register(_make_position(symbol="PFC", strategy=STRAT, product="MIS"))
         with (
-            patch("signal_engine.tracker.cancel_all_orders", AsyncMock(return_value=True)),
+            patch("signal_engine.api_client.cancel_all_orders", AsyncMock(return_value=True)),
             patch("signal_engine.tracker.cancel_order", AsyncMock(side_effect=cancel_by_id)),
             patch.object(PositionTracker, "_close_strategy", AsyncMock(side_effect=close)),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=0),
@@ -253,7 +253,7 @@ class TestNoCloseBesideAnUnconfirmedStop:
             return open_qty[symbol]
 
         with (
-            patch("signal_engine.tracker.cancel_all_orders", AsyncMock(return_value=True)),
+            patch("signal_engine.api_client.cancel_all_orders", AsyncMock(return_value=True)),
             patch("signal_engine.tracker.cancel_order", AsyncMock(return_value=True)),
             patch.object(PositionTracker, "_close_strategy", close),
             patch("signal_engine.tracker.fetch_net_position", AsyncMock(side_effect=qty)),
@@ -269,7 +269,7 @@ class TestNoCloseBesideAnUnconfirmedStop:
 
     async def test_a_retry_close_also_waits_for_a_confirmed_cancel(self):
         """First close leaves the position open; a stop reappears before the retry: no re-close."""
-        books = [[], [], [_order()]]  # clean before the first close; a stop has landed by the retry
+        books = [[], [_order()]]  # clean before the first close (one read); a stop has landed by the retry
         tracker, cancel, close, notifier = await _time_exit([True], books=books, broker_qty=50)
         assert close.await_count == 1
         assert "TIME EXIT SKIPPED" in _alerts(notifier)

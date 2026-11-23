@@ -8,8 +8,10 @@ An unreadable order book cancels nothing and keeps the position managed; the ret
 The scheduler's 14:55 square-off still uses cancel-all (test_scheduler_squareoff.py).
 """
 
+import ast
 import asyncio
 import threading
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -81,16 +83,20 @@ class FakeBroker:
             row = self.rows.get(order_id)
             return row["order_status"] if row else ""
 
-    async def cancel_all_orders(self, strategy):
-        self.cancel_all_calls.append(strategy)
-        raise AssertionError(f"cancel_all_orders called for {strategy}")
+    async def post_tolerant(self, path, payload=None, *args, **kwargs):
+        """Stands in for the HTTP post under api_client: any cancel-all request is recorded."""
+        if path == "cancelallorder":
+            self.cancel_all_calls.append((payload or {}).get("strategy"))
+        raise AssertionError(f"unexpected broker post: {path}")
 
 
 def _patches(broker, net_qty=0, tracker_notifier=None):
     return (
+        # The cancelallorder endpoint itself: a cancel-all from any module is recorded, not only
+        # one made through a name imported into tracker.py.
         patch(
-            "signal_engine.tracker.cancel_all_orders",
-            AsyncMock(side_effect=broker.cancel_all_orders),
+            "signal_engine.api_client._post_tolerant",
+            AsyncMock(side_effect=broker.post_tolerant),
         ),
         patch("signal_engine.tracker.cancel_order", AsyncMock(side_effect=broker.cancel_order)),
         patch(
@@ -346,7 +352,277 @@ class TestCancelAllNeverCalledFromTracker:
         assert close.await_count == 2
 
     async def test_unreadable_book_during_confirmation_never_cancel_all(self):
-        broker = FakeBroker([_row("OWN", "ORB")], unreadable_reads=100)
+        # The book is readable and clean until the close goes out, then dies. The strategy is
+        # closed, so the post-close confirmation stage really runs against an unreadable book.
+        broker = FakeBroker([_row("OWN", "ORB"), _row("OTHER", "ORB-PY")])
         tracker = _tracker(("PFC", "ORB"))
-        await _run_time_exit(tracker, broker)
+
+        reads_at_close = []
+
+        def close_then_book_dies(strategy, symbols):
+            reads_at_close.append(broker.reads)
+            broker.unreadable_reads = 10_000
+
+        close = AsyncMock(side_effect=close_then_book_dies)
+        note = AsyncMock()
+        ps = _patches(broker, 0, note)
+        with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6], ps[7]:
+            with patch.object(PositionTracker, "_close_strategy", close):
+                await tracker.time_exit_all()
+        assert close.await_count == 1  # the strategy was closed: the stage after it is reached
+        assert broker.reads - reads_at_close[0] >= 4  # confirmation retried an unreadable book
+        assert broker.cancelled == ["OWN"]  # only the pre-close by-id cancel
         assert broker.cancel_all_calls == []
+        assert broker.working("ORB-PY") == ["OTHER"]
+        alerts = " ".join(str(c.args[0]) for c in note.notify.await_args_list if c.args)
+        assert "not confirmed cancelled" in alerts
+        assert "could not be read" in alerts
+
+
+@pytest.mark.asyncio
+class TestTagMatching:
+    """Review #4: exact match after .strip() only. No case folding."""
+
+    async def test_padded_tag_matches_exact_strategy(self):
+        broker = FakeBroker([_row("PADDED", " ORB "), _row("OTHER", "ORB-PY")])
+        await _run_time_exit(_tracker(("PFC", "ORB")), broker)
+        assert broker.cancelled == ["PADDED"]
+
+    async def test_lowercase_tag_is_a_different_strategy(self):
+        # "orb" is not "ORB": not cancelled, not treated as ours, not confirmed away either
+        broker = FakeBroker([_row("LOWER", "orb"), _row("OWN", "ORB")])
+        await _run_time_exit(_tracker(("PFC", "ORB")), broker)
+        assert broker.cancelled == ["OWN"]
+        assert "LOWER" not in broker.cancel_calls
+        assert broker.rows["LOWER"]["order_status"] == "trigger pending"
+
+    async def test_none_tag_cancelled_under_the_strategys_tag(self):
+        broker = FakeBroker([_row("NOTAG", None)])
+        seen = []
+        real = broker.cancel_order
+
+        async def spy(order_id, strategy):
+            seen.append((order_id, strategy))
+            return await real(order_id, strategy)
+
+        broker.cancel_order = spy
+        await _run_time_exit(_tracker(("PFC", "ORB")), broker)
+        assert broker.cancelled == ["NOTAG"]
+        assert seen == [("NOTAG", "ORB")]
+
+    async def test_row_without_orderid_key_is_skipped_and_incomplete(self):
+        row = _row("X", "ORB")
+        del row["orderid"]
+        broker = FakeBroker([_row("HASID", "ORB")])
+        broker.rows["nokey"] = row  # keyed apart: the row itself has no orderid
+        tracker = _tracker(("PFC", "ORB"))
+        ps = _patches(broker)
+        with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6], ps[7]:
+            complete, filled = await tracker._cancel_strategy_orders("ORB", {"PFC"})
+        assert complete is False and filled == []
+        assert broker.cancelled == ["HASID"]
+        assert broker.cancel_all_calls == []
+
+    async def test_untagged_mis_stop_on_shared_symbol_is_ours_by_owner_decision(self):
+        # Accepted behaviour: an untagged MIS working order on a symbol this strategy closes is
+        # cancelled, even when it belongs to a strategy that is not in mis_positions.
+        broker = FakeBroker(
+            [
+                _row("UNTAGGED-STOP", "", "PFC", product="MIS"),
+                _row("TAGGED-OTHER", "BREAKINGTRADE", "PFC"),
+            ]
+        )
+        await _run_time_exit(_tracker(("PFC", "ORB")), broker)
+        assert broker.cancelled == ["UNTAGGED-STOP"]
+        assert broker.working("BREAKINGTRADE") == ["TAGGED-OTHER"]
+
+
+class TestWorkingOrdersTagRules:
+    def test_working_orders_unit_cases(self):
+        rows = [
+            _row("A", " ORB "),
+            _row("B", "orb"),
+            _row("C", None),  # no tag: an MIS order on our symbol is ours
+            _row("D", "ORB-PY"),
+        ]
+        got = PositionTracker._working_orders(rows, {"ORB"}, {"PFC"})
+        assert [o["orderid"] for o in got] == ["A", "C"]
+
+
+@pytest.mark.asyncio
+class TestOrderBookReads:
+    """Review #5: how many order-book reads one strategy costs."""
+
+    async def test_healthy_book_with_working_orders_two_reads(self):
+        broker = FakeBroker([_row("OWN", "ORB")])
+        tracker = _tracker(("PFC", "ORB"))
+        ps = _patches(broker)
+        with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6], ps[7]:
+            with patch.object(PositionTracker, "_close_strategy", AsyncMock()) as close:
+                _, skipped = await tracker._square_off_strategies(dict(tracker._positions))
+        assert skipped == set() and close.await_count == 1
+        assert broker.cancelled == ["OWN"]
+        assert broker.reads == 2  # the cancel pass, then the confirmation before the close
+
+    async def test_nothing_working_reuses_the_clean_read(self):
+        broker = FakeBroker([_row("OTHER", "ORB-PY")])
+        tracker = _tracker(("PFC", "ORB"))
+        ps = _patches(broker)
+        with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6], ps[7]:
+            skipped = await tracker._square_off_strategies(dict(tracker._positions))
+        assert skipped == (set(), set())
+        assert broker.reads == 1
+
+    async def test_one_time_unreadable_book_three_reads_one_cancel(self):
+        broker = FakeBroker([_row("OWN", "ORB")], unreadable_reads=1)
+        tracker = _tracker(("PFC", "ORB"))
+        ps = _patches(broker)
+        with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6], ps[7]:
+            with patch.object(PositionTracker, "_close_strategy", AsyncMock()) as close:
+                _, skipped = await tracker._square_off_strategies(dict(tracker._positions))
+        assert skipped == set() and close.await_count == 1
+        assert broker.reads == 3
+        assert broker.cancelled == ["OWN"] and broker.cancel_calls == ["OWN"]
+
+    async def test_permanently_unreadable_book_five_reads_no_close(self):
+        broker = FakeBroker([_row("OWN", "ORB")], unreadable_reads=10_000)
+        tracker = _tracker(("PFC", "ORB"))
+        ps = _patches(broker, 0, AsyncMock())
+        with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6], ps[7]:
+            with patch.object(PositionTracker, "_close_strategy", AsyncMock()) as close:
+                _, skipped = await tracker._square_off_strategies(dict(tracker._positions))
+        assert skipped == {"ORB"} and close.await_count == 0
+        assert broker.reads == 5  # one pre-cancel read and the four of the confirmation loop
+        assert broker.cancel_calls == [] and broker.cancel_all_calls == []
+
+
+class _Clock:
+    def __init__(self):
+        self.t = 5_000.0
+
+    def __call__(self):
+        return self.t
+
+    async def sleep(self, seconds):
+        self.t += seconds
+
+
+@pytest.mark.asyncio
+class TestTimeExitTimeBudget:
+    """Review #5: a per-pass monotonic budget; a dead order book cannot hold the pass past it."""
+
+    READ_COST_S = 19.0  # api.timeout 5 s x 3 tries on a dead book
+
+    def _timed(self, broker, clock):
+        real = broker.fetch_orderbook
+
+        async def slow_read():
+            clock.t += self.READ_COST_S
+            return await real()
+
+        return slow_read
+
+    async def test_five_strategies_dead_book_pass_ends_inside_the_budget(self):
+        from signal_engine import tracker as tracker_mod
+
+        strategies = [f"S{i}" for i in range(5)]
+        symbols = ["PFC", "TCS", "INFY", "SBIN", "ITC"]
+        broker = FakeBroker([_row(f"{s}-STOP", s, sym) for s, sym in zip(strategies, symbols, strict=True)], 10_000)
+        tracker = _tracker(*zip(symbols, strategies, strict=True))
+        clock = _Clock()
+        start = clock.t
+        close = AsyncMock()
+        note = AsyncMock()
+        ps = _patches(broker, 50, note)
+        with ps[0], ps[1], ps[2], ps[4], ps[5], ps[6]:
+            with patch("signal_engine.tracker.fetch_orderbook", AsyncMock(side_effect=self._timed(broker, clock))):
+                with patch("asyncio.sleep", AsyncMock(side_effect=clock.sleep)):
+                    with patch.object(tracker_mod, "_monotonic", clock):
+                        with patch.object(PositionTracker, "_close_strategy", close):
+                            await tracker.time_exit_all()
+        elapsed = clock.t - start
+        budget = tracker_mod._TIME_EXIT_BUDGET_S
+        # one read and one wait may be in flight when the budget runs out
+        assert elapsed <= budget + self.READ_COST_S + 2
+        assert broker.reads == 15  # three strategies read five times; two are skipped unread
+        assert close.await_count == 0  # no close without a confirmed cancel
+        assert broker.cancel_all_calls == [] and broker.cancel_calls == []
+        assert tracker.tracked_count == 5  # all stay tracked and managed
+        alerts = [str(c.args[0]) for c in note.notify.await_args_list if c.args]
+        for s in strategies:
+            assert any("TIME EXIT SKIPPED for " + s in a for a in alerts), s
+        assert any("time budget" in a for a in alerts)
+
+    async def test_strategies_after_the_deadline_make_no_reads(self):
+        from signal_engine import tracker as tracker_mod
+
+        broker = FakeBroker([_row("A-STOP", "A", "PFC")])
+        tracker = _tracker(("PFC", "A"))
+        clock = _Clock()
+        tracker._time_exit_deadline = clock.t - 1  # already past
+        ps = _patches(broker, 0, AsyncMock())
+        with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6]:
+            with patch("asyncio.sleep", AsyncMock(side_effect=clock.sleep)):
+                with patch.object(tracker_mod, "_monotonic", clock):
+                    with patch.object(PositionTracker, "_close_strategy", AsyncMock()) as close:
+                        _, skipped = await tracker._square_off_strategies(dict(tracker._positions))
+        assert skipped == {"A"} and close.await_count == 0
+        assert broker.reads == 0 and broker.cancel_calls == []
+
+    async def test_verify_retry_stops_when_the_budget_is_gone(self):
+        from signal_engine import tracker as tracker_mod
+
+        broker = FakeBroker([_row("OWN", "ORB")])
+        tracker = _tracker(("PFC", "ORB"))
+        clock = _Clock()
+        note = AsyncMock()
+
+        def close_slowly(strategy, symbols):
+            clock.t += tracker_mod._TIME_EXIT_BUDGET_S + 1
+
+        close = AsyncMock(side_effect=close_slowly)
+        ps = _patches(broker, 50, note)
+        with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6]:
+            with patch("asyncio.sleep", AsyncMock(side_effect=clock.sleep)):
+                with patch.object(tracker_mod, "_monotonic", clock):
+                    with patch.object(PositionTracker, "_close_strategy", close):
+                        await tracker.time_exit_all()
+        assert close.await_count == 1  # the re-close was not sent: its cancel cannot be confirmed
+        assert broker.cancel_all_calls == []
+        assert tracker.tracked_count == 1
+
+
+class TestBudgetAgainstFailsafe:
+    READ_COST_S = TestTimeExitTimeBudget.READ_COST_S
+
+    def test_budget_leaves_room_before_the_failsafe_square_off(self):
+        # The 14:55 openAlgoSquareOff task is independent of the time exit and still cancels and
+        # closes with the broker-wide calls; the time exit's budget must end well before it.
+        from signal_engine import tracker as tracker_mod
+        from signal_engine.config import settings
+
+        failsafe_s = 14 * 3600 + 55 * 60
+        start_s = settings.time_exit_hour * 3600 + settings.time_exit_minute * 60 + 5  # 5 s poll
+        in_flight = self.READ_COST_S + 2
+        later_stages = 3 * 3 + 2 * 3 * self.READ_COST_S  # verify waits + two position reads/try
+        assert start_s + tracker_mod._TIME_EXIT_BUDGET_S + in_flight + later_stages < failsafe_s
+        scheduler = Path(__file__).resolve().parents[1] / "scripts" / "openalgoscheduler.py"
+        text = scheduler.read_text(encoding="utf-8")
+        assert "_attempt(cancel_all_orders, strategy" in text
+        assert "_attempt(close_all_positions, strategy" in text
+
+
+class TestTrackerHasNoCancelAll:
+    def test_tracker_source_never_references_cancel_all_orders(self):
+        path = Path(__file__).resolve().parents[1] / "tracker.py"
+        source = path.read_text(encoding="utf-8")
+        assert "cancel_all_orders" not in source
+        for node in ast.walk(ast.parse(source)):
+            names = []
+            if isinstance(node, ast.Name):
+                names.append(node.id)
+            elif isinstance(node, ast.Attribute):
+                names.append(node.attr)
+            elif isinstance(node, ast.alias):
+                names += [node.name, node.asname or ""]
+            assert "cancel_all_orders" not in names

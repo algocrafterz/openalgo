@@ -11,7 +11,6 @@ from loguru import logger
 
 from signal_engine import db, notifier, order_reconcile
 from signal_engine.api_client import (
-    cancel_all_orders,  # noqa: F401  (not called here since BUG-019; tests patch this name)
     cancel_order,
     fetch_net_position,
     fetch_order_fill_price,
@@ -380,6 +379,19 @@ def _mark_summary_sent(trade_count: int) -> None:
 #: Order statuses that mean the order can still execute (as executor._find_resting_sl_order).
 # How long the time exit waits for a signal exit already running on a leg (E-06).
 _EXIT_LOCK_WAIT_SECONDS = 45.0
+
+#: Time budget for the cancel and order-book stages of one time-exit pass. The pass starts at the
+#: time-exit minute (14:45, polled every 5 s) and the independent 14:55 square-off task is the
+#: failsafe, so 300 s leaves about 295 s after the budget for one read and wait still in flight,
+#: the verify stage and the booking. A dead order book costs about 19 s per read (api.timeout 5 s
+#: x 3 tries). When the budget is gone a strategy is neither read nor cancelled again and is not
+#: closed: it stays tracked and an alert goes out (see _square_off_strategies).
+_TIME_EXIT_BUDGET_S = 300.0
+
+_BUDGET_DETAIL = "the time exit's time budget ran out before the order book could be confirmed"
+
+#: The clock the budget reads; tests replace it.
+_monotonic = time.monotonic
 _WORKING_ORDER_STATUSES = ("trigger pending", "open", "pending")
 _BASELINE_READ_ATTEMPTS = 3  # startup reads of the day's realised P&L before giving up
 _BASELINE_RETRY_SECONDS = 2.0
@@ -410,6 +422,8 @@ class PositionTracker:
         self._last_realised_pnl: float = 0.0
         self._pnl_lock: asyncio.Lock = asyncio.Lock()  # serialise _last_realised_pnl updates
         self._time_exit_active: bool = False  # True while time_exit_all() is in progress
+        #: _monotonic() value after which the running time-exit pass stops reading and cancelling.
+        self._time_exit_deadline: float | None = None
         # tracked key -> id of the MARKET order the square-off sent to close that leg
         self._square_off_orders: dict[str, str] = {}
         self._last_stop_audit: float | None = None  # time.monotonic() of the last twin-stop audit
@@ -2381,6 +2395,7 @@ class PositionTracker:
         # signal can book or act on a position the square-off is closing.
         self._time_exit_active = True
         self._square_off_orders = {}
+        self._time_exit_deadline = _monotonic() + _TIME_EXIT_BUDGET_S
         try:
             uncancelled, skipped = await self._square_off_strategies(mis_positions)
             still_open = await self._verify_positions_closed(mis_positions, skipped)
@@ -2393,6 +2408,7 @@ class PositionTracker:
                 await self._book_time_exit_trades(closed, _settings, started, still_open)
         finally:
             self._time_exit_active = False
+            self._time_exit_deadline = None
 
         # Send day summary after MIS positions are closed (deduped — may have already fired)
         await self.send_day_summary()
@@ -2411,16 +2427,36 @@ class PositionTracker:
         for strategy in sorted({pos.strategy for pos in mis_positions.values()}):
             # Cancel all pending orders first (SL-M + TP LIMIT legs); one retry before the close
             symbols = {p.symbol for p in mis_positions.values() if p.strategy == strategy}
+            if self._time_exit_budget_exhausted():
+                # Budget gone (a dead order book): no read, no cancel, no close. The position
+                # stays tracked with its stop; the 14:55 square-off handles it.
+                await self._skip_time_exit(strategy, symbols, _BUDGET_DETAIL)
+                skipped.add(strategy)
+                continue
             # By order id, this strategy's own working orders only: the broker-wide cancel-all
             # also cancelled other strategies' stops and exits (BUG-019, 2026-11-23).
             logger.info(f"Time exit: cancelling pending orders for strategy={strategy}")
-            if not (await self._cancel_strategy_orders(strategy, symbols))[0]:
+            complete, _, book, working_n = await self._cancel_strategy_pass(strategy, symbols)
+            if not complete and book is None:
+                # Unreadable book: the confirmation loop below reads it again, with its own
+                # retries, so a second read here would only repeat the same wait.
+                uncancelled.add(strategy)
+            elif not complete and not self._time_exit_budget_exhausted():
                 logger.warning(f"Time exit: cancel failed for strategy={strategy}, retrying once")
-                if not (await self._cancel_strategy_orders(strategy, symbols))[0]:
+                complete, _, book, working_n = await self._cancel_strategy_pass(strategy, symbols)
+                if not complete:
                     uncancelled.add(strategy)
-            if not await self._close_after_confirmed_cancel(strategy, symbols):
+            elif not complete:
+                uncancelled.add(strategy)
+            # A readable book with no working order of the strategy already is the confirmation.
+            clean_book = book if complete and working_n == 0 else None
+            if not await self._close_after_confirmed_cancel(strategy, symbols, first_book=clean_book):
                 skipped.add(strategy)
         return uncancelled, skipped
+
+    def _time_exit_budget_exhausted(self) -> bool:
+        """True once the running time-exit pass has used its time budget."""
+        return self._time_exit_deadline is not None and _monotonic() >= self._time_exit_deadline
 
     async def _cancel_strategy_orders(self, strategy: str, symbols: set[str]) -> tuple[bool, list[str]]:
         """Cancel `strategy`'s working orders by order id. Never a broker-wide cancel-all.
@@ -2429,13 +2465,20 @@ class PositionTracker:
         so the caller's retry path reads it again. Returns (all cancels accounted for, ids that
         had already filled).
         """
+        complete, filled, _, _ = await self._cancel_strategy_pass(strategy, symbols)
+        return complete, filled
+
+    async def _cancel_strategy_pass(
+        self, strategy: str, symbols: set[str]
+    ) -> tuple[bool, list[str], list | None, int]:
+        """One read and one by-id cancel pass: (complete, filled ids, book or None, working count)."""
         book = await fetch_orderbook()
         if book is None:
             logger.warning(f"Time exit: order book unreadable, nothing cancelled for strategy={strategy}")
-            return False, []
-        return await self._cancel_working_by_id(
-            self._working_orders(book, {strategy}, symbols), {strategy}
-        )
+            return False, [], None, 0
+        working = self._working_orders(book, {strategy}, symbols)
+        complete, filled = await self._cancel_working_by_id(working, {strategy})
+        return complete, filled, book, len(working)
 
     async def _cancel_working_by_id(self, working: list[dict], strategies: set[str]) -> tuple[bool, list[str]]:
         """Cancel each working order by id and keep going whatever one cancel returns.
@@ -2478,28 +2521,36 @@ class PositionTracker:
             complete = False
         return complete, filled
 
-    async def _close_after_confirmed_cancel(self, strategy: str, symbols: set[str]) -> bool:
+    async def _close_after_confirmed_cancel(
+        self, strategy: str, symbols: set[str], first_book: list | None = None
+    ) -> bool:
         """Close the strategy's positions once no order of it is working. False = not closed.
 
         When the cancel cannot be confirmed, the engine cannot know what the stop will leave
         open, so it does not close (owner decision 2026-10-25): the position keeps its stop and
-        a CRITICAL alert asks for a manual close before the broker square-off.
+        a CRITICAL alert asks for a manual close before the broker square-off. `first_book` is a
+        book just read that showed no working order; it stands for the first confirmation read.
         """
-        cleared, detail = await self._clear_working_orders({strategy}, symbols)
+        cleared, detail = await self._clear_working_orders({strategy}, symbols, first_book=first_book)
         if not cleared:
-            logger.critical(
-                f"Time exit SKIPPED for {strategy} ({', '.join(sorted(symbols))}): pending orders "
-                f"not confirmed cancelled ({detail}); positions left open with their stop"
-            )
-            await notifier.notify(
-                f"TIME EXIT SKIPPED for {strategy} ({', '.join(sorted(symbols))}): pending orders "
-                f"not confirmed cancelled ({detail}). The position was NOT closed and keeps its "
-                "stop. Check the order book and close it by hand before the broker square-off."
-            )
+            await self._skip_time_exit(strategy, symbols, detail)
             return False
         logger.info(f"Time exit: closing {strategy}'s own positions ({', '.join(sorted(symbols))})")
         await self._close_strategy(strategy, symbols)
         return True
+
+    @staticmethod
+    async def _skip_time_exit(strategy: str, symbols: set[str], detail: str) -> None:
+        """Log and alert that a strategy was left open with its stop (no confirmed cancel)."""
+        logger.critical(
+            f"Time exit SKIPPED for {strategy} ({', '.join(sorted(symbols))}): pending orders "
+            f"not confirmed cancelled ({detail}); positions left open with their stop"
+        )
+        await notifier.notify(
+            f"TIME EXIT SKIPPED for {strategy} ({', '.join(sorted(symbols))}): pending orders "
+            f"not confirmed cancelled ({detail}). The position was NOT closed and keeps its "
+            "stop. Check the order book and close it by hand before the broker square-off."
+        )
 
     async def _close_strategy(self, strategy: str, symbols: set[str]) -> None:
         """Close `strategy`'s own tracked MIS legs on `symbols`, one MARKET order per leg.
@@ -2638,9 +2689,9 @@ class PositionTracker:
             status = str(o.get("order_status") or o.get("status") or "").lower()
             if status not in _WORKING_ORDER_STATUSES:
                 continue
-            tag = str(o.get("strategy") or "").strip().upper()
+            tag = str(o.get("strategy") or "").strip()  # exact match after strip: no case folding
             if tag:
-                if tag in {s.upper() for s in strategies}:
+                if tag in strategies:
                     working.append(o)
             elif str(o.get("product", "")).upper() == "MIS" and str(o.get("symbol", "")).upper() in {
                 s.upper() for s in symbols
@@ -2674,18 +2725,26 @@ class PositionTracker:
             "check the order book now."
         )
 
-    async def _clear_working_orders(self, strategies: set[str], symbols: set[str]) -> tuple[bool, str]:
+    async def _clear_working_orders(
+        self, strategies: set[str], symbols: set[str], first_book: list | None = None
+    ) -> tuple[bool, str]:
         """Re-cancel until the order book shows no working order of `strategies` on `symbols`.
 
         (True, "") once a readable book is clean; otherwise (False, what is still in doubt). A
         cancel API "success" is not taken as proof. Cancels only: this never places an order.
+        `first_book` replaces the first read. Once the time-exit budget is gone no further read
+        or cancel is made and the result is (False, ...).
         """
         _CANCEL_RETRIES = 3
         _CANCEL_WAIT = 2  # seconds
         working: list[dict] = []
         book = None
+        budget_gone = False
         for attempt in range(_CANCEL_RETRIES + 1):
-            book = await fetch_orderbook()
+            if attempt and self._time_exit_budget_exhausted():
+                budget_gone = True
+                break
+            book = first_book if attempt == 0 and first_book is not None else await fetch_orderbook()
             working = self._working_orders(book, strategies, symbols)
             if book is not None and not working:
                 if attempt:
@@ -2708,9 +2767,10 @@ class PositionTracker:
                 await self._cancel_working_by_id(working, strategies)
             await asyncio.sleep(_CANCEL_WAIT)
 
+        prefix = _BUDGET_DETAIL + "; " if budget_gone else ""
         if book is None:
-            return False, "the order book could not be read to confirm the cancel"
-        return False, "still working: " + ", ".join(
+            return False, prefix + "the order book could not be read to confirm the cancel"
+        return False, prefix + "still working: " + ", ".join(
             f"{o.get('symbol')} {o.get('action')} {o.get('pricetype') or o.get('price_type') or ''} "
             f"id={o.get('orderid') or o.get('order_id')}".strip()
             for o in working
@@ -2768,8 +2828,15 @@ class PositionTracker:
             if attempt < _MAX_CLOSE_ATTEMPTS:
                 for strategy in sorted({pos.strategy for _, pos in still_open} - skipped):
                     symbols = {pos.symbol for _, pos in still_open if pos.strategy == strategy}
-                    await self._cancel_strategy_orders(strategy, symbols)
-                    if not await self._close_after_confirmed_cancel(strategy, symbols):
+                    if self._time_exit_budget_exhausted():
+                        await self._skip_time_exit(strategy, symbols, _BUDGET_DETAIL)
+                        skipped.add(strategy)
+                        continue
+                    complete, _, book, working_n = await self._cancel_strategy_pass(strategy, symbols)
+                    clean_book = book if complete and working_n == 0 else None
+                    if not await self._close_after_confirmed_cancel(
+                        strategy, symbols, first_book=clean_book
+                    ):
                         skipped.add(strategy)
 
         # All retries exhausted and positions still open

@@ -58,7 +58,7 @@ async def _run_time_exit(
     tracker, *, orderbook=None, fill=2510.0, book=None, open_qty=0, realised=0.0, open_fn=None,
 ):
     with (
-        patch("signal_engine.tracker.cancel_all_orders", new_callable=AsyncMock),
+        patch("signal_engine.api_client.cancel_all_orders", new_callable=AsyncMock),
         patch.object(PositionTracker, "_close_strategy", new_callable=AsyncMock),
         patch(
             "signal_engine.tracker.fetch_net_position",

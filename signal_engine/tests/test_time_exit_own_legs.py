@@ -137,7 +137,7 @@ class TestTimeExitEndToEnd:
         send = AsyncMock(side_effect=lambda order, pos: _ok(f"X-{pos.strategy}"))
         saved = []
         with (
-            patch("signal_engine.tracker.cancel_all_orders", AsyncMock(return_value=True)),
+            patch("signal_engine.api_client.cancel_all_orders", AsyncMock(return_value=True)),
             patch("signal_engine.tracker.fetch_orderbook", AsyncMock(return_value=[])),
             patch(
                 "signal_engine.tracker.fetch_net_position",
