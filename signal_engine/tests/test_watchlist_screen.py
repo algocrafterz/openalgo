@@ -355,3 +355,140 @@ class TestSurveillanceFetchFallback:
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1
         assert "fallback" in warnings[0].getMessage()
+
+
+def _client_returning(responder):
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, *a, **kw):
+            return responder(url)
+
+    return lambda *a, **kw: _Client()
+
+
+def _levels(caplog):
+    import logging
+
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    return errors, warnings
+
+
+class TestSurveillanceFetchLogLevels:
+    @pytest.mark.parametrize("status", [403, 503])
+    @pytest.mark.parametrize("body", [b"", b"<html>Access Denied</html>"])
+    def test_non_200_with_non_json_body_is_one_warning(self, monkeypatch, caplog, status, body):
+        import logging
+
+        import httpx
+
+        monkeypatch.setattr(
+            httpx, "Client", _client_returning(lambda url: httpx.Response(status, content=body))
+        )
+        with caplog.at_level(logging.DEBUG):
+            symbols, failed = wls.fetch_surveillance_symbols()
+        errors, warnings = _levels(caplog)
+        assert (symbols, failed) == (set(), True)
+        assert not errors
+        assert not [r for r in caplog.records if r.exc_info]
+        assert len(warnings) == 1
+
+    @pytest.mark.parametrize("status", [403, 503])
+    def test_non_200_with_json_body_stays_an_error(self, monkeypatch, caplog, status):
+        """The code never checks the status. A JSON body of the wrong shape takes the
+        generic path (ERROR with traceback), exactly as before the warning change."""
+        import logging
+
+        import httpx
+
+        monkeypatch.setattr(
+            httpx,
+            "Client",
+            _client_returning(lambda url: httpx.Response(status, json={"error": "denied"})),
+        )
+        with caplog.at_level(logging.DEBUG):
+            symbols, failed = wls.fetch_surveillance_symbols()
+        errors, _ = _levels(caplog)
+        assert (symbols, failed) == (set(), True)
+        assert len(errors) == 1 and errors[0].exc_info
+
+    def test_connect_error_logs_error_with_traceback(self, monkeypatch, caplog):
+        import logging
+
+        import httpx
+
+        def boom(url):
+            raise httpx.ConnectError("simulated NSE outage")
+
+        monkeypatch.setattr(httpx, "Client", _client_returning(boom))
+        with caplog.at_level(logging.DEBUG):
+            symbols, failed = wls.fetch_surveillance_symbols()
+        errors, _ = _levels(caplog)
+        assert (symbols, failed) == (set(), True)
+        assert len(errors) == 1 and errors[0].exc_info
+
+    def test_non_json_decoding_exception_logs_error(self, monkeypatch, caplog):
+        import logging
+
+        import httpx
+
+        def boom(url):
+            raise ValueError("unrelated failure")
+
+        monkeypatch.setattr(httpx, "Client", _client_returning(boom))
+        with caplog.at_level(logging.DEBUG):
+            symbols, failed = wls.fetch_surveillance_symbols()
+        errors, _ = _levels(caplog)
+        assert (symbols, failed) == (set(), True)
+        assert len(errors) == 1 and errors[0].exc_info
+
+    @pytest.mark.parametrize(
+        "asm,gsm",
+        [
+            ([], []),
+            ({"longterm": {"data": []}}, []),
+            ({"longterm": {"data": [{"name": "X"}]}, "shortterm": {"data": []}}, []),
+        ],
+    )
+    def test_schema_change_logs_error(self, monkeypatch, caplog, asm, gsm):
+        import logging
+
+        import httpx
+
+        def respond(url):
+            return httpx.Response(200, json=asm if url == wls.NSE_ASM_URL else gsm)
+
+        monkeypatch.setattr(httpx, "Client", _client_returning(respond))
+        with caplog.at_level(logging.DEBUG):
+            symbols, failed = wls.fetch_surveillance_symbols()
+        errors, _ = _levels(caplog)
+        assert (symbols, failed) == (set(), True)
+        assert len(errors) == 1 and errors[0].exc_info
+
+    def test_valid_payload_returns_symbols_and_logs_nothing(self, monkeypatch, caplog):
+        import logging
+
+        import httpx
+
+        asm = {
+            "longterm": {"data": [{"symbol": "AAA"}]},
+            "shortterm": {"data": [{"symbol": "BBB"}]},
+        }
+        gsm = [{"symbol": "CCC"}]
+
+        def respond(url):
+            return httpx.Response(200, json=asm if url == wls.NSE_ASM_URL else gsm)
+
+        monkeypatch.setattr(httpx, "Client", _client_returning(respond))
+        with caplog.at_level(logging.DEBUG):
+            symbols, failed = wls.fetch_surveillance_symbols()
+        assert (symbols, failed) == ({"AAA", "BBB", "CCC"}, False)
+        assert not caplog.records
+
+    def test_fallback_blacklist_unchanged(self):
+        assert wls.BLOCKED_SYMBOLS == frozenset({"YESBANK", "BHEL"})
