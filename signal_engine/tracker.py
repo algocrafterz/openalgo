@@ -11,7 +11,7 @@ from loguru import logger
 
 from signal_engine import db, notifier, order_reconcile
 from signal_engine.api_client import (
-    cancel_all_orders,
+    cancel_all_orders,  # noqa: F401  (not called here since BUG-019; tests patch this name)
     cancel_order,
     fetch_net_position,
     fetch_order_fill_price,
@@ -2410,15 +2410,73 @@ class PositionTracker:
         skipped: set[str] = set()
         for strategy in sorted({pos.strategy for pos in mis_positions.values()}):
             # Cancel all pending orders first (SL-M + TP LIMIT legs); one retry before the close
-            logger.info(f"Time exit: cancelling all pending orders for strategy={strategy}")
-            if not await cancel_all_orders(strategy):
-                logger.warning(f"Time exit: cancel failed for strategy={strategy}, retrying once")
-                if not await cancel_all_orders(strategy):
-                    uncancelled.add(strategy)
             symbols = {p.symbol for p in mis_positions.values() if p.strategy == strategy}
+            # By order id, this strategy's own working orders only: the broker-wide cancel-all
+            # also cancelled other strategies' stops and exits (BUG-019, 2026-11-23).
+            logger.info(f"Time exit: cancelling pending orders for strategy={strategy}")
+            if not (await self._cancel_strategy_orders(strategy, symbols))[0]:
+                logger.warning(f"Time exit: cancel failed for strategy={strategy}, retrying once")
+                if not (await self._cancel_strategy_orders(strategy, symbols))[0]:
+                    uncancelled.add(strategy)
             if not await self._close_after_confirmed_cancel(strategy, symbols):
                 skipped.add(strategy)
         return uncancelled, skipped
+
+    async def _cancel_strategy_orders(self, strategy: str, symbols: set[str]) -> tuple[bool, list[str]]:
+        """Cancel `strategy`'s working orders by order id. Never a broker-wide cancel-all.
+
+        Reads the order book once. An unreadable book cancels nothing and counts as incomplete,
+        so the caller's retry path reads it again. Returns (all cancels accounted for, ids that
+        had already filled).
+        """
+        book = await fetch_orderbook()
+        if book is None:
+            logger.warning(f"Time exit: order book unreadable, nothing cancelled for strategy={strategy}")
+            return False, []
+        return await self._cancel_working_by_id(
+            self._working_orders(book, {strategy}, symbols), {strategy}
+        )
+
+    async def _cancel_working_by_id(self, working: list[dict], strategies: set[str]) -> tuple[bool, list[str]]:
+        """Cancel each working order by id and keep going whatever one cancel returns.
+
+        An order whose cancel is refused because it is already complete (the fill won the race)
+        counts as filled, not as a failure. Any other failure, and an order with no id, is logged
+        and makes the result incomplete; the caller's retry re-reads the book.
+        Returns (complete, ids already filled).
+        """
+        complete = True
+        filled: list[str] = []
+        for o in working:
+            order_id = str(o.get("orderid") or o.get("order_id") or "")
+            tag = str(o.get("strategy") or "").strip() or next(iter(sorted(strategies)))
+            if not order_id:
+                logger.warning(
+                    f"Time exit: working order with no id skipped ({o.get('symbol')} {o.get('action')}), "
+                    "cancel incomplete"
+                )
+                complete = False
+                continue
+            try:
+                cancelled = await cancel_order(order_id, tag)
+            except Exception:
+                logger.exception(f"Time exit: cancel_order raised for {order_id}")
+                cancelled = False
+            if cancelled:
+                continue
+            # cancel_order reports only a bool: ask the broker whether the fill won the race
+            try:
+                status = str(await fetch_order_status(order_id, tag) or "").strip().lower()
+            except Exception:
+                logger.exception(f"Time exit: status check raised for {order_id}")
+                status = ""
+            if status in ("complete", "completed"):
+                logger.info(f"Time exit: order {order_id} already complete, nothing to cancel")
+                filled.append(order_id)
+                continue
+            logger.warning(f"Time exit: cancel failed for order {order_id} ({tag}), continuing")
+            complete = False
+        return complete, filled
 
     async def _close_after_confirmed_cancel(self, strategy: str, symbols: set[str]) -> bool:
         """Close the strategy's positions once no order of it is working. False = not closed.
@@ -2641,20 +2699,13 @@ class PositionTracker:
                 + ("order book unreadable" if book is None else f"{len(working)} order(s) still working")
                 + f", re-cancelling ({attempt + 1}/{_CANCEL_RETRIES}) for {', '.join(sorted(retry))}"
             )
-            if book is None:
-                for strategy in retry:
-                    await cancel_all_orders(strategy)
-            else:
+            if book is not None:
                 # Cancel each working order by its id. The sandbox's cancelallorder filters status
                 # "trigger_pending" but stores "trigger pending", so it skips every SL/SL-M while
-                # reporting success (2026-10-12: PAYTM's stop then opened a long at 15:12).
-                for o in working:
-                    order_id = str(o.get("orderid") or o.get("order_id") or "")
-                    tag = str(o.get("strategy") or "").strip() or next(iter(sorted(strategies)))
-                    if order_id:
-                        await cancel_order(order_id, tag)
-                    else:
-                        await cancel_all_orders(tag)
+                # reporting success (2026-10-12: PAYTM's stop then opened a long at 15:12). Never
+                # a broker-wide cancel-all: it also cancels other strategies' orders (BUG-019). An
+                # unreadable book cancels nothing; the next pass reads it again.
+                await self._cancel_working_by_id(working, strategies)
             await asyncio.sleep(_CANCEL_WAIT)
 
         if book is None:
@@ -2716,8 +2767,8 @@ class PositionTracker:
             )
             if attempt < _MAX_CLOSE_ATTEMPTS:
                 for strategy in sorted({pos.strategy for _, pos in still_open} - skipped):
-                    await cancel_all_orders(strategy)
                     symbols = {pos.symbol for _, pos in still_open if pos.strategy == strategy}
+                    await self._cancel_strategy_orders(strategy, symbols)
                     if not await self._close_after_confirmed_cancel(strategy, symbols):
                         skipped.add(strategy)
 
