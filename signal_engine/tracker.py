@@ -98,7 +98,7 @@ _ABSENT_ALERT_REPEAT_S = 600.0
 _STANDDOWN_LOG_INTERVAL_S = 300.0
 
 
-def _poll_close_exit_types(exit_types: list, claimed: str = "") -> list:
+def _poll_close_exit_types(exit_types: list, claimed: str = "", closer: str = "SL") -> list:
     """Labels for a close the poll found on the broker: the stop, unless another path claimed it.
 
     `claimed` is the label of a full exit that was sent but timed out (TrackedPosition.claimed_exit):
@@ -110,12 +110,15 @@ def _poll_close_exit_types(exit_types: list, claimed: str = "") -> list:
     no-progress exits reported as "SL"). A TP label is not a claim: it is a completed partial leg
     (main._finalize_partial_exit), so the remainder's close is still the stop's (2026-10-06
     RELIANCE ORB was booked "Closed by tracker (TP1)" after its stop closed the second half).
+
+    `closer` is the label of the order that filled, from _closing_label(). It defaults to "SL" so
+    a close nothing can identify is booked as before.
     """
     labels = list(exit_types or [])
     if claimed:
         return labels + [claimed]
     if not labels or labels[-1].upper().startswith("TP"):
-        labels.append("SL")
+        labels.append(closer or "SL")
     return labels
 
 
@@ -1841,6 +1844,29 @@ class PositionTracker:
             )
         return sweep
 
+    async def _closing_label(self, key: str, pos, sl_filled: bool) -> str:
+        """The label of the order that closed a position the poll found flat (BUG-034).
+
+        SL only when this tracker's own stop is complete. TIME when its own time-exit order is
+        complete. SQUAREOFF when the time exit was left open or the stop is known cancelled or
+        rejected, so a failsafe or broker square-off order the tracker did not place closed it
+        (2026-11-23 APLAPOLLO and TATASTEEL were booked SL after the 14:55 square-off).
+        With no evidence either way (status unreadable, no time exit in flight) it stays "SL",
+        the label this path always used. Label only: no order, price or P&L changes here.
+        """
+        if sl_filled:
+            return "SL"
+        own = self._square_off_orders.get(key)
+        if own and (await fetch_order_status(own, pos.strategy)).lower() == "complete":
+            return "TIME"
+        stop_status = (
+            (await fetch_order_status(pos.sl_order_id, pos.strategy)).lower()
+            if pos.sl_order_id else ""
+        )
+        if pos.time_exit_left_open or stop_status in ("cancelled", "canceled", "rejected"):
+            return "SQUAREOFF"
+        return "SL"
+
     async def _record_closed_trade(
         self, key: str, pos, age: timedelta, pnl_delta: float, _settings
     ) -> None:
@@ -1878,6 +1904,7 @@ class PositionTracker:
                     "(already filled/closed, or already gone)"
                 )
         await self._cancel_untracked_stops(key, pos)
+        closer = await self._closing_label(key, pos, sl_filled)
         # Implied exit fill price from the PnL delta — the broker does not report one.
         base_price = pos.fill_price if pos.fill_price > 0 else pos.entry_price
         if pos.quantity > 0:
@@ -1893,7 +1920,7 @@ class PositionTracker:
             pos,
             pnl_delta=pnl_delta,
             exit_price=exit_price,
-            exit_types=_poll_close_exit_types(pos.exit_types, pos.claimed_exit),
+            exit_types=_poll_close_exit_types(pos.exit_types, pos.claimed_exit, closer),
             hold_minutes=int(age.total_seconds() / 60),
             max_trades=_settings.max_trades_per_day,
         )
