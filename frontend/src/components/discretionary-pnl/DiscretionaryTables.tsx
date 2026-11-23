@@ -31,9 +31,9 @@ import {
   fmtStamp,
   fmtWinRate,
   netIncomplete,
+  type PriceBadge,
   pnlTextClass,
   priceBadge,
-  type PriceBadge,
 } from '@/lib/discretionaryPnlView'
 import { fmtDuration } from '@/lib/strategyPnlView'
 import { cn } from '@/lib/utils'
@@ -165,7 +165,12 @@ export function BreakdownTable({
                 <TableCell className="text-right font-mono">
                   {row.trades === 0
                     ? '—'
-                    : fmtProfitFactor(row.profit_factor, row.wins, row.losses)}
+                    : fmtProfitFactor(
+                        row.profit_factor,
+                        row.wins,
+                        row.losses,
+                        !row.stats_unavailable_reason
+                      )}
                 </TableCell>
                 <TableCell className="text-right font-mono">
                   {fmtDuration(row.avg_hold_minutes)}
@@ -226,7 +231,7 @@ function CategoryBadge({ trade }: { trade: DiscretionaryTrade }) {
 
 /** What the MFE amount is: a market measurement, never realisable profit. */
 export const MFE_TOOLTIP =
-  'price move x quantity open at that moment; a market measurement, not achievable profit'
+  'largest favourable price move while open, from 1-minute bars (a lower bound); price move x quantity open at that moment; a market measurement, not achievable profit'
 
 /** MAE or MFE of a closed row: points per unit, a dash (with the reason) when not available. */
 function ExcursionCell({
@@ -341,7 +346,7 @@ export function ClosedTradesTable({
           <TableHead>Direction</TableHead>
           <TableHead>Entry → exit</TableHead>
           <TableHead className="text-right">Held</TableHead>
-          <TableHead className="text-right">Bought / Sold</TableHead>
+          <TableHead className="text-right">Quantity</TableHead>
           <TableHead className="text-right">Avg entry</TableHead>
           <TableHead className="text-right">Avg exit</TableHead>
           <TableHead className="text-right">Gross P&amp;L</TableHead>
@@ -420,10 +425,10 @@ export function ClosedTradesTable({
                 </TableCell>
                 <TableCell
                   className="whitespace-nowrap text-right font-mono tabular-nums"
-                  title={`Bought ${fmtQty(t.closed_quantity)}, sold ${fmtQty(t.closed_quantity)}`}
-                  data-testid="bought-sold"
+                  title={`${fmtQty(t.closed_quantity)} bought and ${fmtQty(t.closed_quantity)} sold over the trade`}
+                  data-testid="trade-quantity"
                 >
-                  {fmtQty(t.closed_quantity)} / {fmtQty(t.closed_quantity)}
+                  {fmtQty(t.closed_quantity)}
                 </TableCell>
                 <TableCell className="text-right font-mono tabular-nums">
                   {fmtPrice(t.entry_price)}
@@ -472,7 +477,10 @@ export function ClosedTradesTable({
                           {fmtPoints(t.points_per_unit)}
                         </span>
                       </DetailItem>
-                      <DetailItem label="MAE" title="Largest adverse price move while open">
+                      <DetailItem
+                        label="MAE"
+                        title="Largest adverse price move while open, from 1-minute bars (a lower bound)"
+                      >
                         <ExcursionCell
                           position={ex}
                           field="mae"

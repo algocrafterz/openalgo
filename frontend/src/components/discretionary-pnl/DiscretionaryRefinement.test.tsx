@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DiscretionaryTrade } from '@/api/discretionaryPnl'
 import { exportCsvUrl } from '@/api/discretionaryPnl'
 import {
+  breakdownRow,
   consistency,
   costsBlock,
   dataQuality,
@@ -96,11 +97,24 @@ function full(days: number, months: number) {
     breakdowns: tradingBreakdowns(),
     monthly: monthRows().slice(0, months),
     weekday: weekdayRows(),
+    sample: { ...base.sample!, trading_days: days },
     trade_management: tradeManagement(),
     costs: costsBlock(),
-    points_by_instrument: [pointsRow()],
+    points_by_instrument: [pointsRow(), pointsRow({ symbol: 'INFY' })],
+    by_side: [breakdownRow('LONG', { trades: 5 }), breakdownRow('SHORT', { trades: 4 })],
+    by_product: [breakdownRow('MIS'), breakdownRow('NRML')],
+    by_holding: {
+      intraday: breakdownRow('', { key: undefined }),
+      overnight: breakdownRow('', { key: undefined, trades: 2 }),
+    },
     today: emptyToday({ closed_positions: [todayClosed()], completed_positions: 1, net: 20 }),
   })
+}
+
+/** `full` with enough completed trades for the time-of-day and holding-time patterns. */
+function fullRich(days: number, months: number) {
+  const f = full(days, months)
+  return { ...f, metrics: { ...f.metrics, trades_count: 12 } }
 }
 
 /** Advanced analysis is collapsed by default: open it before looking inside. */
@@ -116,33 +130,35 @@ beforeEach(() => {
 })
 
 describe('summary header', () => {
-  it('leads with three large figures and one dense supporting row', async () => {
+  it('leads with three large figures; every other statistic has one home in Trading statistics', async () => {
     summaryFn.mockResolvedValue(full(3, 1))
     renderIt()
     const header = await screen.findByTestId('discretionary-summary')
-    // the verdict moved to Trading insights, below the closed trades
-    expect(within(header).queryByTestId('summary-verdict')).not.toBeInTheDocument()
-    expect(screen.getByTestId('summary-verdict')).toHaveTextContent(
-      'Profitable on net: Rs 47.50 after estimated charges from 2 completed trades. Win rate 50.0%.'
-    )
+    // the summary cards carry net P&L, count and win rate; no sentence repeats them
+    expect(screen.queryByTestId('summary-verdict')).not.toBeInTheDocument()
     expect(within(header).getByTestId('summary-net')).toHaveTextContent('Rs 47.50')
     expect(within(header).getByTestId('summary-count')).toHaveTextContent('2')
     expect(within(header).getByTestId('summary-count')).toHaveTextContent('Completed trades')
     expect(within(header).getByTestId('summary-win-rate')).toHaveTextContent('50.0%')
-    const support = within(header).getByTestId('summary-support')
+    // the supporting row moved: nothing of it is in the header any more
+    expect(screen.queryByTestId('summary-support')).not.toBeInTheDocument()
+    const stats = screen.getByTestId('discretionary-statistics')
     for (const label of [
       'Profit factor (net)',
       'Expectancy (net)',
       'Max drawdown (net)',
       'Gross realized',
       'Charges (est.)',
+      'Avg win (net)',
+      'Avg loss (net)',
       'Largest winner',
       'Largest loser',
     ]) {
-      expect(within(support).getByText(label)).toBeInTheDocument()
+      expect(within(header).queryByText(label)).not.toBeInTheDocument()
+      expect(within(stats).getAllByText(label)).toHaveLength(1)
     }
     // the drawdown figure is the Risk card's
-    expect(within(support).getByTestId('summary-drawdown')).toHaveTextContent('-Rs 320.50')
+    expect(within(stats).getByTestId('summary-drawdown')).toHaveTextContent('-Rs 320.50')
     expect(within(header).getByRole('link', { name: 'Jump to closed trades' })).toHaveAttribute(
       'href',
       '#discretionary-ledger'
@@ -150,13 +166,23 @@ describe('summary header', () => {
   })
 
   it('names one weakness from existing fields only', async () => {
-    summaryFn.mockResolvedValue(full(3, 1))
+    // 12 completed trades: enough for the fall from the peak to be stated
+    summaryFn.mockResolvedValue(fullRich(3, 1))
     renderIt()
     // charges are 12.5% of gross profit and the largest loss is smaller than the largest win here,
     // so the first applicable rule is the current drawdown
     expect(await screen.findByTestId('summary-weakness')).toHaveTextContent(
-      'Needs attention: Currently Rs 120.00 below the best net equity so far.'
+      'Needs attention: Your net P&L is Rs 120.00 below its highest point in this period, over 12 completed trades.'
     )
+  })
+
+  it('states a fall from a peak over a handful of trades, with the trade count', async () => {
+    summaryFn.mockResolvedValue(full(3, 1))
+    renderIt()
+    await screen.findByTestId('discretionary-statistics')
+    const line = screen.queryByText(/below its highest point/)
+    if (line) expect(line).toHaveTextContent(/over \d+ completed trades?\./)
+    expect(screen.queryByText(/too early to rely on|low sample/i)).not.toBeInTheDocument()
   })
 
   it("merges today's session into one line and keeps every figure one click away", async () => {
@@ -171,16 +197,24 @@ describe('summary header', () => {
     }
   })
 
-  it('says the session is the range shown when the period is just today', async () => {
+  it('shows no second Today panel when the report date is today, and names the date', async () => {
     const s = full(1, 1)
     summaryFn.mockResolvedValue({
       ...s,
       period: { ...s.period, start: '2026-11-17', end: '2026-11-17' },
     })
     renderIt({ period: '1d' })
-    expect(await screen.findByTestId('today-line')).toHaveTextContent(
-      "Today's session (2026-11-17) is the range shown above"
-    )
+    await screen.findByTestId('discretionary-summary')
+    expect(screen.queryByTestId('today-line')).not.toBeInTheDocument()
+    expect(screen.getByText(/Report date:/)).toBeInTheDocument()
+  })
+
+  it('drops the Today line for a historical date when today has no activity', async () => {
+    const s = full(1, 1)
+    summaryFn.mockResolvedValue({ ...s, today: emptyToday() })
+    renderIt({ period: '1d' })
+    await screen.findByTestId('discretionary-summary')
+    expect(screen.queryByTestId('today-line')).not.toBeInTheDocument()
   })
 })
 
@@ -203,7 +237,7 @@ describe('four groups and the metric inventory', () => {
   })
 
   it('still shows every metric label the page showed before the regrouping', async () => {
-    summaryFn.mockResolvedValue(full(40, 4))
+    summaryFn.mockResolvedValue(fullRich(40, 4))
     renderIt()
     await screen.findByTestId('discretionary-groups-performance')
     await openAdvanced()
@@ -224,7 +258,7 @@ describe('four groups and the metric inventory', () => {
       'Largest winner',
       'Largest loser',
       'Avg daily P&L (gross)',
-      'Profitable / losing days',
+      'Profitable / losing days (gross)',
       'Max consecutive winning trades',
       'Max consecutive losing trades',
       'Current streak',
@@ -236,7 +270,7 @@ describe('four groups and the metric inventory', () => {
       'Losers: average hold',
       'Median net P&L',
       'Charges (est.)',
-      'Charges as % of gross profit',
+      "Est. charges as % of winners' gross profit",
       // tables and cards
       'Points by instrument',
       'MAE / MFE',
@@ -288,23 +322,24 @@ describe('sections follow the data', () => {
     expect(screen.queryByTestId('calendar-card')).not.toBeInTheDocument()
     expect(screen.queryByTestId('period-card')).not.toBeInTheDocument()
     expect(screen.queryByTestId('daily-pnl-chart')).not.toBeInTheDocument()
-    expect(screen.getByText('Session progression')).toBeInTheDocument()
+    expect(screen.getByText('Trade-by-trade P&L')).toBeInTheDocument()
     expect(screen.getByTestId('equity-chart')).toHaveAttribute('data-mode', 'position')
     // collapsed, not removed
     expect(screen.getByTestId('more-breakdowns')).not.toHaveAttribute('open')
   })
 
-  it('shows weekday and the daily tab only for 2 to 7 dates, with the note', async () => {
+  it('shows the daily tab for 2 to 7 dates, with the note, and the weekday chart once two weekdays have trades', async () => {
     summaryFn.mockResolvedValue(full(5, 2))
     renderIt({ period: '7d' })
     await openAdvanced()
-    await screen.findByTestId('calendar-card')
+    await screen.findByTestId('period-card')
     expect(screen.queryByTestId('monthly-chart')).not.toBeInTheDocument()
+    // 5 trading days still give two or more weekdays to compare: shown, no day-count gate
     expect(screen.getByTestId('weekday-chart')).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Daily' })).toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: 'Weekly' })).not.toBeInTheDocument()
     expect(screen.getByTestId('daily-pnl-chart')).toBeInTheDocument()
-    expect(screen.getByText('Cumulative net P&L')).toBeInTheDocument()
+    expect(screen.getByText('Trade-by-trade P&L')).toBeInTheDocument()
     expect(screen.getByTestId('profile-note')).toHaveTextContent('5 trading days')
   })
 
@@ -318,7 +353,7 @@ describe('sections follow the data', () => {
     expect(screen.getByTestId('more-breakdowns')).toHaveAttribute('open')
     expect(screen.queryByTestId('profile-note')).not.toBeInTheDocument()
     expect(screen.getByTestId('equity-chart')).toHaveAttribute('data-mode', 'day')
-    expect(screen.getByTestId('equity-reconciliation')).toHaveTextContent('end-of-day')
+    expect(screen.getByTestId('equity-reconciliation')).toHaveTextContent('end-of-day totals')
   })
 
   for (const [name, days, months, period] of [
@@ -327,15 +362,14 @@ describe('sections follow the data', () => {
     ['medium', 12, 2, '30d'],
     ['long', 40, 4, 'all'],
   ] as const) {
-    it(`keeps the unresolved banner, warnings, data quality and classification in the ${name} profile`, async () => {
+    it(`keeps the data warning and classification in the ${name} profile`, async () => {
       summaryFn.mockResolvedValue({
         ...full(days, months),
         unresolved_in_range: unresolvedInRange(),
         warnings: ['1 trade(s) have no charge estimate (instrument not modelled).'],
       })
       renderIt({ period })
-      expect(await screen.findByTestId('unresolved-warning')).toBeInTheDocument()
-      expect(screen.getByTestId('discretionary-warnings')).toBeInTheDocument()
+      expect(await screen.findByTestId('data-warning')).toBeInTheDocument()
       expect(screen.getByTestId('discretionary-filters')).toBeInTheDocument()
       expect(screen.getByTestId('export-csv')).toBeInTheDocument()
     })
@@ -349,24 +383,27 @@ describe('sections follow the data', () => {
     expect(screen.getByTestId('ledger-card')).toHaveAttribute('id', 'discretionary-ledger')
   })
 
-  it('orders the page: summary, session progression, closed trades, insights, advanced analysis, data quality', async () => {
-    summaryFn.mockResolvedValue({ ...full(12, 2), data_quality: dataQuality() })
-    renderIt()
-    await screen.findByTestId('discretionary-groups-performance')
+  it('orders the page: summary, session progression, closed trades, insights, advanced analysis', async () => {
+    summaryFn.mockResolvedValue({ ...fullRich(12, 2), data_quality: dataQuality() })
+    renderIt({ onSelectDate: () => {} })
+    await screen.findByTestId('pnl-calendar')
+    await screen.findByTestId('calendar-month-totals')
     await openAdvanced()
     const ids = [
       'discretionary-summary',
       'discretionary-groups-performance',
+      'pnl-calendar',
+      'discretionary-statistics',
+      'performance-breakdowns',
+      'how-you-trade',
       'equity-card',
       'ledger-card',
       'open-positions-card',
       'trading-insights',
       'advanced-analysis',
       'discretionary-groups-analysis',
-      'how-you-trade',
       'points-card',
       'excursion-card',
-      'data-quality',
     ]
     const els = ids.map((id) => screen.getByTestId(id))
     for (let i = 1; i < els.length; i++) {
@@ -378,7 +415,7 @@ describe('sections follow the data', () => {
 })
 
 describe('equity captions on the page', () => {
-  it('says the curve equals the Risk card when nothing is cut', async () => {
+  it('stays quiet when the curve equals the Risk card', async () => {
     const t = (id: number, net: number): DiscretionaryTrade =>
       trade({
         id,
@@ -402,9 +439,9 @@ describe('equity captions on the page', () => {
       })
     )
     renderIt({ period: '1d' })
-    expect(await screen.findByTestId('equity-reconciliation')).toHaveTextContent(
-      'Max drawdown on this curve equals the Risk card'
-    )
+    await screen.findByTestId('equity-chart-block')
+    // agreement is the normal case and is not announced; only a difference is shown
+    expect(screen.queryByTestId('equity-reconciliation')).not.toBeInTheDocument()
   })
 
   it('says exactly why when the trade list is cut to the newest N', async () => {
@@ -413,11 +450,9 @@ describe('equity captions on the page', () => {
     )
     renderIt({ period: '1d' })
     expect(await screen.findByTestId('equity-reconciliation')).toHaveTextContent(
-      'Curve shows the newest 500 of 640 closed trades'
+      'The chart shows your latest 500 of 640 closed trades'
     )
-    expect(screen.getByTestId('equity-reconciliation')).toHaveTextContent(
-      'the Risk card covers all 640'
-    )
+    expect(screen.getByTestId('equity-reconciliation')).toHaveTextContent('Risk figure for all 640')
   })
 
   it('says so when a position has no net and the Risk card counts them differently', async () => {
@@ -427,8 +462,9 @@ describe('equity captions on the page', () => {
     renderIt({ period: '1d' })
     const caption = await screen.findByTestId('equity-reconciliation')
     expect(caption).toHaveAttribute('data-kind', 'mismatch')
-    expect(caption).toHaveTextContent('1 left out')
-    expect(caption).toHaveTextContent('Not reconciled')
+    expect(caption).toHaveTextContent('differs from the Risk figure')
+    expect(caption).toHaveTextContent('they count different trades')
+    expect(caption.textContent).not.toMatch(/reconcil|Risk card/i)
   })
 })
 
@@ -487,32 +523,23 @@ describe('MAE / MFE presentation', () => {
   })
 
   it('offers the plotted values as a table for keyboard and screen reader users', () => {
-    panel()
+    panel(
+      excursions({
+        positions: [excursionPosition({ id: 1 }), excursionPosition({ id: 2, net_pnl: -30 })],
+      })
+    )
     const table = screen.getByTestId('scatter-table')
     expect(table.tagName).toBe('DETAILS')
     expect(table.querySelectorAll('tbody tr').length).toBeGreaterThan(0)
   })
 
-  it('shows profit capture as a labelled block with the formula, and a dash with a reason when unavailable', () => {
-    const { unmount } = panel()
-    const block = screen.getByTestId('profit-capture-block')
-    expect(block).toHaveTextContent('Winners captured')
-    expect(block).toHaveTextContent('of the favourable move (minute bars, lower bound) (median')
-    expect(block.getAttribute('title')).toContain('gross points a winner made / its MFE points')
-    // the aggregate table and its caveat are as before
-    expect(screen.getByTestId('profit-capture-row')).toBeInTheDocument()
-    expect(screen.getByTestId('excursions-precision')).toHaveTextContent(
-      'it can pass 100% because MFE is a lower bound'
+  it('does not show profit capture or exit efficiency: MFE is only a lower bound', () => {
+    panel()
+    expect(screen.queryByTestId('profit-capture-block')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('profit-capture-row')).not.toBeInTheDocument()
+    expect(screen.getByTestId('excursion-panel').textContent ?? '').not.toMatch(
+      /profit capture|captured|efficiency/i
     )
-    unmount()
-    const none = excursions()
-    none.aggregates.winners.profit_capture = { count: 0, average: null, median: null }
-    panel(none)
-    const empty = screen.getByTestId('profit-capture-block')
-    expect(empty).toHaveTextContent(
-      'Winners captured — of the favourable move (minute bars, lower bound)'
-    )
-    expect(empty).toHaveTextContent('no winning position has both gross points')
-    expect(empty).not.toHaveTextContent('0.0%')
+    expect(screen.getByTestId('excursions-precision')).toHaveTextContent('lower bound')
   })
 })

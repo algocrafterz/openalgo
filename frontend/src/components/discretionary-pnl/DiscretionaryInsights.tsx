@@ -1,16 +1,13 @@
-import { Info } from 'lucide-react'
 import { useState } from 'react'
 import type {
   BreakdownRow,
   ConsistencyBlock,
-  DataQuality,
   PeriodRow,
   RiskBlock,
   SampleContext,
   TradeRef,
   TradingBreakdowns,
 } from '@/api/discretionaryPnl'
-import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
@@ -21,28 +18,32 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { dailyTimeline } from '@/lib/discretionaryEquityRange'
 import {
   bucketLabel,
   DAILY_CHART_CAPTION,
   dailyBars,
-  dataQualityAllClear,
-  dataQualityPrices,
-  dataQualityStates,
+  drawdownRecoveryText,
   fmtNetMoney,
-  fmtStamp,
   fmtWinRate,
   HOW_YOU_TRADE_OPTIONS,
+  type HowYouTradeKey,
+  INSUFFICIENT_DATA,
   NET_DRAWDOWN_BASIS,
   netIncomplete,
   pnlTextClass,
+  quantityText,
+  reentryText,
   rowProfitFactor,
   sampleNote,
   streakText,
-  syncSummary,
-  type HowYouTradeKey,
+  timeOfDayBars,
+  tradesPerDayText,
+  winningDaysText,
 } from '@/lib/discretionaryPnlView'
 import { fmtDuration } from '@/lib/strategyPnlView'
 import { cn } from '@/lib/utils'
+import { NetBarChart } from './DiscretionaryCharts'
 
 type Money = (value: number) => string
 
@@ -85,60 +86,78 @@ export function JumpLink({
   )
 }
 
-/** "Based on N completed trades" under the metric cards, with the low-sample note. */
+/** "Ratios based on N completed trades" under the metric cards; nothing when there are none. */
 export function SampleNote({ sample }: { sample: SampleContext | undefined }) {
   const note = sampleNote(sample)
   if (!note) return null
   return (
-    <p
-      className={cn(
-        'text-xs',
-        note.low
-          ? 'text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500'
-          : 'text-muted-foreground'
-      )}
-      data-testid="discretionary-sample-note"
-    >
+    <p className="text-xs text-muted-foreground" data-testid="discretionary-sample-note">
       {note.text}
     </p>
   )
 }
 
 /**
- * Daily realized P&L bars (gross, the equity curve's basis) from the server's daily rows, with
+ * Daily realized net P&L bars (after estimated charges, the equity curve's basis) from the server's daily rows, with
  * the profitable / losing day count. Plain bars: every bar has a tooltip with charges and net.
  */
 export function DailyPnlChart({
   rows,
   formatCurrency,
+  notCollectedDays,
 }: {
   rows: PeriodRow[]
   formatCurrency: Money
+  /** Weekdays whose broker trades were not collected: shown as a flagged gap, never as zero. */
+  notCollectedDays?: string[]
 }) {
   const { bars, profitable, losing, flat } = dailyBars(rows)
-  if (bars.length === 0) return null
+  // One day is not a comparison; the daily figure is in the header and the calendar.
+  if (bars.length < 2) return null
+  const barByDate = new Map(bars.map((b) => [b.date, b]))
+  // One slot per day with a row and per weekday without one: a day without a row is an empty
+  // slot (no bar), not a bar of zero.
+  const slots = dailyTimeline(rows, notCollectedDays)
   return (
     <div data-testid="daily-pnl-chart">
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-        <div className="text-sm font-medium">Daily P&amp;L (gross)</div>
+        <div className="text-sm font-medium">Daily net P&amp;L</div>
         <div className="text-xs text-muted-foreground" data-testid="daily-pnl-days">
           <span className="text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600">
             {profitable} profitable
           </span>
           {' / '}
           <span className="text-red-600 dark:text-red-400">{losing} losing</span>
-          {flat > 0 ? ` / ${flat} flat` : ''} day(s)
+          {flat > 0 ? ` / ${flat} flat` : ''} day(s) (net)
         </div>
       </div>
       <div className="overflow-x-auto">
         <div
           className="flex h-40 items-stretch gap-1 border-y border-dashed border-border px-1"
-          style={{ minWidth: `${bars.length * 12}px` }}
+          style={{ minWidth: `${slots.length * 12}px` }}
           role="img"
-          aria-label={`Daily gross P&L over ${bars.length} trading day(s): ${profitable} profitable, ${losing} losing`}
+          aria-label={`Daily net P&L over ${bars.length} trading day(s): ${profitable} profitable, ${losing} losing`}
         >
-          {bars.map((b) => {
-            const title = `${b.date}: gross ${formatCurrency(b.gross)}; est. charges ${formatCurrency(b.charges)}; net ${formatCurrency(b.net)}${b.netComplete ? '' : ' (incomplete: some charges unavailable)'}`
+          {slots.map((slot) => {
+            const b = barByDate.get(slot.date)
+            if (!b) {
+              return (
+                <div
+                  key={slot.date}
+                  className={cn(
+                    'flex min-w-[8px] max-w-[40px] flex-1 flex-col justify-end',
+                    slot.notCollected && 'border-b-2 border-dashed border-amber-500'
+                  )}
+                  title={
+                    slot.notCollected
+                      ? `${slot.date}: your broker trades were not collected, so there is no figure for this day`
+                      : `${slot.date}: no trades recorded`
+                  }
+                  data-testid={slot.notCollected ? 'daily-pnl-uncollected' : 'daily-pnl-gap'}
+                />
+              )
+            }
+            const title = `${b.date}: net ${formatCurrency(b.net)}${b.netComplete ? '' : ' (incomplete: some charges unavailable)'}; gross ${formatCurrency(b.gross)}; est. charges ${formatCurrency(b.charges)}`
             return (
               <div
                 key={b.date}
@@ -147,7 +166,7 @@ export function DailyPnlChart({
                 data-testid="daily-pnl-bar"
               >
                 <div className="flex flex-1 items-end">
-                  {b.gross > 0 && (
+                  {b.net > 0 && (
                     <div
                       className="w-full rounded-t bg-green-600/80"
                       style={{ height: `${Math.max(b.pct, 2)}%` }}
@@ -156,7 +175,7 @@ export function DailyPnlChart({
                 </div>
                 <div className="h-px bg-border" />
                 <div className="flex flex-1 items-start">
-                  {b.gross < 0 && (
+                  {b.net < 0 && (
                     <div
                       className="w-full rounded-b bg-red-600/80"
                       style={{ height: `${Math.max(b.pct, 2)}%` }}
@@ -169,8 +188,8 @@ export function DailyPnlChart({
         </div>
       </div>
       <div className="mt-1 flex justify-between text-[11px] text-muted-foreground">
-        <span>{bars[0].date}</span>
-        {bars.length > 1 && <span>{bars[bars.length - 1].date}</span>}
+        <span>{slots[0].date}</span>
+        {slots.length > 1 && <span>{slots[slots.length - 1].date}</span>}
       </div>
       <p className="mt-1 text-xs text-muted-foreground">{DAILY_CHART_CAPTION}</p>
     </div>
@@ -263,10 +282,10 @@ export function RiskStrip({
         <CardTitle className="text-base">Risk and consistency</CardTitle>
         {risk && (
           <p className="text-xs text-muted-foreground" data-testid="risk-basis">
-            Drawdown and streaks: {NET_DRAWDOWN_BASIS}, in rupees (no percentage: there is no
-            capital basis).
+            Drawdown and streaks: {NET_DRAWDOWN_BASIS}, in rupees, over {risk.positions} completed
+            trade{risk.positions === 1 ? '' : 's'}.
             {risk.net_unavailable_positions > 0 &&
-              ` ${risk.net_unavailable_positions} position(s) without a net P&L are left out.`}
+              ` ${risk.net_unavailable_positions} trade(s) without a net P&L are left out.`}
           </p>
         )}
       </CardHeader>
@@ -283,7 +302,7 @@ export function RiskStrip({
             testId="risk-avg-daily"
             hint={
               c.avg_daily_net != null
-                ? `net ${formatCurrency(c.avg_daily_net)}${c.avg_daily_net_complete ? '' : ' (incomplete)'}`
+                ? `net ${formatCurrency(c.avg_daily_net)}${c.avg_daily_net_complete ? '' : ' (incomplete)'}; ${c.trading_days} trading day${c.trading_days === 1 ? '' : 's'}`
                 : undefined
             }
           >
@@ -295,23 +314,40 @@ export function RiskStrip({
               </span>
             )}
           </StripTile>
-          <StripTile
-            label="Profitable / losing days"
-            testId="risk-days"
-            hint={c.flat_days > 0 ? `${c.flat_days} flat` : `${c.trading_days} trading day(s)`}
-          >
-            <span className="text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600">
-              {c.profitable_days}
-            </span>
-            {' / '}
-            <span className="text-red-600 dark:text-red-400">{c.losing_days}</span>
-          </StripTile>
+          {(() => {
+            const wd = winningDaysText(c)
+            if (wd) {
+              return (
+                <StripTile label="Winning days (net)" testId="risk-winning-days" hint={wd.hint}>
+                  {wd.value}
+                </StripTile>
+              )
+            }
+            // An older server: the gross daily counts, labelled as gross.
+            return (
+              c.trading_days > 1 && (
+                <StripTile
+                  label="Profitable / losing days (gross)"
+                  testId="risk-days"
+                  hint={
+                    c.flat_days > 0 ? `${c.flat_days} flat` : `${c.trading_days} trading day(s)`
+                  }
+                >
+                  <span className="text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600">
+                    {c.profitable_days}
+                  </span>
+                  {' / '}
+                  <span className="text-red-600 dark:text-red-400">{c.losing_days}</span>
+                </StripTile>
+              )
+            )
+          })()}
           <StripTile
             label="Max consecutive winning trades"
             testId="risk-win-streak"
             hint={
               risk
-                ? 'net of charges; break-even ends a streak'
+                ? `net of estimated charges; break-even ends a streak; ${risk.positions} trade${risk.positions === 1 ? '' : 's'}`
                 : c.completed_trades === 0
                   ? 'no completed trades'
                   : undefined
@@ -324,7 +360,7 @@ export function RiskStrip({
           <StripTile
             label="Max consecutive losing trades"
             testId="risk-loss-streak"
-            hint="break-even ends a streak"
+            hint={`break-even ends a streak; ${risk ? risk.positions : c.completed_trades} trade${(risk ? risk.positions : c.completed_trades) === 1 ? '' : 's'}`}
           >
             <span title={c.streak_rule}>
               {risk ? risk.max_consecutive_losses : c.max_consecutive_losses}
@@ -340,7 +376,7 @@ export function RiskStrip({
             testId="risk-hold"
             hint={
               c.median_hold_minutes != null
-                ? `median ${fmtDuration(c.median_hold_minutes)}`
+                ? `median ${fmtDuration(c.median_hold_minutes)}; ${c.completed_trades} trade${c.completed_trades === 1 ? '' : 's'}`
                 : undefined
             }
           >
@@ -354,7 +390,7 @@ export function RiskStrip({
             <StripTile
               label="Current drawdown"
               testId="risk-current-drawdown"
-              hint="below the best net equity so far (max drawdown: see the summary)"
+              hint="below the highest net P&L of the selected period"
             >
               <span
                 className={risk.current_drawdown > 0 ? 'text-red-600 dark:text-red-400' : undefined}
@@ -365,20 +401,82 @@ export function RiskStrip({
             </StripTile>
           )}
         </div>
+        <BehaviourTiles consistency={c} risk={risk} />
       </CardContent>
     </Card>
   )
 }
 
-/** Muted marker beside a ratio that rests on a sample below the edge-check rule. */
-export function LowSampleMark() {
+/**
+ * Objective behaviour figures from the closed trades: drawdown recovery, trades per day, quick
+ * re-entry after a loss and position size spread. Descriptions only: no reason is guessed for
+ * any of them. Each figure shows its own sample (trading days, losses followed by an entry).
+ * A figure the server could not compute (no trade, no loss followed by an entry) is left out
+ * instead of shown as a placeholder.
+ */
+function BehaviourTiles({
+  consistency: c,
+  risk,
+}: {
+  consistency: ConsistencyBlock
+  risk?: RiskBlock | null
+}) {
+  if (c.completed_trades < 1) return null
+  const recovery = drawdownRecoveryText(risk)
+  const perDay = tradesPerDayText(c)
+  const reentry = reentryText(c)
+  const sizes = quantityText(c)
+  const showRecovery = !!risk && recovery.value !== INSUFFICIENT_DATA
+  const showPerDay = perDay.value !== INSUFFICIENT_DATA && (c.trades_per_day?.days ?? 0) >= 1
+  const showReentry =
+    reentry.value !== INSUFFICIENT_DATA &&
+    (c.reentry_after_loss?.losses_followed_by_entry ?? 0) >= 1
+  if (!(showRecovery || showPerDay || showReentry || sizes.length > 0)) return null
   return (
-    <span
-      className="ml-1 font-sans text-[11px] font-normal text-muted-foreground"
-      data-testid="low-sample-mark"
-    >
-      low sample
-    </span>
+    <div className="mt-3 space-y-2" data-testid="behaviour-tiles">
+      <div className="text-xs font-medium text-muted-foreground">
+        Trading behaviour ({c.completed_trades} completed trades)
+      </div>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {showRecovery && (
+          <StripTile
+            label="Drawdown recovery (net)"
+            testId="behaviour-drawdown-recovery"
+            hint={recovery.hint}
+          >
+            {recovery.value}
+          </StripTile>
+        )}
+        {showPerDay && (
+          <StripTile label="Trades per day" testId="behaviour-trades-per-day" hint={perDay.hint}>
+            {perDay.value}
+          </StripTile>
+        )}
+        {showReentry && (
+          <StripTile label="Re-entries after a loss" testId="behaviour-reentry" hint={reentry.hint}>
+            {reentry.value}
+          </StripTile>
+        )}
+        {sizes.length > 0 && (
+          <StripTile
+            label="Position size (min / median / max qty)"
+            testId="behaviour-quantity"
+            hint="quantity only; no capital or planned risk is known"
+          >
+            <span className="block space-y-0.5">
+              {sizes.map((s) => (
+                <span key={s.key} className="block">
+                  {s.label}: {s.text}
+                  <span className="ml-1 font-sans text-[11px] font-normal text-muted-foreground">
+                    ({s.positions} trade{s.positions === 1 ? '' : 's'})
+                  </span>
+                </span>
+              ))}
+            </span>
+          </StripTile>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -397,12 +495,10 @@ function IncompleteMark({ count }: { count: number }) {
 export function HowYouTradeTable({
   rows,
   column,
-  sample,
   formatCurrency,
 }: {
   rows: BreakdownRow[]
   column: string
-  sample?: SampleContext
   formatCurrency: Money
 }) {
   if (rows.length === 0) {
@@ -416,7 +512,7 @@ export function HowYouTradeTable({
             <TableHead>{column}</TableHead>
             <TableHead className="text-right">Trades</TableHead>
             <TableHead className="text-right">Win rate</TableHead>
-            <TableHead className="text-right">Avg P&amp;L (gross)</TableHead>
+            <TableHead className="text-right">Avg P&amp;L (net)</TableHead>
             <TableHead className="text-right">Profit factor</TableHead>
             <TableHead className="text-right">Gross P&amp;L</TableHead>
             <TableHead className="text-right">Est. charges</TableHead>
@@ -425,7 +521,7 @@ export function HowYouTradeTable({
         </TableHeader>
         <TableBody>
           {rows.map((row) => {
-            const pf = rowProfitFactor(row, sample)
+            const pf = rowProfitFactor(row)
             return (
               <TableRow key={row.key}>
                 <TableCell className="font-medium">{bucketLabel(row.key ?? '')}</TableCell>
@@ -443,7 +539,6 @@ export function HowYouTradeTable({
                 </TableCell>
                 <TableCell className="text-right font-mono" title={pf.title}>
                   {pf.value}
-                  {pf.low && <LowSampleMark />}
                 </TableCell>
                 <TableCell className={cn('text-right font-mono', pnlTextClass(row.realized_gross))}>
                   {formatCurrency(row.realized_gross)}
@@ -471,14 +566,18 @@ export function HowYouTradeTable({
  */
 export function HowYouTradeCard({
   breakdowns,
-  sample,
   formatCurrency,
+  keys,
 }: {
   breakdowns: TradingBreakdowns
-  sample?: SampleContext
   formatCurrency: Money
+  /** Tabs with something to compare; the page decides (see breakdownVisibility). */
+  keys?: HowYouTradeKey[]
 }) {
-  const [tab, setTab] = useState<HowYouTradeKey>('time_of_day')
+  const options = HOW_YOU_TRADE_OPTIONS.filter((o) => !keys || keys.includes(o.key))
+  const [picked, setTab] = useState<HowYouTradeKey | null>(null)
+  const tab = options.find((o) => o.key === picked)?.key ?? options[0]?.key
+  if (!tab) return null
   return (
     <Card data-testid="how-you-trade">
       <CardHeader>
@@ -487,18 +586,27 @@ export function HowYouTradeCard({
       <CardContent>
         <Tabs value={tab} onValueChange={(v) => setTab(v as HowYouTradeKey)}>
           <TabsList aria-label="Group trades by">
-            {HOW_YOU_TRADE_OPTIONS.map((o) => (
+            {options.map((o) => (
               <TabsTrigger key={o.key} value={o.key}>
                 {o.label}
               </TabsTrigger>
             ))}
           </TabsList>
-          {HOW_YOU_TRADE_OPTIONS.map((o) => (
+          {options.map((o) => (
             <TabsContent key={o.key} value={o.key} className="space-y-2">
+              {o.key === 'time_of_day' && (
+                <NetBarChart
+                  title="Net P&L by entry time (IST), trades in brackets"
+                  bars={timeOfDayBars(breakdowns.time_of_day)}
+                  formatCurrency={formatCurrency}
+                  samples="trade(s)"
+                  emptyText="No completed trades in this range."
+                  testId="time-of-day-chart"
+                />
+              )}
               <HowYouTradeTable
                 rows={breakdowns[o.key] ?? []}
                 column={o.column}
-                sample={sample}
                 formatCurrency={formatCurrency}
               />
               <p className="text-xs text-muted-foreground">{o.note}</p>
@@ -506,103 +614,10 @@ export function HowYouTradeCard({
           ))}
         </Tabs>
         <p className="mt-2 text-xs text-muted-foreground">
-          Avg P&amp;L is gross per completed trade. A group with fewer than{' '}
-          {sample?.min_trades ?? 30} completed trades over {sample?.min_days ?? 10} trading days
-          (the edge-check sample rule) is marked low sample: its ratios are indicative only.
+          Avg P&amp;L is net of estimated charges, per completed trade. The Trades column is the
+          number of completed trades behind each row.
         </p>
       </CardContent>
     </Card>
-  )
-}
-
-/**
- * Data quality of the selection: where every collected execution is (one state each), charges
- * without an estimate, price coverage and the ledger sync.
- */
-export function DataQualityStrip({
-  dq,
-  completedTrades,
-}: {
-  dq: DataQuality
-  /** Completed trades of the same selection; enables the one-line all-clear. */
-  completedTrades?: number
-}) {
-  const states = dataQualityStates(dq)
-  const allClear = completedTrades == null ? null : dataQualityAllClear(dq, completedTrades)
-  const sync = syncSummary({
-    last_successful_sync: dq.sync.last_successful_sync,
-    days_without_sync: dq.sync.days_without_sync,
-    runs_by_day: {},
-  })
-  const problems = dq.sync.problems ?? []
-  return (
-    <div className="rounded-md border p-3 text-sm" data-testid="data-quality">
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <Info className="h-4 w-4 text-muted-foreground" />
-        <span className="font-medium">Data quality</span>
-        <span className="text-xs text-muted-foreground">fills of this period and filters</span>
-        {!dq.reconciles && (
-          <Badge variant="outline" className="border-red-600/40 text-red-600 dark:text-red-400">
-            counts do not add up
-          </Badge>
-        )}
-      </div>
-      {allClear ? (
-        <p className="font-mono text-sm" data-testid="dq-all-clear">
-          {allClear}
-        </p>
-      ) : (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-5">
-          {states.map((s) => (
-            <div
-              key={s.key}
-              className="rounded border px-2 py-1.5"
-              data-testid={`dq-${s.key}`}
-              title={s.title}
-            >
-              <div className="text-[11px] text-muted-foreground">
-                {s.step}. {s.label}
-              </div>
-              <div className="font-mono font-semibold">{s.count}</div>
-              {s.detail && <div className="text-[11px] text-muted-foreground">{s.detail}</div>}
-            </div>
-          ))}
-        </div>
-      )}
-      <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <li data-testid="dq-charges">
-          {dq.charges_incomplete_trades > 0 || dq.charges_incomplete_legs > 0 ? (
-            <span className="text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500">
-              Charges: {dq.charges_incomplete_trades} trade(s) / {dq.charges_incomplete_legs} exit
-              fills without an estimate
-            </span>
-          ) : (
-            'Charges: every trade has an estimate'
-          )}
-        </li>
-        <li data-testid="dq-prices">{dataQualityPrices(dq)}</li>
-        {sync.problem && (
-          // a healthy sync is not repeated here; a problem stays visible
-          <li
-            data-testid="dq-sync"
-            className="text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
-          >
-            {sync.text}
-          </li>
-        )}
-        {dq.earliest_attributable_at && dq.awaiting_grace > 0 && (
-          <li>Earliest attribution {fmtStamp(dq.earliest_attributable_at)} IST</li>
-        )}
-      </ul>
-      {problems.length > 0 && (
-        // the lines themselves are in the warnings banner above; not repeated here
-        <p
-          className="mt-1 text-xs text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
-          data-testid="dq-sync-problems"
-        >
-          {problems.length} sync problem(s): see the warnings above.
-        </p>
-      )}
-    </div>
   )
 }

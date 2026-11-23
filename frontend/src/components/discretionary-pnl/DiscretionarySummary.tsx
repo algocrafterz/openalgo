@@ -1,20 +1,14 @@
-import type {
-  DiscretionaryToday,
-  DiscretionarySummary as Summary,
-  TradeRef,
-} from '@/api/discretionaryPnl'
+import type { DiscretionaryToday, DiscretionarySummary as Summary } from '@/api/discretionaryPnl'
 import {
   cleanMoney,
-  DRAWDOWN_BASIS,
-  fmtNetMoney,
-  fmtProfitFactor,
-  fmtStamp,
   fmtWinRate,
-  verdictLine,
+  hasNoClosedActivity,
+  type WinRateParts,
   weaknessLine,
+  winRateParts,
 } from '@/lib/discretionaryPnlView'
 import { cn } from '@/lib/utils'
-import { JumpLink, StripTile, TradeButton, Unavailable } from './DiscretionaryInsights'
+import { JumpLink } from './DiscretionaryInsights'
 
 type Money = (value: number) => string
 
@@ -24,12 +18,14 @@ function Primary({
   hint,
   tone,
   testId,
+  children,
 }: {
   label: string
   value: string
   hint?: string
   tone?: 'profit' | 'loss'
   testId: string
+  children?: React.ReactNode
 }) {
   return (
     <div className="min-w-0 rounded-lg border bg-card p-4" data-testid={testId}>
@@ -44,97 +40,45 @@ function Primary({
         {value}
       </div>
       {hint && <div className="mt-1 text-xs text-muted-foreground">{hint}</div>}
+      {children}
     </div>
   )
 }
 
-function Largest({
-  trade,
-  formatCurrency,
-  none,
-  onSelect,
-}: {
-  trade: TradeRef | null | undefined
-  formatCurrency: Money
-  none: string
-  onSelect?: (trade: TradeRef) => void
-}) {
-  if (!trade) return <Unavailable reason={none} />
-  if (onSelect)
-    return <TradeButton trade={trade} formatCurrency={formatCurrency} onSelect={onSelect} />
-  const amount = trade.net_pnl ?? trade.realized_pnl
+/** Wins, losses, break-even and sample size behind the win rate, . */
+function WinRateDetail({ parts }: { parts: WinRateParts }) {
   return (
-    <span
-      className={
-        amount > 0
-          ? 'text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600'
-          : amount < 0
-            ? 'text-red-600 dark:text-red-400'
-            : undefined
-      }
-    >
-      {formatCurrency(amount)}
-      <span className="block break-words font-sans text-[11px] font-normal text-muted-foreground">
-        {trade.symbol} {trade.trade_date}
-        {trade.net_pnl != null ? ' (net)' : ' (gross)'}
-      </span>
-    </span>
+    <div className="mt-1 space-y-0.5 text-xs" data-testid="win-rate-detail">
+      <div className="text-muted-foreground" data-testid="win-rate-counts">
+        {parts.wins} wins / {parts.losses} losses
+        {parts.breakEven != null ? ` / ${parts.breakEven} break-even` : ''}
+        {parts.sample != null ? ` of ${parts.sample} trades` : ''}
+      </div>
+    </div>
   )
 }
 
 /**
- * The first screen of the page: three large figures (net P&L, completed trades, win rate) and one
- * dense row of supporting figures, which is the one place for the largest winner / loser, the
- * maximum drawdown, gross and charges. Every value comes from the summary the rest of the page
- * uses; nothing is computed here.
+ * The first screen of the page: three large figures (net P&L, completed trades, win rate). The
+ * other statistics (gross, charges, profit factor, expectancy, averages, largest winner / loser,
+ * maximum drawdown) are in Trading statistics, so each figure has one home. Every value comes
+ * from the summary the rest of the page uses; nothing is computed here.
  */
 export function DiscretionaryHeader({
   summary,
   formatCurrency,
   chargesHint,
-  onSelectTrade,
   children,
 }: {
   summary: Summary
   formatCurrency: Money
   chargesHint: string
-  /** Opens the fills of the largest winner / loser. */
-  onSelectTrade?: (trade: TradeRef) => void
   children?: React.ReactNode
 }) {
   const m = summary.metrics
   const noTrades = m.trades_count === 0
+  const noMoney = hasNoClosedActivity(summary)
   const net = summary.realized_net_of_charges
-  const c = summary.consistency
-  const risk = summary.risk
-  const charges = summary.costs?.total_charges ?? summary.charges
-  const gross = summary.realized_gross
-
-  let drawdown: React.ReactNode
-  let drawdownHint: string | undefined
-  if (risk) {
-    drawdown = (
-      <span className={risk.max_drawdown > 0 ? 'text-red-600 dark:text-red-400' : undefined}>
-        {risk.max_drawdown > 0 ? '-' : ''}
-        {formatCurrency(Math.abs(risk.max_drawdown))}
-      </span>
-    )
-    drawdownHint = risk.max_drawdown_at
-      ? `at ${fmtStamp(risk.max_drawdown_at)}`
-      : 'net, from the Risk card'
-  } else if (c?.max_drawdown_unavailable_reason) {
-    // one trading day has no peak to fall from: say so instead of showing 0
-    drawdown = '—'
-    drawdownHint = `${c.max_drawdown_unavailable_reason}; basis: ${DRAWDOWN_BASIS}`
-  } else {
-    drawdown = (
-      <span className="text-red-600 dark:text-red-400">
-        {formatCurrency(Math.abs(m.max_drawdown ?? 0))}
-      </span>
-    )
-    drawdownHint = `basis: ${DRAWDOWN_BASIS}`
-  }
-
   return (
     <section className="space-y-3" data-testid="discretionary-summary" aria-label="Summary">
       <p className="text-xs">
@@ -145,86 +89,40 @@ export function DiscretionaryHeader({
         <Primary
           testId="summary-net"
           label="Net realized (after est. charges)"
-          value={formatCurrency(net)}
-          tone={cleanMoney(net) > 0 ? 'profit' : cleanMoney(net) < 0 ? 'loss' : undefined}
-          hint={chargesHint}
+          value={noMoney ? '—' : formatCurrency(net)}
+          tone={
+            noMoney
+              ? undefined
+              : cleanMoney(net) > 0
+                ? 'profit'
+                : cleanMoney(net) < 0
+                  ? 'loss'
+                  : undefined
+          }
+          hint={noMoney ? 'no trade was closed in this date range' : chargesHint}
         />
         <Primary
           testId="summary-count"
           label="Completed trades"
           value={String(m.trades_count)}
-          hint={`${m.winning_trades} wins / ${m.losing_trades} losses`}
+          hint={noTrades ? undefined : `${m.winning_trades} wins / ${m.losing_trades} losses`}
         />
         <Primary
           testId="summary-win-rate"
           label="Win rate (net)"
           value={noTrades ? '—' : fmtWinRate(m.win_rate)}
           hint={
-            m.count_unavailable_reason
-              ? 'no completed trade has a net P&L'
-              : 'a win is a profit after charges'
+            noTrades
+              ? 'no completed trades in this date range'
+              : m.count_unavailable_reason
+                ? 'no completed trade has a net P&L'
+                : 'a win is a profit after estimated charges'
           }
-        />
+        >
+          {!noTrades && !m.count_unavailable_reason && <WinRateDetail parts={winRateParts(m)} />}
+        </Primary>
       </div>
 
-      <div
-        className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7"
-        data-testid="summary-support"
-      >
-        <StripTile label="Profit factor (net)" hint="total won / total lost">
-          {noTrades ? '—' : fmtProfitFactor(m.profit_factor, m.winning_trades, m.losing_trades)}
-        </StripTile>
-        <StripTile label="Expectancy (net)" hint="net, per trade">
-          {noTrades ? '—' : fmtNetMoney(m.expectancy, formatCurrency)}
-        </StripTile>
-        <StripTile
-          label={risk ? 'Max drawdown (net)' : 'Max drawdown'}
-          testId="summary-drawdown"
-          hint={drawdownHint}
-        >
-          {drawdown}
-        </StripTile>
-        <StripTile label="Gross realized" hint="before charges">
-          <span
-            className={
-              gross > 0
-                ? 'text-green-700 dark:text-green-600 [.analyzer_&]:text-green-600'
-                : gross < 0
-                  ? 'text-red-600 dark:text-red-400'
-                  : undefined
-            }
-          >
-            {formatCurrency(gross)}
-          </span>
-        </StripTile>
-        <StripTile
-          label="Charges (est.)"
-          testId="summary-charges"
-          hint={
-            summary.charges_unavailable_trades > 0
-              ? `${summary.charges_unavailable_trades} trade(s) without an estimate`
-              : 'estimated'
-          }
-        >
-          {formatCurrency(charges)}
-        </StripTile>
-        <StripTile label="Largest winner" testId="summary-largest-win">
-          <Largest
-            trade={c?.largest_win}
-            formatCurrency={formatCurrency}
-            none="no winning trade"
-            onSelect={onSelectTrade}
-          />
-        </StripTile>
-        <StripTile label="Largest loser" testId="summary-largest-loss">
-          <Largest
-            trade={c?.largest_loss}
-            formatCurrency={formatCurrency}
-            none="no losing trade"
-            onSelect={onSelectTrade}
-          />
-        </StripTile>
-      </div>
       {children}
     </section>
   )
@@ -257,9 +155,11 @@ export function TodayLine({
           </span>
         ) : (
           <span>
-            Today ({today.session_date}): net {formatCurrency(today.net)} after estimated charges,{' '}
-            {today.completed_positions} closed, {today.open_positions} open. Show today&apos;s
-            figures and closed trades.
+            Today ({today.session_date}):{' '}
+            {today.completed_positions === 0 && today.exit_legs === 0
+              ? 'no closed trades'
+              : `net ${formatCurrency(today.net)} after estimated charges, ${today.completed_positions} closed`}
+            , {today.open_positions} open. Show today&apos;s figures and closed trades.
           </span>
         )}
       </summary>
@@ -269,8 +169,9 @@ export function TodayLine({
 }
 
 /**
- * Trading insights: the verdict sentence and the one thing to look at, both taken from numbers
- * the server already sends. Factual only: no inference about discipline or decision quality.
+ * Trading insights: the one thing to look at, taken from numbers the server already sends. The
+ * net P&L, trade count and win rate are in the summary cards, so they are not repeated here.
+ * Nothing is rendered when there is nothing to add. Factual only: no inference about discipline.
  */
 export function TradingInsights({
   summary,
@@ -279,30 +180,20 @@ export function TradingInsights({
   summary: Summary
   formatCurrency: Money
 }) {
-  const verdict = verdictLine(summary, formatCurrency)
   const weakness = weaknessLine(summary, formatCurrency)
+  if (!weakness) return null
   return (
     <section
-      className={cn(
-        'rounded-lg border-l-4 bg-muted/40 px-4 py-3',
-        verdict.tone === 'profit' && 'border-l-green-600',
-        verdict.tone === 'loss' && 'border-l-red-600',
-        (verdict.tone === 'flat' || verdict.tone === 'none') && 'border-l-muted-foreground'
-      )}
+      className="rounded-lg border-l-4 border-l-muted-foreground bg-muted/40 px-4 py-3"
       data-testid="trading-insights"
       aria-label="Trading insights"
     >
       <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
         Trading insights
       </h2>
-      <p className="text-base font-medium" data-testid="summary-verdict">
-        {verdict.text}
+      <p className="text-sm" data-testid="summary-weakness">
+        Needs attention: {weakness}
       </p>
-      {weakness && (
-        <p className="mt-1 text-sm text-muted-foreground" data-testid="summary-weakness">
-          Needs attention: {weakness}
-        </p>
-      )}
     </section>
   )
 }

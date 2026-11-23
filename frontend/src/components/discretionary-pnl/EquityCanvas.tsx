@@ -10,6 +10,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { dayTime, equityTimeline, shortDate } from '@/lib/discretionaryEquityRange'
 import { type CurvePoint, fmtClock } from '@/lib/discretionaryPnlView'
 
 const EQUITY_HEIGHT = 320
@@ -17,6 +18,17 @@ const DRAWDOWN_HEIGHT = 110
 /** Markers are drawn for every point while the curve is short enough to read them. */
 const MARKER_LIMIT = 60
 export const DRAWDOWN_COLOR = '#d97706'
+/** A day whose figure is not complete. */
+const INCOMPLETE_COLOR = '#d97706'
+
+/** x position of a point: the day for the end-of-day curve, the trade number otherwise. */
+function timeOf(p: CurvePoint, mode: 'position' | 'day'): number {
+  return mode === 'day' ? dayTime(p.closed_at) : p.index
+}
+
+function dayTick(time: number): string {
+  return shortDate(new Date(time * 1000).toISOString().slice(0, 10))
+}
 
 /** x label of a point: its position number, with the close time while there is room. */
 export function axisLabel(p: CurvePoint, mode: 'position' | 'day', total: number): string {
@@ -33,17 +45,20 @@ export function axisLabel(p: CurvePoint, mode: 'position' | 'day', total: number
 export function EquityCanvas({
   points,
   mode,
+  notCollectedDays,
   isDarkMode,
   formatCurrency,
 }: {
   points: CurvePoint[]
   mode: 'position' | 'day'
+  /** Weekdays whose broker trades were not collected: drawn as a break, never as zero. */
+  notCollectedDays?: string[]
   isDarkMode: boolean
   formatCurrency: (v: number) => string
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
-  const byTime = useMemo(() => new Map(points.map((p) => [p.index, p])), [points])
+  const byTime = useMemo(() => new Map(points.map((p) => [timeOf(p, mode), p])), [points, mode])
   const [hover, setHover] = useState<{ point: CurvePoint; x: number; y: number } | null>(null)
 
   useEffect(() => {
@@ -67,12 +82,14 @@ export function EquityCanvas({
         timeVisible: false,
         rightOffset: 1,
         tickMarkFormatter: (time: Time) => {
+          if (mode === 'day') return dayTick(Number(time))
           const p = byTime.get(Number(time))
           return p ? axisLabel(p, mode, total) : ''
         },
       },
       localization: {
         timeFormatter: (time: Time) => {
+          if (mode === 'day') return new Date(Number(time) * 1000).toISOString().slice(0, 10)
           const p = byTime.get(Number(time))
           return p ? axisLabel(p, mode, total) : ''
         },
@@ -105,7 +122,7 @@ export function EquityCanvas({
         bottomFillColor1: 'rgba(220, 38, 38, 0.02)',
         bottomFillColor2: 'rgba(220, 38, 38, 0.28)',
         lineWidth: 2,
-        title: 'Net P&L (Rs)',
+        title: 'Cumulative net P&L (Rs)',
         priceFormat: money,
         autoscaleInfoProvider: withZero,
       },
@@ -133,13 +150,31 @@ export function EquityCanvas({
       },
       1
     )
-    equity.setData(points.map((p) => ({ time: p.index as UTCTimestamp, value: p.equity })))
-    drawdown.setData(
-      points.map((p) => ({
-        time: p.index as UTCTimestamp,
-        value: p.drawdown === 0 ? 0 : -p.drawdown,
-      }))
-    )
+    const drawdownValue = (p: CurvePoint) => (p.drawdown === 0 ? 0 : -p.drawdown)
+    if (mode === 'day') {
+      // One slot per day with a figure and per weekday without one. A weekday without a figure
+      // is a gap (no value), so a missing day is never drawn as zero or joined by a line.
+      const slots = equityTimeline(points, notCollectedDays)
+      equity.setData(
+        slots.map((s) =>
+          s.item
+            ? { time: dayTime(s.date) as UTCTimestamp, value: s.item.equity }
+            : { time: dayTime(s.date) as UTCTimestamp }
+        )
+      )
+      drawdown.setData(
+        slots.map((s) =>
+          s.item
+            ? { time: dayTime(s.date) as UTCTimestamp, value: drawdownValue(s.item) }
+            : { time: dayTime(s.date) as UTCTimestamp }
+        )
+      )
+    } else {
+      equity.setData(points.map((p) => ({ time: p.index as UTCTimestamp, value: p.equity })))
+      drawdown.setData(
+        points.map((p) => ({ time: p.index as UTCTimestamp, value: drawdownValue(p) }))
+      )
+    }
     // The zero line is a reference, not a data point.
     equity.createPriceLine({
       price: 0,
@@ -149,12 +184,19 @@ export function EquityCanvas({
       axisLabelVisible: false,
       title: '0',
     })
-    if (total <= MARKER_LIMIT) {
+    // A day curve can have gaps, and a point between two gaps has no line: it always gets a dot.
+    if (total <= MARKER_LIMIT || mode === 'day') {
       const markers: SeriesMarker<Time>[] = points.map((p) => ({
-        time: p.index as UTCTimestamp,
+        time: timeOf(p, mode) as UTCTimestamp,
         position: 'inBar',
         shape: 'circle',
-        color: p.net > 0 ? '#16a34a' : p.net < 0 ? '#dc2626' : '#6b7280',
+        color: p.incomplete
+          ? INCOMPLETE_COLOR
+          : p.net > 0
+            ? '#16a34a'
+            : p.net < 0
+              ? '#dc2626'
+              : '#6b7280',
         size: 1,
       }))
       createSeriesMarkers(equity, markers)
@@ -181,7 +223,7 @@ export function EquityCanvas({
       chart.remove()
       chartRef.current = null
     }
-  }, [points, mode, isDarkMode, formatCurrency, byTime])
+  }, [points, mode, notCollectedDays, isDarkMode, formatCurrency, byTime])
 
   const width = containerRef.current?.offsetWidth ?? 0
   const tipLeft = hover ? (width > 0 && hover.x > width - 230 ? hover.x - 220 : hover.x + 14) : 0
@@ -195,7 +237,9 @@ export function EquityCanvas({
           data-testid="equity-tooltip"
         >
           <div className="font-medium">
-            {mode === 'position' ? `Position ${hover.point.index}` : hover.point.closed_at}
+            {mode === 'position'
+              ? `Trade ${hover.point.index} (close order)`
+              : hover.point.closed_at}
           </div>
           {mode === 'position' && (
             <>
@@ -206,7 +250,8 @@ export function EquityCanvas({
             </>
           )}
           <div>
-            {mode === 'position' ? 'Net P&L' : 'Day net P&L'}: {formatCurrency(hover.point.net)}
+            {mode === 'position' ? 'Trade net P&L' : 'Day net P&L'}:{' '}
+            {formatCurrency(hover.point.net)}
           </div>
           <div>Cumulative net P&L: {formatCurrency(hover.point.equity)}</div>
           <div>Drawdown: {formatCurrency(hover.point.drawdown)}</div>

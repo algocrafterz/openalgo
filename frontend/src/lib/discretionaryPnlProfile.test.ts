@@ -9,7 +9,6 @@ import {
   netEquityPerTrade,
   netEquitySeries,
   periodProfile,
-  verdictLine,
   weaknessLine,
 } from './discretionaryPnlView'
 
@@ -435,11 +434,10 @@ describe('drawdownReconciliation', () => {
     formatCurrency: money,
   }
 
-  it('says the maximum equals the Risk card when nothing is cut and nets are left out the same way', () => {
+  it('adds no note when the chart equals the Risk figure', () => {
     const r = drawdownReconciliation({ ...base, risk: risk() })
     expect(r.kind).toBe('match')
-    expect(r.text).toContain('Max drawdown on this curve equals the Risk card')
-    expect(r.text).toContain('2 position(s) without a net P&L are left out of both')
+    expect(r.text).toBe('')
   })
 
   it('matches on every golden fixture against the golden Risk figures', () => {
@@ -468,8 +466,8 @@ describe('drawdownReconciliation', () => {
   it('names the cut list and the basis of each when the trades are truncated', () => {
     const r = drawdownReconciliation({ ...base, tradesShown: 7, tradesTotal: 640, risk: risk() })
     expect(r.kind).toBe('truncated')
-    expect(r.text).toContain('Curve shows the newest 7 of 640 closed trades')
-    expect(r.text).toContain('the Risk card covers all 640')
+    expect(r.text).toContain('The chart shows your latest 7 of 640 closed trades')
+    expect(r.text).toContain('Risk figure for all 640')
   })
 
   it('says exactly what differs when the position sets differ', () => {
@@ -478,8 +476,8 @@ describe('drawdownReconciliation', () => {
       risk: risk({ max_drawdown: 99, positions: 6, net_unavailable_positions: 1 }),
     })
     expect(r.kind).toBe('mismatch')
-    expect(r.text).toContain('Not reconciled')
-    expect(r.text).toContain('uses 5 position(s) with a net P&L (2 left out)')
+    expect(r.text).toContain('they count different trades: 5 on the chart, 6 in the Risk figure')
+    expect(r.text).not.toMatch(/reconcil|Risk card/i)
     expect(r.text).toContain('Rs 99.00')
   })
 
@@ -497,14 +495,31 @@ describe('drawdownReconciliation', () => {
       risk: risk({ max_drawdown: 40 }),
     })
     expect(r.kind).toBe('day_curve')
-    expect(r.text).toContain('end-of-day')
-    expect(r.text).toContain('can be smaller than the per-position Risk card figure (Rs 40.00)')
+    expect(r.text).toContain('end-of-day totals')
+    expect(r.text).toContain('The Risk figure (Rs 40.00)')
+    expect(r.text).not.toContain('can be smaller')
   })
 
-  it('does not invent a comparison when the server sent no Risk card', () => {
+  it('adds no day-mode note when the chart and Risk drawdowns are equal', () => {
+    const day = netEquityDaily([
+      { date: '2026-11-16', value: 10 },
+      { date: '2026-11-17', value: 6 },
+    ])
+    const r = drawdownReconciliation({
+      curve: day,
+      mode: 'day',
+      tradesShown: 2,
+      tradesTotal: 2,
+      formatCurrency: money,
+      risk: risk({ max_drawdown: day.maxDrawdown }),
+    })
+    expect(r.text).toBe('')
+  })
+
+  it('adds no note when the server sent no Risk figure', () => {
     const r = drawdownReconciliation({ ...base, risk: null })
     expect(r.kind).toBe('no_risk')
-    expect(r.text).toContain('no Risk card')
+    expect(r.text).toBe('')
   })
 })
 
@@ -568,40 +583,34 @@ describe('periodProfile', () => {
   })
 })
 
-describe('verdictLine and weaknessLine', () => {
+describe('weaknessLine', () => {
   const s = (extra: Partial<DiscretionarySummary> = {}) => summary(extra)
+  /** `summary` with enough completed trades for a comparison of single trades to mean something. */
+  const rich = (extra: Partial<DiscretionarySummary> = {}) => {
+    const base = summary(extra)
+    return { ...base, metrics: { ...base.metrics, trades_count: 12 } }
+  }
 
-  it('says profitable, not profitable or break-even on net, with count and win rate', () => {
-    expect(verdictLine(s({ realized_net_of_charges: 120 }), money).text).toContain(
-      'Profitable on net: Rs 120.00'
-    )
-    const loss = verdictLine(s({ realized_net_of_charges: -80 }), money)
-    expect(loss.tone).toBe('loss')
-    expect(loss.text).toContain('Not profitable on net: Rs 80.00 lost')
-    expect(loss.text).toContain('2 completed trades')
-    expect(loss.text).toContain('Win rate 50.0%')
-    expect(verdictLine(s({ realized_net_of_charges: 0.001 }), money).tone).toBe('flat')
-  })
-
-  it('has no verdict sentence of value with no closed position', () => {
+  it('has no weakness line with no completed trade', () => {
     const e = s()
     e.metrics = { ...e.metrics, trades_count: 0 }
-    expect(verdictLine(e, money).tone).toBe('none')
     expect(weaknessLine(e, money)).toBeNull()
   })
 
   it('picks the single biggest weakness in a fixed order, from existing fields only', () => {
     // 1. charges turn a gross profit into a net loss
     expect(weaknessLine(s({ realized_gross: 50, realized_net_of_charges: -10 }), money)).toContain(
-      'Charges turned a gross profit of Rs 50.00 into a net loss'
+      'Estimated charges turned a gross profit of Rs 50.00 into a net loss, over 2 completed trades.'
     )
     // 2. charges take 30% or more of gross profit
     expect(
       weaknessLine(s({ costs: costsBlock({ charges_pct_of_gross_profit: 42.5 }) }), money)
-    ).toBe('Charges take 42.5% of gross profit.')
+    ).toBe(
+      'Estimated charges are 42.5% of the gross profit of your winning trades, over 2 completed trades.'
+    )
     // 3. largest loss bigger than largest win
     const c = consistency()
-    const big = s({
+    const big = rich({
       costs: costsBlock({ charges_pct_of_gross_profit: 5 }),
       consistency: {
         ...c,
@@ -610,16 +619,18 @@ describe('verdictLine and weaknessLine', () => {
       },
     })
     expect(weaknessLine(big, money)).toBe(
-      'Largest loss (Rs 250.00) is bigger than the largest win (Rs 100.00).'
+      'Your biggest losing trade (Rs 250.00) is larger than your biggest winning trade (Rs 100.00), over 12 completed trades.'
     )
     // 4. a current drawdown
     expect(
       weaknessLine(
-        s({ realized_gross: 10, risk: riskBlock({ current_drawdown: 75 }), consistency: null }),
+        rich({ realized_gross: 10, risk: riskBlock({ current_drawdown: 75 }), consistency: null }),
         money
       )
-    ).toBe('Currently Rs 75.00 below the best net equity so far.')
-    // 5. low sample
+    ).toBe(
+      'Your net P&L is Rs 75.00 below its highest point in this period, over 12 completed trades.'
+    )
+    // 5. a small sample is never a weakness by itself: no line
     const low = weaknessLine(
       s({
         realized_gross: 10,
@@ -635,7 +646,7 @@ describe('verdictLine and weaknessLine', () => {
       }),
       money
     )
-    expect(low).toContain('Low sample: 2 completed trade(s) over 1 trading day(s)')
+    expect(low).toBeNull()
     // none
     expect(
       weaknessLine(
@@ -645,9 +656,87 @@ describe('verdictLine and weaknessLine', () => {
     ).toBeNull()
   })
 
+  it('states the biggest trades and the fall from a peak over a handful of trades, with the trade count', () => {
+    const c = consistency()
+    const few = s({
+      realized_gross: 10,
+      costs: costsBlock({ charges_pct_of_gross_profit: 5 }),
+      risk: riskBlock({ current_drawdown: 75 }),
+      consistency: {
+        ...c,
+        largest_win: { ...c.largest_win!, net_pnl: 100 },
+        largest_loss: { ...c.largest_loss!, net_pnl: -250 },
+      },
+      sample: {
+        completed_trades: 4,
+        trading_days: 2,
+        min_trades: 30,
+        min_days: 10,
+        sufficient: false,
+      },
+    })
+    const four = { ...few, metrics: { ...few.metrics, trades_count: 4 } }
+    const text = weaknessLine(four, money) ?? ''
+    expect(text).toContain('Your biggest losing trade (Rs 250.00)')
+    expect(text).toContain('over 4 completed trades')
+    expect(text).not.toMatch(/too early|low sample|indicative/i)
+    const ten = { ...few, metrics: { ...few.metrics, trades_count: 10 } }
+    expect(weaknessLine(ten, money)).toContain('over 10 completed trades')
+  })
+
+  it('treats missing data as unavailable: no gross fallback and no zero drawdown', () => {
+    const c = consistency()
+    const gross = rich({
+      realized_gross: 10,
+      costs: costsBlock({ charges_pct_of_gross_profit: 5 }),
+      risk: null,
+      consistency: {
+        ...c,
+        // no net P&L on either trade: gross is never compared
+        largest_win: { ...c.largest_win!, net_pnl: null, realized_pnl: 100 },
+        largest_loss: { ...c.largest_loss!, net_pnl: null, realized_pnl: -250 },
+      },
+    })
+    expect(weaknessLine(gross, money) ?? '').not.toMatch(/biggest/)
+    // a missing risk block is not a drawdown of 0 and not a statement about it
+    expect(weaknessLine(gross, money) ?? '').not.toMatch(/below its highest/)
+    const noWin = rich({
+      realized_gross: 10,
+      costs: costsBlock({ charges_pct_of_gross_profit: 5 }),
+      risk: null,
+      consistency: {
+        ...c,
+        largest_win: null,
+        largest_loss: { ...c.largest_loss!, net_pnl: null, realized_pnl: -250 },
+      },
+    })
+    expect(weaknessLine(noWin, money) ?? '').not.toMatch(/biggest/)
+  })
+
+  it('uses plain trader wording, with no internal terms', () => {
+    const lines = [
+      weaknessLine(s({ costs: costsBlock({ charges_pct_of_gross_profit: 42.5 }) }), money),
+      weaknessLine(
+        s({
+          realized_gross: 10,
+          consistency: null,
+          risk: riskBlock({ current_drawdown: 0 }),
+          sample: {
+            completed_trades: 2,
+            trading_days: 1,
+            min_trades: 30,
+            min_days: 10,
+            sufficient: false,
+          },
+        }),
+        money
+      ),
+    ].join(' ')
+    expect(lines).not.toMatch(/ratios|indicative|\bsample\b|leg|\barm/i)
+  })
+
   it('never uses advice or AI wording', () => {
     const text = [
-      verdictLine(s({ realized_net_of_charges: -80 }), money).text,
       weaknessLine(s({ realized_gross: 50, realized_net_of_charges: -10 }), money) ?? '',
     ].join(' ')
     expect(text).not.toMatch(/should|recommend|AI|paper/i)

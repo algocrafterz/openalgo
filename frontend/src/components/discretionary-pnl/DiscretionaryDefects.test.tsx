@@ -8,12 +8,7 @@
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import {
-  actionableWarnings,
-  NEGATIVE_TEXT,
-  pnlTextClass,
-  POSITIVE_TEXT,
-} from '@/lib/discretionaryPnlView'
+import { NEGATIVE_TEXT, POSITIVE_TEXT, pnlTextClass } from '@/lib/discretionaryPnlView'
 import { isEffectiveDark } from '@/lib/effectiveTheme'
 import {
   consistency,
@@ -21,6 +16,7 @@ import {
   dataQuality,
   emptyToday,
   excursions,
+  freshSyncStamp,
   monthRows,
   pointsRow,
   riskBlock,
@@ -146,11 +142,14 @@ describe('D1: effective dark flag', () => {
 
   it('hands the flag it is given to the equity chart', async () => {
     renderIt(true)
-    expect(await screen.findByTestId('equity-chart')).toHaveAttribute('data-dark', 'true')
+    // the Equity curve and Trade-by-trade P&L both get the flag
+    const charts = await screen.findAllByTestId('equity-chart')
+    for (const c of charts) expect(c).toHaveAttribute('data-dark', 'true')
   })
   it('hands the light flag to the equity chart in light mode', async () => {
     renderIt(false)
-    expect(await screen.findByTestId('equity-chart')).toHaveAttribute('data-dark', 'false')
+    const charts = await screen.findAllByTestId('equity-chart')
+    for (const c of charts) expect(c).toHaveAttribute('data-dark', 'false')
   })
 })
 
@@ -216,20 +215,21 @@ describe('D2 to D4: rendered dashboard keeps no failing small-text class', () =>
     }
   })
 
-  it('shows the low-sample note in amber-700 (light) / amber-500 (dark and Analyze)', async () => {
+  it('shows the sample note as plain muted text, not as an amber warning', async () => {
     renderIt()
     const note = await screen.findByTestId('discretionary-sample-note')
     const t = tokens(note)
-    expect(t).toContain('text-amber-700')
-    expect(t).toContain('dark:text-amber-500')
-    expect(t).not.toContain('text-amber-600')
+    expect(t).toContain('text-muted-foreground')
+    expect(t.some((c) => c.includes('amber'))).toBe(false)
+    expect(note.textContent).not.toMatch(/low sample|indicative/i)
   })
 
   it('colours the drawdown and the losing days red with a dark-theme partner', async () => {
     const { container } = renderIt()
     await screen.findByTestId('discretionary-summary')
-    const header = screen.getByTestId('discretionary-summary')
-    const red = [...header.querySelectorAll('.text-red-600')]
+    // the drawdown now lives in Trading statistics, not in the summary header
+    const stats = screen.getByTestId('discretionary-statistics')
+    const red = [...stats.querySelectorAll('.text-red-600')]
     expect(red.length).toBeGreaterThan(0)
     for (const e of red) expect(tokens(e)).toContain('dark:text-red-400')
     // losing-days counter in the insights
@@ -365,112 +365,198 @@ const CHARGES =
 const ORPHANS =
   '2 fill(s) could not be placed (opening not in the ledger or invalid) and are excluded.'
 
-describe('D5: actionableWarnings and the ledger-wide unresolved line', () => {
-  const all = [CHARGES, LEDGER, ORPHANS, 'last successful sync: 2026-11-17 09:30 IST']
+const HEALTHY_DQ = {
+  awaiting_attribution: 0,
+  not_placed: 0,
+  prices: { requested: true, open_positions: 1, statuses: {}, missing: 0, stale: 0 },
+}
+const NO_GAPS = {
+  last_successful_sync: freshSyncStamp(),
+  runs_by_day: {},
+  days_without_sync: [],
+}
 
-  it('drops only that line when the in-range count is present (total 0)', () => {
-    expect(actionableWarnings(all, unresolvedInRange({ total: 0 }))).toEqual([CHARGES, ORPHANS])
-  })
-  it('drops only that line when the in-range count is present (total above 0)', () => {
-    expect(actionableWarnings(all, unresolvedInRange({ total: 5 }))).toEqual([CHARGES, ORPHANS])
-  })
-  it('keeps the line when the server sends no in-range count (older server)', () => {
-    expect(actionableWarnings(all)).toEqual([CHARGES, LEDGER, ORPHANS])
-    expect(actionableWarnings(all, undefined)).toEqual([CHARGES, LEDGER, ORPHANS])
-    expect(actionableWarnings(all, null)).toEqual([CHARGES, LEDGER, ORPHANS])
-  })
-  it('matches any count and does not touch similar-looking warnings', () => {
-    const u = unresolvedInRange({ total: 0 })
-    expect(
-      actionableWarnings(['1 unresolved fill(s) are excluded from P&L until attributed.'], u)
-    ).toEqual([])
-    expect(
-      actionableWarnings(['120 unresolved fill(s) are excluded from P&L until attributed.'], u)
-    ).toEqual([])
-    const kept = [
-      'Some unresolved fill(s) are excluded from P&L',
-      'unresolved fills are mentioned here',
-      '3 open position(s) have no usable price.',
-    ]
-    expect(actionableWarnings(kept, u)).toEqual(kept)
-  })
-})
-
-describe('D5: the page', () => {
-  it('1D-like: ledger line hidden when nothing is unresolved in the range; other warnings stay', async () => {
+describe('D5: one plain-language data warning', () => {
+  it('shows nothing, and no server warning list, when no problem count is above 0', async () => {
     summaryFn.mockResolvedValue(
       rich({
         unresolved_in_range: unresolvedInRange({ unresolved_fills: 0, orphan_fills: 0, total: 0 }),
-        warnings: [CHARGES, LEDGER],
-      })
-    )
-    renderIt(false, '1d')
-    const alert = await screen.findByTestId('discretionary-warnings')
-    expect(alert).toHaveTextContent('no charge estimate')
-    expect(alert).not.toHaveTextContent('unresolved fill(s)')
-    expect(screen.queryByTestId('unresolved-warning')).not.toBeInTheDocument()
-  })
-
-  it('1D-like with only the ledger line: no alert at all and no banner', async () => {
-    summaryFn.mockResolvedValue(
-      rich({
-        unresolved_in_range: unresolvedInRange({ unresolved_fills: 0, orphan_fills: 0, total: 0 }),
-        warnings: [LEDGER],
-        sync_health: {
-          last_successful_sync: '2026-11-17 09:30',
-          runs_by_day: {},
-          days_without_sync: [],
-        },
+        data_quality: dataQuality(HEALTHY_DQ),
+        sync_health: NO_GAPS,
+        warnings: [LEDGER, CHARGES, ORPHANS],
       })
     )
     renderIt(false, '1d')
     await screen.findByTestId('discretionary-summary')
+    expect(screen.queryByTestId('data-warning')).not.toBeInTheDocument()
     expect(screen.queryByTestId('discretionary-warnings')).not.toBeInTheDocument()
     expect(screen.queryByTestId('unresolved-warning')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('data-quality')).not.toBeInTheDocument()
+    expect(screen.queryByText(/ledger sync|unresolved fill\(s\)/i)).not.toBeInTheDocument()
   })
 
-  it('7D-like: the banner carries the count once; the alert does not repeat it', async () => {
+  it('tells the trader when the last sync with the broker did not complete, and has no details button', async () => {
+    summaryFn.mockResolvedValue(
+      rich({
+        unresolved_in_range: unresolvedInRange({ unresolved_fills: 0, orphan_fills: 0, total: 0 }),
+        data_quality: dataQuality(HEALTHY_DQ),
+        sync_health: {
+          last_successful_sync: null,
+          runs_by_day: { '2026-11-17': { error: 2 } },
+          days_without_sync: [],
+        },
+        warnings: [],
+      })
+    )
+    renderIt(false, '1d')
+    const banner = await screen.findByTestId('data-warning')
+    expect(banner).toHaveTextContent(
+      'Your last sync with the broker did not complete. Recent trades may be missing. Use Refresh to try again.'
+    )
+    expect(banner.textContent).not.toMatch(/error|status|HTTP|broker_error|no_auth/i)
+    expect(within(banner).queryByRole('button', { name: 'View details' })).not.toBeInTheDocument()
+  })
+
+  it('shows nothing when the newest sync of the day completed', async () => {
+    summaryFn.mockResolvedValue(
+      rich({
+        unresolved_in_range: unresolvedInRange({ unresolved_fills: 0, orphan_fills: 0, total: 0 }),
+        data_quality: dataQuality(HEALTHY_DQ),
+        sync_health: {
+          last_successful_sync: '2026-11-17 10:00',
+          runs_by_day: { '2026-11-16': { error: 1 }, '2026-11-17': { ok: 3, error: 1 } },
+          days_without_sync: [],
+        },
+        warnings: [],
+      })
+    )
+    renderIt(false, '1d')
+    await screen.findByTestId('discretionary-summary')
+    expect(screen.queryByTestId('data-warning')).not.toBeInTheDocument()
+  })
+
+  it('shows one warning with the count and a details button when fills are left out', async () => {
     summaryFn.mockResolvedValue(
       rich({
         unresolved_in_range: unresolvedInRange({ unresolved_fills: 5, orphan_fills: 0, total: 5 }),
+        data_quality: dataQuality(HEALTHY_DQ),
+        sync_health: NO_GAPS,
         warnings: [CHARGES, LEDGER],
       })
     )
     renderIt(false, '7d')
-    const banner = await screen.findByTestId('unresolved-warning')
+    const banner = await screen.findByTestId('data-warning')
     expect(banner).toHaveTextContent(
-      '5 fills in the selected range could not be attributed and are excluded from completed-trade statistics.'
+      '5 fills in this period could not be matched to a trade and are left out, so your P&L and trade count may be incomplete.'
     )
     expect(within(banner).getByRole('button', { name: 'View details' })).toBeInTheDocument()
-    const alert = screen.getByTestId('discretionary-warnings')
-    expect(alert).toHaveTextContent('no charge estimate')
-    expect(alert).not.toHaveTextContent('unresolved fill(s)')
+    expect(banner).not.toHaveTextContent(/attribut|ledger|sync|reconcil|collected/i)
+    expect(screen.getAllByTestId('data-warning')).toHaveLength(1)
+    expect(screen.queryByTestId('discretionary-warnings')).not.toBeInTheDocument()
   })
 
-  it('older server without unresolved_in_range: the backend line is shown unchanged', async () => {
-    summaryFn.mockResolvedValue(
-      rich({ unresolved_in_range: undefined, warnings: [CHARGES, LEDGER] })
-    )
-    renderIt(false, '7d')
-    const alert = await screen.findByTestId('discretionary-warnings')
-    expect(alert).toHaveTextContent(LEDGER)
-    expect(alert).toHaveTextContent('no charge estimate')
-    expect(screen.queryByTestId('unresolved-warning')).not.toBeInTheDocument()
-  })
-
-  it('keeps every other data-quality warning, in order', async () => {
+  it('warns about missing prices only when prices were requested', async () => {
+    const missing = { ...HEALTHY_DQ.prices, missing: 2 }
     summaryFn.mockResolvedValue(
       rich({
-        unresolved_in_range: unresolvedInRange({ total: 0, unresolved_fills: 0, orphan_fills: 0 }),
-        warnings: [CHARGES, LEDGER, ORPHANS],
+        unresolved_in_range: unresolvedInRange({ unresolved_fills: 0, orphan_fills: 0, total: 0 }),
+        data_quality: dataQuality({ ...HEALTHY_DQ, prices: missing }),
+        sync_health: NO_GAPS,
       })
     )
-    renderIt()
-    const alert = await screen.findByTestId('discretionary-warnings')
-    const items = within(alert)
-      .getAllByRole('listitem')
-      .map((li) => li.textContent)
-    expect(items.filter((x) => x === CHARGES || x === ORPHANS)).toEqual([CHARGES, ORPHANS])
-    expect(items).not.toContain(LEDGER)
+    renderIt(false, '7d')
+    const banner = await screen.findByTestId('data-warning')
+    expect(banner).toHaveTextContent(
+      '2 open positions have no current price, so open P&L may be incomplete.'
+    )
+    expect(within(banner).queryByRole('button', { name: 'View details' })).not.toBeInTheDocument()
+  })
+
+  it('shows no price warning when prices were not requested', async () => {
+    summaryFn.mockResolvedValue(
+      rich({
+        unresolved_in_range: unresolvedInRange({ unresolved_fills: 0, orphan_fills: 0, total: 0 }),
+        data_quality: dataQuality({
+          ...HEALTHY_DQ,
+          prices: { requested: false, open_positions: 1, statuses: {}, missing: 0, stale: 0 },
+        }),
+        sync_health: NO_GAPS,
+      })
+    )
+    renderIt(false, '7d')
+    await screen.findByTestId('discretionary-summary')
+    expect(screen.queryByTestId('data-warning')).not.toBeInTheDocument()
+  })
+})
+
+describe('data warning: cases from earlier server warnings', () => {
+  const healthy = () =>
+    rich({
+      unresolved_in_range: unresolvedInRange({ unresolved_fills: 0, orphan_fills: 0, total: 0 }),
+      data_quality: dataQuality(HEALTHY_DQ),
+      sync_health: NO_GAPS,
+      positions: [],
+      trades: [],
+    })
+  const istDay = (offset: number) =>
+    new Date(Date.now() + 5.5 * 3600 * 1000 - offset * 86400000).toISOString().slice(0, 10)
+  const WORDS = /ledger|attribut|sync|reconcil|fills collected|Risk card|\blegs?\b/i
+
+  it('stays absent on a healthy report', async () => {
+    summaryFn.mockResolvedValue(healthy())
+    renderIt(false, '7d')
+    await screen.findByTestId('discretionary-summary')
+    expect(screen.queryByTestId('data-warning')).not.toBeInTheDocument()
+  })
+
+  it('warns about an intraday position left open from an earlier day', async () => {
+    const base = healthy()
+    summaryFn.mockResolvedValue({
+      ...base,
+      positions: [
+        {
+          ...summary().positions[0],
+          product: 'MIS',
+          opened_at: `${istDay(3)}T10:00:00`,
+          opening_unknown: false,
+        },
+      ],
+      period: { ...base.period, end: istDay(0) },
+    } as never)
+    renderIt(false, '7d')
+    const banner = await screen.findByTestId('data-warning')
+    expect(banner).toHaveTextContent('still open from an earlier day')
+    expect(banner.textContent).not.toMatch(WORDS)
+    expect(screen.getAllByTestId('data-warning')).toHaveLength(1)
+  })
+
+  it('warns about a trade with no recorded entry', async () => {
+    const base = healthy()
+    const trade = summary().trades[0]
+    summaryFn.mockResolvedValue({
+      ...base,
+      trades: [{ ...trade, opening_unknown: true }],
+      trades_total: 1,
+      trades_shown: 1,
+    } as never)
+    renderIt(false, '7d')
+    const banner = await screen.findByTestId('data-warning')
+    expect(banner).toHaveTextContent('no recorded entry')
+    expect(banner.textContent).not.toMatch(WORDS)
+  })
+
+  it('warns when the last collection is older than the selected range reaches', async () => {
+    const base = healthy()
+    const day = new Date(Date.now() + 5.5 * 3600 * 1000).getUTCDay()
+    if (day === 0 || day === 6) return // the rule applies on weekdays only
+    summaryFn.mockResolvedValue({
+      ...base,
+      sync_health: { ...NO_GAPS, last_successful_sync: `${istDay(6)} 09:30` },
+      period: { ...base.period, end: istDay(0) },
+    } as never)
+    renderIt(false, '7d')
+    const banner = await screen.findByTestId('data-warning')
+    expect(banner).toHaveTextContent(`Trades after ${istDay(6)} may be missing`)
+    expect(banner.textContent).not.toMatch(WORDS)
   })
 })

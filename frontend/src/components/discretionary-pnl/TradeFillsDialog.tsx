@@ -112,7 +112,7 @@ export function TradeFillsDialog({
             </AlertDescription>
           </Alert>
         ) : query.data ? (
-          <div className="space-y-3">
+          <div className="min-w-0 space-y-3">
             {trade && (
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
                 <span>

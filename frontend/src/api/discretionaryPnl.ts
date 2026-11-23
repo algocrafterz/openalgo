@@ -175,6 +175,62 @@ export interface ConsistencyBlock {
   drawdown_basis?: string
   avg_hold_minutes: number | null
   median_hold_minutes: number | null
+  /** Additive keys: each is ABSENT when it cannot be computed (older server, too little data). */
+  net_days?: NetDayStats
+  trades_per_day?: TradesPerDay
+  reentry_after_loss?: ReentryAfterLoss
+  quantity_by_symbol?: QuantityBySymbol[]
+}
+
+/** Winning / losing / flat days on the net basis (after estimated charges), by close date. */
+export interface NetDayStats {
+  basis?: string
+  total_days: number
+  winning_days: number
+  losing_days: number
+  flat_days: number
+  /** Percent, 0-100, of `total_days`. */
+  winning_day_pct: number
+  /** Days left out because their charges are incomplete. */
+  net_unavailable_days: number
+}
+
+export interface TradesPerDay {
+  basis?: string
+  days: number
+  avg: number
+  max: number
+  max_day: string
+}
+
+/** Next entry after each losing position; objective timing only. */
+export interface ReentryAfterLoss {
+  window_minutes: number
+  losses_followed_by_entry: number
+  reentries_within_window: number
+  shortest_gap_minutes: number
+}
+
+export interface QuantityBySymbol {
+  symbol: string
+  exchange: string
+  positions: number
+  min_quantity: number
+  median_quantity: number
+  max_quantity: number
+}
+
+/** Timing of the deepest net drawdown; absent when there was no drawdown. */
+export interface DrawdownDetail {
+  depth: number
+  start_at?: string
+  start_basis: string
+  trough_at: string
+  recovered: boolean
+  /** Absent when it never recovered. */
+  recovered_at?: string
+  duration_minutes?: number
+  duration_basis?: string
 }
 
 /** "How you trade" breakdowns (entry time of day, entry weekday, holding time). */
@@ -589,6 +645,8 @@ export interface RiskBlock {
   max_consecutive_wins: number
   max_consecutive_losses: number
   current_streak: StreakNow
+  /** Absent when there was no drawdown or the server is older. */
+  max_drawdown_detail?: DrawdownDetail
 }
 
 /** One close month or close weekday of the closed positions. */

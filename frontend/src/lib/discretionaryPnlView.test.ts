@@ -8,9 +8,9 @@ import {
 } from '@/test/discretionaryFixtures'
 import * as view from './discretionaryPnlView'
 import {
-  actionableWarnings,
   awaitingAttribution,
   awaitingAttributionText,
+  breakdownVisibility,
   chargesBadge,
   distinctOptions,
   filterChoices,
@@ -25,10 +25,10 @@ import {
   parseSourceParam,
   pendingAttributionLines,
   priceBadge,
+  progressionText,
   reasonText,
   resolveSource,
   summarizeUnrealized,
-  syncSummary,
   todayUnrealized,
   totalCard,
   totalPnl,
@@ -93,7 +93,9 @@ describe('formatters', () => {
     expect(fmtWinRate(null)).toBe('—')
     expect(fmtProfitFactor(2.456, 3, 1)).toBe('2.46')
     expect(fmtProfitFactor(null, 3, 0)).toBe('∞')
-    expect(fmtProfitFactor(null, 0, 0)).toBe('—')
+    expect(fmtProfitFactor(null, 0, 0)).toBe('n/a') // all break-even: no profit and no loss
+    expect(fmtProfitFactor(0, 0, 0)).toBe('n/a') // a server 0 for all break-even is not a result
+    expect(fmtProfitFactor(null, 0, 0, false)).toBe('—') // no position has a net: unknown
     expect(fmtProfitFactor(0, 0, 2)).toBe('0.00')
   })
 
@@ -105,7 +107,128 @@ describe('formatters', () => {
     expect(view.fmtNetMoney(0, money)).toBe('₹0.00') // a real zero stays a number
     expect(view.fmtNetMoney(-12.5, money)).toBe('₹-12.50')
     expect(fmtWinRate(null)).toBe('—')
-    expect(fmtProfitFactor(null, 0, 0)).toBe('—') // no wins and no losses: nothing to show
+    expect(fmtProfitFactor(null, 0, 0)).toBe('n/a') // no wins and no losses: not applicable
+  })
+
+  it('shows n/a for average win, average loss and payoff when a side has no trades', () => {
+    const money = (v: number) => `₹${v.toFixed(2)}`
+    expect(view.fmtAvgByCount(0, 0, money)).toBe('n/a') // a server 0.0 is never shown as Rs 0
+    expect(view.fmtAvgByCount(null, 0, money)).toBe('n/a')
+    expect(view.fmtAvgByCount(120, 3, money)).toBe('₹120.00')
+    expect(view.fmtPayoffRatio(0, 50, 0, 2)).toBe('n/a')
+    expect(view.fmtPayoffRatio(100, 0, 2, 0)).toBe('n/a')
+    expect(view.fmtPayoffRatio(0, 0, 0, 0)).toBe('n/a')
+    expect(view.fmtPayoffRatio(200, 100, 2, 2)).toBe('2.00')
+  })
+
+  it('derives break-even and the sample size for the win rate card, with no small-sample flag', () => {
+    const base = { winning_trades: 6, losing_trades: 5, net_basis_trades: 12 }
+    expect(view.winRateParts(base)).toEqual({ wins: 6, losses: 5, breakEven: 1, sample: 12 })
+    // the sample is the plain count, whatever its size
+    expect(view.winRateParts({ ...base, net_basis_trades: 30 }).sample).toBe(30)
+    expect(view.winRateParts({ ...base, net_basis_trades: 11 }).breakEven).toBe(0)
+    // no net-basis count sent: nothing is invented
+    const old = view.winRateParts({ winning_trades: 1, losing_trades: 1 })
+    expect(old).toEqual({ wins: 1, losses: 1, breakEven: null, sample: null })
+  })
+})
+
+describe('behaviour text', () => {
+  const noDd = { max_drawdown: 0 }
+  it('says insufficient data when a key is absent, and describes timing objectively', () => {
+    expect(view.winningDaysText({})).toBeNull()
+    expect(view.tradesPerDayText({}).value).toBe('insufficient data')
+    expect(view.reentryText({}).value).toBe('insufficient data')
+    expect(view.quantityText({})).toEqual([])
+    expect(view.drawdownRecoveryText({ ...noDd })).toMatchObject({ value: 'No drawdown' })
+    expect(view.drawdownRecoveryText({ max_drawdown: 50 }).value).toBe('insufficient data')
+    expect(view.drawdownRecoveryText(null).value).toBe('insufficient data')
+    const re = view.reentryText({
+      reentry_after_loss: {
+        window_minutes: 15,
+        losses_followed_by_entry: 4,
+        reentries_within_window: 2,
+        shortest_gap_minutes: 3,
+      },
+    })
+    expect(re.value).toBe('2 of 4')
+    expect(re.hint).toContain('Re-entered within 15 min after a loss')
+    expect(`${re.value} ${re.hint}`).not.toMatch(/revenge|fomo|tilt|emotion/i)
+  })
+
+  it('keys quantity rows by exchange and names the exchange only when several traded the symbol', () => {
+    const q = (symbol: string, exchange: string) => ({
+      symbol,
+      exchange,
+      positions: 1,
+      min_quantity: 1,
+      median_quantity: 1,
+      max_quantity: 1,
+    })
+    const rows = view.quantityText({
+      quantity_by_symbol: [q('GOLD', 'MCX'), q('GOLD', 'NSE'), q('SBIN', 'NSE')],
+    })
+    expect(rows.map((r) => r.key)).toEqual(['MCX:GOLD', 'NSE:GOLD', 'NSE:SBIN'])
+    expect(rows.map((r) => r.label)).toEqual(['GOLD (MCX)', 'GOLD (NSE)', 'SBIN'])
+  })
+
+  it('shows winning-day percent with its day count and no small-sample flag', () => {
+    const t = view.winningDaysText({
+      net_days: {
+        total_days: 3,
+        winning_days: 1,
+        losing_days: 2,
+        flat_days: 0,
+        winning_day_pct: 33.33,
+        net_unavailable_days: 0,
+      },
+    })
+    expect(t?.value).toBe('33.3%')
+    expect(t).not.toHaveProperty('small')
+    expect(t?.hint).toBe('1 of 3 days net positive')
+  })
+
+  it('states recovery and non-recovery of the deepest drawdown', () => {
+    const detail = {
+      depth: 320,
+      start_at: '2026-11-19 09:20:00',
+      start_basis: 'first position opened',
+      trough_at: '2026-11-19 09:50:00',
+      recovered: true,
+      recovered_at: '2026-11-20 10:40:00',
+      duration_minutes: 1520,
+    }
+    expect(
+      view.drawdownRecoveryText({ max_drawdown: 320, max_drawdown_detail: detail }).value
+    ).toBe('Recovered after 1 d 1 h')
+    const open = view.drawdownRecoveryText({
+      max_drawdown: 320,
+      max_drawdown_detail: { ...detail, recovered: false, recovered_at: undefined },
+    })
+    expect(open.value).toBe('Not recovered, 1 d 1 h')
+  })
+
+  it('writes the excursion coverage as N of M completed positions with 1-minute price bars', () => {
+    expect(view.coverageText(6, 12)).toBe('6 of 12 completed positions have 1-minute price bars')
+    expect(view.coverageText(1, 1)).toBe('1 of 1 completed positions have 1-minute price bars')
+  })
+
+  it('writes each excursion reason as a full phrase with its own count', () => {
+    const texts = new Map([
+      ['historify_incomplete', 'price data for the day is not complete yet'],
+      ['missing_bars', 'price data has missing minutes'],
+    ])
+    expect(
+      view.excursionReasonPhrases({ historify_incomplete: 6, missing_bars: 1 }, texts)
+    ).toEqual([
+      '6 positions: price data for the day is not complete yet',
+      '1 position: price data has missing minutes',
+    ])
+    // a code the server sent no wording for is spelled out, never shown raw
+    expect(view.excursionReasonPhrases({ some_code: 2 }, new Map())).toEqual([
+      '2 positions: some code',
+    ])
+    expect(view.excursionReasonPhrases(undefined, texts)).toEqual([])
   })
 })
 
@@ -150,36 +273,6 @@ describe('unrealized', () => {
   })
 })
 
-describe('warnings and sync line', () => {
-  it('drops lines the cards and the sync line already show', () => {
-    expect(actionableWarnings(summary().warnings)).toEqual([
-      expect.stringContaining('no charge estimate'),
-    ])
-    expect(actionableWarnings(undefined)).toEqual([])
-  })
-
-  it('flags never-synced and missing days', () => {
-    expect(syncSummary(undefined).problem).toBe(true)
-    expect(
-      syncSummary({ last_successful_sync: null, runs_by_day: {}, days_without_sync: [] }).problem
-    ).toBe(true)
-    expect(
-      syncSummary({
-        last_successful_sync: '2026-11-17 09:30',
-        runs_by_day: {},
-        days_without_sync: ['2026-11-12', '2026-11-13'],
-      })
-    ).toEqual({
-      text: 'Ledger sync: last successful 2026-11-17 09:30 IST; no sync on 2026-11-12, 2026-11-13',
-      problem: true,
-    })
-    expect(syncSummary(summary().sync_health)).toEqual({
-      text: 'Ledger sync: last successful 2026-11-17 09:30 IST',
-      problem: false,
-    })
-  })
-})
-
 describe('book helpers', () => {
   it('knows an empty book', () => {
     expect(isEmptyBook(emptySummary())).toBe(true)
@@ -214,9 +307,9 @@ describe('book helpers', () => {
     ).toBeNull()
   })
 
-  it('words the awaiting-attribution message exactly', () => {
+  it('words the unmatched-fills message in trader language', () => {
     expect(awaitingAttributionText(5, 5)).toBe(
-      'No attributable trades available for performance analysis yet. 5 fills collected; 5 awaiting attribution. Their P&L is excluded until classification is resolved.'
+      'No trades to show yet: 5 of the 5 fills in this period could not be matched to a trade, so their P&L is left out.'
     )
   })
 
@@ -388,12 +481,14 @@ describe('dashboard additions', () => {
 
   it('builds daily bars scaled to the largest day and counts the days', () => {
     const base = summary().by_period.daily[0]
+    // bars follow the NET day; the nets are set to the former gross figures so the scale is the same
     const rows = [
-      base,
+      { ...base, net_of_charges: 60 },
       {
         ...base,
         period: '2026-11-17',
         realized_gross: -120,
+        net_of_charges: -120,
         net_charges_complete: true,
         charges_unavailable_trades: 0,
       },
@@ -401,6 +496,7 @@ describe('dashboard additions', () => {
         ...base,
         period: '2026-11-18',
         realized_gross: 0,
+        net_of_charges: 0,
         net_charges_complete: true,
         charges_unavailable_trades: 0,
       },
@@ -412,78 +508,50 @@ describe('dashboard additions', () => {
     expect(view.dailyBars(undefined).bars).toEqual([])
   })
 
-  it('shows a row profit factor only when the sample rule allows it', () => {
-    const rule = { min_trades: 30, min_days: 10 }
-    expect(
-      view.rowProfitFactor({ trades: 0, profit_factor: 0, wins: 0, losses: 0 }, rule).value
-    ).toBe('—')
-    const low = view.rowProfitFactor(
-      { trades: 3, profit_factor: 2, wins: 2, losses: 1, sample_ok: false },
-      rule
+  it('shows a row profit factor from the row alone, with no sample rule', () => {
+    expect(view.rowProfitFactor({ trades: 0, profit_factor: 0, wins: 0, losses: 0 }).value).toBe(
+      '—'
     )
-    // below the sample rule: the number is still shown, flagged low with the rule it misses
-    expect(low.value).toBe('2.00')
-    expect(low.low).toBe(true)
-    expect(low.title).toBe(
-      'Low sample: indicative only; needs at least 30 completed trades over 10 trading days (this group has 3)'
+    // a three-trade group still shows its number: the Trades column carries the sample
+    const small = view.rowProfitFactor({ trades: 3, profit_factor: 2, wins: 2, losses: 1 })
+    expect(small).toEqual({ value: '2.00' })
+    expect(view.rowProfitFactor({ trades: 40, profit_factor: 2, wins: 25, losses: 15 }).value).toBe(
+      '2.00'
     )
     expect(
-      view.rowProfitFactor(
-        { trades: 40, profit_factor: 2, wins: 25, losses: 15, sample_ok: true },
-        rule
-      ).value
-    ).toBe('2.00')
-    expect(
-      view.rowProfitFactor({
-        trades: 40,
-        profit_factor: null,
-        wins: 40,
-        losses: 0,
-        sample_ok: true,
-      }).value
+      view.rowProfitFactor({ trades: 40, profit_factor: null, wins: 40, losses: 0 }).value
     ).toBe('∞')
   })
 
-  it('names the sample behind the ratios and flags a low sample', () => {
+  it('names the sample behind the ratios, with no low-sample wording, and nothing for zero trades', () => {
     expect(view.sampleNote(undefined)).toBeNull()
-    const low = view.sampleNote({
+    const one = view.sampleNote({
       completed_trades: 1,
       trading_days: 1,
       min_trades: 30,
       min_days: 10,
       sufficient: false,
     })
-    expect(low?.low).toBe(true)
-    expect(low?.text).toMatch(
-      /^Ratios based on 1 completed trade\(s\) over 1 trading day\(s\)\. Low sample/
-    )
-  })
-
-  it('lists the data-quality states, adding Not placed only when there is one', () => {
-    const states = view.dataQualityStates(dataQuality())
-    expect(states.map((s) => [s.key, s.count])).toEqual([
-      ['collected', 9],
-      ['awaiting', 2],
-      ['open', 3],
-      ['included', 3],
-      ['not_placed', 1],
-    ])
-    const dq = dataQuality({ not_placed: 0 })
-    expect(view.dataQualityStates(dq).map((s) => s.key)).not.toContain('not_placed')
-    const sum = states.slice(1).reduce((acc, s) => acc + s.count, 0)
-    expect(sum).toBe(states[0].count)
-  })
-
-  it('describes prices only when they were requested', () => {
-    expect(view.dataQualityPrices(dataQuality())).toBe('Prices not requested')
-    const p = { requested: true, open_positions: 2, statuses: { live: 2 }, missing: 0, stale: 0 }
-    expect(view.dataQualityPrices(dataQuality({ prices: p }))).toBe('Prices: all live')
-    expect(view.dataQualityPrices(dataQuality({ prices: { ...p, missing: 1, stale: 1 } }))).toBe(
-      'Prices: 1 without a usable price, 1 stale, last close or cached'
-    )
-    expect(view.dataQualityPrices(dataQuality({ prices: { ...p, open_positions: 0 } }))).toBe(
-      'No open positions to price'
-    )
+    expect(one?.text).toBe('Ratios based on 1 completed trade over 1 trading day.')
+    expect(one?.text).not.toMatch(/low sample|indicative/i)
+    const many = view.sampleNote({
+      completed_trades: 12,
+      trading_days: 3,
+      min_trades: 30,
+      min_days: 10,
+      sufficient: false,
+    })
+    expect(many?.text).toBe('Ratios based on 12 completed trades over 3 trading days.')
+    // a range with no completed trade: no sentence at all
+    expect(
+      view.sampleNote({
+        completed_trades: 0,
+        trading_days: 0,
+        min_trades: 30,
+        min_days: 10,
+        sufficient: false,
+      })
+    ).toBeNull()
   })
 
   it('labels the buckets in plain words', () => {
@@ -605,6 +673,23 @@ describe('chart and table helpers', () => {
     expect(view.calendarBars(null)).toEqual([])
   })
 
+  it('draws no bar for a month or weekday with no completed position', () => {
+    const row = (key: string, positions: number, net: number) => ({
+      key,
+      positions,
+      wins: 0,
+      losses: 0,
+      win_rate: null,
+      realized_gross: net,
+      charges: 0,
+      net_of_charges: net,
+      charges_unavailable_positions: 0,
+      net_unavailable_positions: 0,
+    })
+    const bars = view.calendarBars([row('Mon', 3, 300), row('Tue', 0, 0), row('Wed', 1, -100)])
+    expect(bars.map((b) => b.label)).toEqual(['Mon', 'Wed'])
+  })
+
   it('orders the symbol bars best first', () => {
     const rows = [
       { ...summary().by_symbol[0], key: 'A', net_of_charges: -10 },
@@ -654,17 +739,269 @@ describe('chart and table helpers', () => {
     expect(view.excursionIndex(undefined, 'b1').size).toBe(0)
   })
 
-  it('writes the unresolved warning only above 0', () => {
+  it('writes one plain-language data warning only when a problem count is above 0', () => {
+    const base = summary()
+    const healthy = {
+      unresolved_in_range: null,
+      data_quality: dataQuality({
+        awaiting_attribution: 0,
+        not_placed: 0,
+        prices: { requested: true, open_positions: 2, statuses: {}, missing: 0, stale: 0 },
+      }),
+      sync_health: { ...base.sync_health, days_without_sync: [] },
+    } as never
+    expect(view.materialDataWarning(healthy)).toBeNull()
     const u = { unresolved_fills: 1, orphan_fills: 0, total: 1, start: 'a', end: 'b' }
-    expect(view.unresolvedWarningText(u)).toBe(
-      '1 fill in the selected range could not be attributed and is excluded from completed-trade statistics.'
+    expect(
+      view.materialDataWarning({ ...(healthy as object), unresolved_in_range: u } as never)
+    ).toBe(
+      '1 fill in this period could not be matched to a trade and is left out, so your P&L and trade count may be incomplete.'
     )
-    expect(view.unresolvedWarningText({ ...u, total: 4 })).toBe(
-      '4 fills in the selected range could not be attributed and are excluded from completed-trade statistics.'
+    expect(
+      view.materialDataWarning({
+        ...(healthy as object),
+        unresolved_in_range: { ...u, total: 4 },
+      } as never)
+    ).toContain('4 fills in this period could not be matched to a trade and are left out')
+    // older server: the pending and unplaced counts of the period stand in
+    const old = view.materialDataWarning({
+      ...(healthy as object),
+      data_quality: dataQuality({ awaiting_attribution: 2, not_placed: 1 }),
+    } as never)
+    expect(old).toContain('3 fills in this period')
+    // missing prices count only when prices were requested
+    const px = (requested: boolean) =>
+      ({
+        ...(healthy as object),
+        data_quality: dataQuality({
+          awaiting_attribution: 0,
+          not_placed: 0,
+          prices: { requested, open_positions: 2, statuses: {}, missing: 2, stale: 0 },
+        }),
+      }) as never
+    expect(view.materialDataWarning(px(false))).toBeNull()
+    expect(view.materialDataWarning(px(true))).toBe(
+      '2 open positions have no current price, so open P&L may be incomplete.'
     )
-    expect(view.unresolvedWarningText({ ...u, total: 0 })).toBeNull()
-    expect(view.unresolvedWarningText(null)).toBeNull()
-    expect(view.unresolvedWarningText(undefined)).toBeNull()
+    // a gap of synced days
+    expect(
+      view.materialDataWarning({
+        ...(healthy as object),
+        sync_health: { ...base.sync_health, days_without_sync: ['2026-11-12', '2026-11-13'] },
+      } as never)
+    ).toBe(
+      'Trades from 2026-11-12, 2026-11-13 may be missing, so P&L for those days may be incomplete.'
+    )
+  })
+
+  describe('data warning for the selected report', () => {
+    const NOW = new Date('2026-11-18T06:00:00Z') // Wednesday 11:30 IST
+    const base = summary()
+    const healthy = () =>
+      ({
+        unresolved_in_range: null,
+        data_quality: dataQuality({
+          awaiting_attribution: 0,
+          not_placed: 0,
+          prices: { requested: true, open_positions: 0, statuses: {}, missing: 0, stale: 0 },
+        }),
+        sync_health: {
+          ...base.sync_health,
+          last_successful_sync: '2026-11-18 11:00',
+          days_without_sync: [],
+        },
+        period: { period: '1m', start: '2026-11-01', end: '2026-11-18' },
+        positions: [],
+        trades: [],
+      }) as never
+    const with_ = (extra: object) => ({ ...(healthy() as object), ...extra }) as never
+    const sync = (extra: object) =>
+      with_({ sync_health: { ...base.sync_health, days_without_sync: [], ...extra } })
+    const pos = (extra: object) => ({ product: 'CNC', opened_at: '2026-11-18T09:30:00', ...extra })
+
+    it('is absent when everything is healthy', () => {
+      expect(view.materialDataWarning(healthy(), NOW)).toBeNull()
+    })
+
+    it('flags open intraday positions from an earlier day that reach the selected range', () => {
+      const text = view.materialDataWarning(
+        with_({ positions: [pos({ product: 'MIS', opened_at: '2026-11-16T10:00:00' })] }),
+        NOW
+      )
+      expect(text).toBe(
+        '1 intraday position is still open from an earlier day, so a closing trade may be missing and your P&L may be incomplete.'
+      )
+      // opened today, or delivery product: normal
+      expect(
+        view.materialDataWarning(with_({ positions: [pos({ product: 'MIS' })] }), NOW)
+      ).toBeNull()
+      expect(
+        view.materialDataWarning(
+          with_({ positions: [pos({ product: 'CNC', opened_at: '2026-11-10T10:00:00' })] }),
+          NOW
+        )
+      ).toBeNull()
+      // opened after the selected range ended: does not touch it
+      expect(
+        view.materialDataWarning(
+          with_({
+            period: { period: 'custom', start: '2026-11-02', end: '2026-11-10' },
+            positions: [pos({ product: 'MIS', opened_at: '2026-11-16T10:00:00' })],
+          }),
+          NOW
+        )
+      ).toBeNull()
+    })
+
+    it('flags trades and positions with no recorded entry only inside the selected range', () => {
+      expect(view.materialDataWarning(with_({ trades: [{ opening_unknown: true }] }), NOW)).toBe(
+        '1 trade or position has no recorded entry, so its P&L may be wrong.'
+      )
+      expect(
+        view.materialDataWarning(
+          with_({ positions: [pos({ opening_unknown: true }), pos({ opening_unknown: true })] }),
+          NOW
+        )
+      ).toBe('2 trades or positions have no recorded entry, so their P&L may be wrong.')
+      expect(
+        view.materialDataWarning(with_({ trades: [{ opening_unknown: false }] }), NOW)
+      ).toBeNull()
+      expect(
+        view.materialDataWarning(
+          with_({
+            period: { period: 'custom', start: '2026-11-02', end: '2026-11-10' },
+            positions: [pos({ opening_unknown: true })],
+          }),
+          NOW
+        )
+      ).toBeNull()
+    })
+
+    it('flags a stale last collection only when the selected range reaches past it', () => {
+      const stale = { last_successful_sync: '2026-11-12 15:40' }
+      expect(view.materialDataWarning(sync(stale), NOW)).toBe(
+        'Trades after 2026-11-12 may be missing, so your P&L may be incomplete.'
+      )
+      // range ended before the last collection: nothing missing in it
+      expect(
+        view.materialDataWarning(
+          with_({
+            sync_health: { ...base.sync_health, days_without_sync: [], ...stale },
+            period: { period: 'custom', start: '2026-11-02', end: '2026-11-12' },
+          }),
+          NOW
+        )
+      ).toBeNull()
+      // recent collection, or a weekend, or the gap days already named
+      expect(
+        view.materialDataWarning(sync({ last_successful_sync: '2026-11-16 15:40' }), NOW)
+      ).toBeNull()
+      expect(
+        view.materialDataWarning(sync(stale), new Date('2026-11-21T06:00:00Z')) // Saturday
+      ).toBeNull()
+      const gap = view.materialDataWarning(
+        sync({ ...stale, days_without_sync: ['2026-11-13'] }),
+        NOW
+      )
+      expect(gap).toBe(
+        'Trades from 2026-11-13 may be missing, so P&L for those days may be incomplete.'
+      )
+    })
+
+    it('names only the missing days that fall inside the selected range', () => {
+      const text = view.materialDataWarning(
+        with_({
+          period: { period: 'custom', start: '2026-11-05', end: '2026-11-12' },
+          sync_health: {
+            ...base.sync_health,
+            last_successful_sync: '2026-11-18 11:00',
+            days_without_sync: ['2026-11-03', '2026-11-10', '2026-11-16'],
+          },
+        }),
+        NOW
+      )
+      expect(text).toBe(
+        'Trades from 2026-11-10 may be missing, so P&L for those days may be incomplete.'
+      )
+    })
+
+    it('keeps internal words out of every warning at once', () => {
+      const text = view.materialDataWarning(
+        {
+          unresolved_in_range: {
+            unresolved_fills: 1,
+            orphan_fills: 1,
+            total: 2,
+            start: 'a',
+            end: 'b',
+          },
+          data_quality: dataQuality({
+            prices: { requested: true, open_positions: 1, statuses: {}, missing: 1, stale: 0 },
+          }),
+          sync_health: {
+            ...base.sync_health,
+            last_successful_sync: '2026-11-02 10:00',
+            days_without_sync: [],
+          },
+          period: { period: '1m', start: '2026-11-01', end: '2026-11-18' },
+          positions: [
+            pos({ product: 'MIS', opened_at: '2026-11-16T10:00:00', opening_unknown: true }),
+          ],
+          trades: [{ opening_unknown: true }],
+        } as never,
+        NOW
+      )
+      expect(text).toContain('2 fills')
+      expect(text).toContain('no current price')
+      expect(text).toContain('Trades after 2026-11-02')
+      expect(text).toContain('intraday position')
+      expect(text).toContain('no recorded entry')
+      expect(text).not.toMatch(
+        /ledger|attribut|sync|reconcil|fills collected|Risk card|\blegs?\b|unresolved|orphan/i
+      )
+    })
+  })
+
+  it('warns in trader words when the newest sync day has only runs that did not complete', () => {
+    const base = summary()
+    const mk = (runs_by_day: Record<string, Record<string, number>>) =>
+      ({
+        unresolved_in_range: null,
+        data_quality: dataQuality({
+          awaiting_attribution: 0,
+          not_placed: 0,
+          prices: { requested: false, open_positions: 0, statuses: {}, missing: 0, stale: 0 },
+        }),
+        sync_health: { ...base.sync_health, runs_by_day, days_without_sync: [] },
+      }) as never
+    const failed = view.materialDataWarning(mk({ '2026-11-17': { error: 1, no_auth: 1 } }))
+    expect(failed).toBe(
+      'Your last sync with the broker did not complete. Recent trades may be missing. Use Refresh to try again.'
+    )
+    // an older failed day does not count once a later day completed
+    expect(
+      view.materialDataWarning(mk({ '2026-11-16': { error: 1 }, '2026-11-17': { ok: 1 } }))
+    ).toBeNull()
+    // a partial run completed; no runs at all or no field: nothing is invented
+    expect(view.materialDataWarning(mk({ '2026-11-17': { partial: 1, error: 1 } }))).toBeNull()
+    expect(view.materialDataWarning(mk({}))).toBeNull()
+    expect(view.lastSyncFailed(undefined)).toBe(false)
+    expect(view.lastSyncFailed({ runs_by_day: { '2026-11-17': { ok: 0 } } })).toBe(false)
+  })
+
+  it('keeps internal terms out of the data warning', () => {
+    const text = view.materialDataWarning({
+      unresolved_in_range: { unresolved_fills: 1, orphan_fills: 1, total: 2, start: 'a', end: 'b' },
+      data_quality: dataQuality({
+        prices: { requested: true, open_positions: 1, statuses: {}, missing: 1, stale: 0 },
+      }),
+      sync_health: {
+        last_successful_sync: 'x',
+        runs_by_day: {},
+        days_without_sync: ['2026-11-12'],
+      },
+    } as never)
+    expect(text).not.toMatch(/attribut|ledger|sync|reconcil|collected|unresolved|orphan/i)
   })
 
   it('explains unclassified reasons in plain words, never the raw code', () => {
@@ -682,5 +1019,80 @@ describe('chart and table helpers', () => {
     expect(view.streakText({ type: 'win', length: 3 })).toBe('3 wins')
     expect(view.streakText({ type: 'loss', length: 2 })).toBe('2 losses')
     expect(view.streakText({ type: null, length: 0 })).toBe('none')
+  })
+})
+
+describe('progressionText', () => {
+  const money = (v: number) => `Rs ${v.toFixed(2)}`
+  const pt = (index: number, net: number, equity: number, drawdown: number) =>
+    ({
+      index,
+      id: index,
+      closed_at: '2026-11-16 10:00:00',
+      symbol: 'X',
+      direction: 'LONG',
+      net,
+      equity,
+      peak: 0,
+      drawdown,
+    }) as never
+  it('reads the finish, win and loss count, high point and largest fall', () => {
+    const curve = {
+      points: [pt(1, -50, -50, 50), pt(2, 80, 30, 0), pt(3, -20, 10, 20)],
+      used: 3,
+      skipped: 0,
+      maxDrawdown: 50,
+      maxDrawdownAt: null,
+      currentDrawdown: 20,
+      peakEquity: 30,
+      latestEquity: 10,
+    }
+    const text = progressionText(curve, 'position', money)
+    expect(text).toContain('finished at Rs 10.00 after 3 trades: 1 winning, 2 losing')
+    expect(text).toContain('highest point was Rs 30.00 after trade 2')
+    expect(text).toContain('largest fall from a peak was Rs 50.00, reached after trade 1')
+  })
+  it('says so when the line never rose above zero or fell', () => {
+    const curve = {
+      points: [pt(1, -5, -5, 5)],
+      used: 1,
+      skipped: 0,
+      maxDrawdown: 5,
+      maxDrawdownAt: null,
+      currentDrawdown: 5,
+      peakEquity: 0,
+      latestEquity: -5,
+    }
+    expect(progressionText(curve, 'position', money)).toContain('never rose above zero')
+    expect(progressionText({ ...curve, points: [] }, 'position', money)).toBe('')
+  })
+})
+
+describe('breakdownVisibility', () => {
+  it('hides every comparison of a one-symbol, one-product, one-direction session', () => {
+    const one = summary()
+    const v = breakdownVisibility({
+      ...one,
+      by_symbol: one.by_symbol?.slice(0, 1),
+      by_side: one.by_side?.slice(0, 1),
+      by_product: one.by_product?.slice(0, 1),
+      by_holding: undefined,
+    })
+    expect(v.symbol && v.side && v.product && v.points).toBe(false)
+    expect(v.patterns).toEqual([])
+    expect(v.noneShown).toBe(true)
+  })
+  it('shows long vs short whenever both directions have a trade, whatever the count', () => {
+    const row = (key: string, trades: number) =>
+      ({ ...summary().by_symbol?.[0], key, trades }) as never
+    const base = summary()
+    expect(breakdownVisibility({ ...base, by_side: [row('LONG', 8), row('SHORT', 1)] }).side).toBe(
+      true
+    )
+    // one direction alone has nothing to compare; a direction with no trade does not count
+    expect(breakdownVisibility({ ...base, by_side: [row('LONG', 8), row('SHORT', 0)] }).side).toBe(
+      false
+    )
+    expect(breakdownVisibility({ ...base, by_side: [row('LONG', 8)] }).side).toBe(false)
   })
 })

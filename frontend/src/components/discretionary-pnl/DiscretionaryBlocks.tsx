@@ -18,7 +18,7 @@ import {
 import { fmtPct, fmtPoints, fmtWinRate, pnlTextClass } from '@/lib/discretionaryPnlView'
 import { fmtDuration } from '@/lib/strategyPnlView'
 import { cn } from '@/lib/utils'
-import { LowSampleMark, StripTile, Unavailable } from './DiscretionaryInsights'
+import { StripTile, Unavailable } from './DiscretionaryInsights'
 
 type Money = (value: number) => string
 
@@ -49,7 +49,6 @@ export function CategorySelector({
 }
 
 /** Wins and losses below this many positions are indicative only (the edge-check minimum). */
-const THIN_ROWS = 5
 
 /**
  * Points per unit for each instrument. Points are never added across instruments, so there is
@@ -83,10 +82,7 @@ export function PointsByInstrumentTable({ rows }: { rows: PointsByInstrumentRow[
             <TableRow key={`${r.symbol}-${r.exchange}`} data-testid="points-row">
               <TableCell className="font-medium">{r.symbol}</TableCell>
               <TableCell>{r.exchange}</TableCell>
-              <TableCell className="text-right font-mono">
-                {r.positions}
-                {r.positions < THIN_ROWS && <LowSampleMark />}
-              </TableCell>
+              <TableCell className="text-right font-mono">{r.positions}</TableCell>
               <TableCell className="text-right font-mono">
                 {r.winners} / {r.losers}
               </TableCell>
@@ -163,18 +159,20 @@ export function CalendarTable({
           {rows.map((r) => (
             <TableRow key={r.key} data-testid="calendar-row">
               <TableCell className="font-medium">{label(r)}</TableCell>
-              <TableCell className="text-right font-mono">
-                {r.positions}
-                {r.positions > 0 && r.positions < THIN_ROWS && <LowSampleMark />}
-              </TableCell>
+              <TableCell className="text-right font-mono">{r.positions}</TableCell>
               <TableCell className="text-right font-mono">
                 {r.win_rate == null ? '—' : fmtWinRate(r.win_rate)}
               </TableCell>
-              <TableCell className={cn('text-right font-mono', pnlTextClass(r.realized_gross))}>
-                {formatCurrency(r.realized_gross)}
+              <TableCell
+                className={cn(
+                  'text-right font-mono',
+                  r.positions === 0 ? undefined : pnlTextClass(r.realized_gross)
+                )}
+              >
+                {r.positions === 0 ? '—' : formatCurrency(r.realized_gross)}
               </TableCell>
               <TableCell className="text-right font-mono text-muted-foreground">
-                {formatCurrency(r.charges)}
+                {r.positions === 0 ? '—' : formatCurrency(r.charges)}
                 {r.charges_unavailable_positions > 0 && (
                   <span
                     className="ml-0.5 text-xs text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
@@ -267,7 +265,15 @@ export function TradeManagementStrip({
           </>
         )}
         {costs && (
-          <StripTile label="Charges as % of gross profit" testId="cost-pct">
+          <StripTile
+            label="Est. charges as % of winners' gross profit"
+            testId="cost-pct"
+            hint={
+              costs.charges_unavailable_positions > 0
+                ? `${costs.charges_unavailable_positions} position(s) without a charge estimate are not in the charges`
+                : undefined
+            }
+          >
             {costs.charges_pct_of_gross_profit == null ? (
               <Unavailable reason={costs.reason ?? 'not available'} />
             ) : (

@@ -2,8 +2,7 @@ import type { DiscretionarySummary } from '@/api/discretionaryPnl'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
-  fmtNetMoney,
-  netDefinitionText,
+  hasNoClosedActivity,
   pnlTextClass,
   type TotalCard,
   type UnrealizedSummary,
@@ -11,7 +10,7 @@ import {
 import { fmtDuration } from '@/lib/strategyPnlView'
 import { cn } from '@/lib/utils'
 import { TradeManagementStrip } from './DiscretionaryBlocks'
-import { RiskStrip, SampleNote, StripTile } from './DiscretionaryInsights'
+import { RiskStrip, StripTile } from './DiscretionaryInsights'
 
 type Money = (value: number) => string
 
@@ -35,7 +34,7 @@ export function DiscretionaryGroups({
   part?: 'all' | 'performance' | 'analysis'
 }) {
   const m = summary.metrics
-  const noTrades = m.trades_count === 0
+  const noMoney = hasNoClosedActivity(summary)
   const priced = unrealized.kind === 'complete' || unrealized.kind === 'partial'
   const unrealizedHint =
     unrealized.kind === 'none'
@@ -86,59 +85,40 @@ export function DiscretionaryGroups({
                   )}
                 </div>
               </div>
-              <StripTile label={total.label} hint={total.hint}>
-                <span className={pnlTextClass(total.value)}>{formatCurrency(total.value)}</span>
+              {noMoney && !priced ? (
+                <StripTile label="Total" hint="no trade was closed in this date range">
+                  —
+                </StripTile>
+              ) : (
+                <StripTile label={total.label} hint={total.hint}>
+                  <span className={pnlTextClass(total.value)}>{formatCurrency(total.value)}</span>
+                </StripTile>
+              )}
+              <StripTile
+                label="Total won (net)"
+                hint={noMoney ? 'no closed trades' : 'winning trades, after estimated charges'}
+              >
+                {noMoney ? '—' : formatCurrency(m.gross_profit)}
               </StripTile>
-              <StripTile label="Total won (net)" hint="winning trades, after charges">
-                {formatCurrency(m.gross_profit)}
-              </StripTile>
-              <StripTile label="Total lost (net)" hint="losing trades, after charges">
-                {formatCurrency(m.gross_loss)}
-              </StripTile>
-              <StripTile label="Avg win (net)">
-                {noTrades ? '—' : fmtNetMoney(m.avg_win, formatCurrency)}
-              </StripTile>
-              <StripTile label="Avg loss (net)">
-                {noTrades ? '—' : fmtNetMoney(m.avg_loss, formatCurrency)}
+              <StripTile
+                label="Total lost (net)"
+                hint={noMoney ? 'no closed trades' : 'losing trades, after estimated charges'}
+              >
+                {noMoney ? '—' : formatCurrency(m.gross_loss)}
               </StripTile>
             </div>
-            <SampleNote sample={summary.sample} />
-            {(m.net_unavailable_trades ?? 0) > 0 && (
-              <p
-                className="text-xs text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
-                data-testid="net-unavailable-note"
-              >
-                {m.net_unavailable_trades} completed trade(s) have no net P&amp;L (no charge
-                estimate) and are left out of win rate, profit factor, expectancy and the averages.
-              </p>
-            )}
-            {summary.net_definition && (
-              <p className="text-xs text-muted-foreground">
-                {netDefinitionText(summary.net_definition)}
-              </p>
-            )}
           </CardContent>
         </Card>
       )}
 
-      {showAnalysis &&
-        (summary.consistency ? (
-          <RiskStrip
-            compact
-            consistency={summary.consistency}
-            risk={summary.risk}
-            formatCurrency={formatCurrency}
-          />
-        ) : (
-          <Card data-testid="group-risk-missing" className="gap-3 py-4">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Risk and consistency</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">Not sent by the server.</p>
-            </CardContent>
-          </Card>
-        ))}
+      {showAnalysis && summary.consistency && (
+        <RiskStrip
+          compact
+          consistency={summary.consistency}
+          risk={summary.risk}
+          formatCurrency={formatCurrency}
+        />
+      )}
 
       {showAnalysis && (summary.trade_management || summary.costs || summary.hold) && (
         <Card data-testid="group-trade-management" className="gap-3 py-4">

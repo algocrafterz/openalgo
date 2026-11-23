@@ -782,7 +782,7 @@ export default function StrategyDailyPerformance() {
           </div>
           <p className="text-muted-foreground">
             {isDisc
-              ? 'Trades you placed yourself at the broker, rebuilt from the fill ledger: realized P&L before and after estimated charges, open positions and unrealized P&L when you fetch prices. Sharpe, Sortino and return % are not shown because there is no capital basis.'
+              ? 'Trades you placed yourself at the broker, rebuilt from the fill ledger: realized P&L before and after estimated charges, open positions and unrealized P&L when you fetch prices.'
               : "Day-by-day strategy performance with professional trade evaluation metrics - win rate, profit factor, expectancy in R, estimated charges, Sharpe/Sortino/Calmar, drawdown and streaks. 1D shows the last traded session's trades instead of ratios. Live and Analyze mode are tracked separately."}
           </p>
           {isStrategies && shownRange && (
@@ -844,7 +844,7 @@ export default function StrategyDailyPerformance() {
             </>
           )}
           <Select value={period} onValueChange={(v) => setPeriod(v as PerformancePeriod)}>
-            <SelectTrigger className="w-[100px]">
+            <SelectTrigger className="w-[120px] shrink-0">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -857,7 +857,7 @@ export default function StrategyDailyPerformance() {
           </Select>
           {isCustom && (
             <form
-              className="flex items-center gap-2"
+              className="flex flex-wrap items-center gap-2"
               onSubmit={(e) => {
                 e.preventDefault()
                 applyDraftRange()
@@ -945,6 +945,7 @@ export default function StrategyDailyPerformance() {
           rangeReady={rangeReady}
           formatCurrency={formatCurrency}
           isDarkMode={isDarkMode}
+          onSelectDate={openDay}
         />
       ) : !rangeReady ? (
         <div className="text-center py-12 text-muted-foreground">

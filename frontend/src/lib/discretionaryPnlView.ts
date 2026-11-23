@@ -2,8 +2,9 @@ import type {
   BreakdownRow,
   CalendarRow,
   ClassificationBlock,
-  DataQuality,
+  ConsistencyBlock,
   DiscretionaryCategory,
+  DiscretionaryMetrics,
   DiscretionaryPosition,
   DiscretionarySummary,
   DiscretionaryToday,
@@ -15,8 +16,6 @@ import type {
   PriceStatus,
   RiskBlock,
   SampleContext,
-  SyncHealth,
-  UnresolvedInRange,
 } from '@/api/discretionaryPnl'
 
 /** The Performance page source: current-mode strategies (unchanged) or discretionary trading. */
@@ -163,11 +162,238 @@ export function fmtNetMoney(
 export function fmtProfitFactor(
   value: number | null | undefined,
   wins: number,
-  losses: number
+  losses: number,
+  /** False when no position has a net P&L: the figure is unknown, not "not applicable". */
+  hasNet = true
 ): string {
+  if (!hasNet) return '—'
+  // No profit and no loss (every trade break-even): the server may send 0, which is not a result.
+  if (wins === 0 && losses === 0) return NOT_APPLICABLE
   if (value != null && Number.isFinite(value)) return value.toFixed(2)
   if (wins > 0 && losses === 0) return '∞'
   return '—'
+}
+
+/** Shown where a figure cannot exist (for example the average loss with no losing trade). */
+export const NOT_APPLICABLE = 'n/a'
+
+/**
+ * Average win or loss: 'n/a' when there is no trade of that kind (decided from the count, so a
+ * server-side 0 never reads as Rs 0), else the net-basis figure.
+ */
+export function fmtAvgByCount(
+  value: number | null | undefined,
+  count: number,
+  formatCurrency: (v: number) => string
+): string {
+  if (count <= 0) return NOT_APPLICABLE
+  return fmtNetMoney(value, formatCurrency)
+}
+
+/** Average win divided by average loss; 'n/a' unless there is at least one win and one loss. */
+export function fmtPayoffRatio(
+  avgWin: number | null | undefined,
+  avgLoss: number | null | undefined,
+  wins: number,
+  losses: number
+): string {
+  if (wins <= 0 || losses <= 0) return NOT_APPLICABLE
+  if (avgWin == null || avgLoss == null || !Number.isFinite(avgWin) || !Number.isFinite(avgLoss))
+    return NOT_APPLICABLE
+  if (Math.abs(avgLoss) === 0) return NOT_APPLICABLE
+  return (Math.abs(avgWin) / Math.abs(avgLoss)).toFixed(2)
+}
+
+export interface WinRateParts {
+  wins: number
+  losses: number
+  /** Null when the server did not send the net-basis count. */
+  breakEven: number | null
+  /** Completed trades with a net P&L: the denominator of the win rate. Null when not sent. */
+  sample: number | null
+}
+
+/** Wins, losses, break-even and sample size behind the win rate. Break-even is derived. */
+export function winRateParts(
+  m: Pick<DiscretionaryMetrics, 'winning_trades' | 'losing_trades' | 'net_basis_trades'>
+): WinRateParts {
+  const sample = m.net_basis_trades ?? null
+  const breakEven = sample == null ? null : Math.max(0, sample - m.winning_trades - m.losing_trades)
+  return {
+    wins: m.winning_trades,
+    losses: m.losing_trades,
+    breakEven,
+    sample,
+  }
+}
+
+/** "N of M completed positions have 1-minute price bars" from the excursion coverage counts. */
+export function coverageText(withData: number, total: number): string {
+  return `${withData} of ${total} completed positions have 1-minute price bars`
+}
+
+/**
+ * Reasons positions lack MAE / MFE, as full phrases: "6 positions: price data for that day is
+ * not complete yet". `texts` maps a reason code to the server's trader wording.
+ */
+export function excursionReasonPhrases(
+  counts: Record<string, number> | null | undefined,
+  texts: ReadonlyMap<string, string>
+): string[] {
+  return Object.entries(counts ?? {}).map(([code, n]) => {
+    const text = texts.get(code) ?? code.replace(/_/g, ' ')
+    return `${n} ${n === 1 ? 'position' : 'positions'}: ${text}`
+  })
+}
+
+/** The one line for a range in which no trade was closed. */
+export const NO_CLOSED_TRADES_TEXT = 'No closed trades in this date range.'
+
+/**
+ * True when nothing was closed in the range: no completed trade and no leg closed (a partial
+ * exit still has realized money). Realized money, charges and every ratio are then unknown for
+ * the range, so the page shows a dash instead of 0.00.
+ */
+export function hasNoClosedActivity(
+  summary:
+    | (Pick<DiscretionarySummary, 'metrics'> & Partial<Pick<DiscretionarySummary, 'by_period'>>)
+    | undefined
+): boolean {
+  if (!summary) return true
+  return (summary.metrics?.trades_count ?? 0) === 0 && (summary.by_period?.daily?.length ?? 0) === 0
+}
+
+/**
+ * True when the whole report range ends before the first reliable date, so nothing in it can
+ * be rebuilt. Custom ranges use the requested end; other periods use the summary's own end.
+ */
+export function rangeEndsBeforeReliableStart(
+  period: string,
+  range: { start: string; end: string } | undefined,
+  summary: Pick<DiscretionarySummary, 'period'> | undefined
+): boolean {
+  const since = summary?.period.reliable_since
+  const end = period === 'custom' ? range?.end : summary?.period.end
+  return !!since && !!end && end < since
+}
+
+/**
+ * True when an empty page means the ledger itself has no trades: the report range runs from the
+ * first reliable date (the first synced fill, or today when there is none) up to today. A range
+ * that stops short of either end can be empty while the ledger holds trades elsewhere.
+ */
+export function ledgerIsEmpty(
+  summary: Pick<DiscretionarySummary, 'period'>,
+  today: string
+): boolean {
+  const since = summary.period.reliable_since
+  return !since || (summary.period.start <= since && summary.period.end >= today)
+}
+
+export const INSUFFICIENT_DATA = 'insufficient data'
+
+/** Minutes as "45 min", "2 h 5 min" or "1 d 3 h" (calendar time between two timestamps). */
+export function fmtSpan(minutes: number | null | undefined): string {
+  if (minutes == null || !Number.isFinite(minutes)) return '—'
+  const m = Math.round(minutes)
+  if (m < 60) return `${m} min`
+  if (m < 1440) return `${Math.floor(m / 60)} h ${m % 60} min`
+  return `${Math.floor(m / 1440)} d ${Math.floor((m % 1440) / 60)} h`
+}
+
+/** Winning-day share on the net basis with its sample (days); null when the server did not send it. */
+export function winningDaysText(
+  c: Pick<ConsistencyBlock, 'net_days'> | null | undefined
+): { value: string; hint: string } | null {
+  const d = c?.net_days
+  if (!d) return null
+  const extra = d.flat_days > 0 ? `, ${d.flat_days} flat` : ''
+  return {
+    value: `${d.winning_day_pct.toFixed(1)}%`,
+    hint: `${d.winning_days} of ${d.total_days} day${d.total_days === 1 ? '' : 's'} net positive${extra}`,
+  }
+}
+
+/** Deepest net drawdown: when it began, whether it recovered, and for how long. */
+export function drawdownRecoveryText(
+  risk: Pick<RiskBlock, 'max_drawdown' | 'max_drawdown_detail'> | null | undefined
+): { value: string; hint: string } {
+  if (!risk) return { value: INSUFFICIENT_DATA, hint: '' }
+  const d = risk.max_drawdown_detail
+  if (!d) {
+    return risk.max_drawdown > 0
+      ? { value: INSUFFICIENT_DATA, hint: 'timing not sent by the server' }
+      : { value: 'No drawdown', hint: 'net P&L never fell below an earlier high' }
+  }
+  const began = d.start_at ? `; began ${fmtStamp(d.start_at)}` : ''
+  if (d.recovered) {
+    return {
+      value:
+        d.duration_minutes != null ? `Recovered after ${fmtSpan(d.duration_minutes)}` : 'Recovered',
+      hint: `fell to ${fmtStamp(d.trough_at)}, back at its high ${fmtStamp(d.recovered_at)}${began}`,
+    }
+  }
+  return {
+    value:
+      d.duration_minutes != null
+        ? `Not recovered, ${fmtSpan(d.duration_minutes)}`
+        : 'Not recovered',
+    hint: `fell to ${fmtStamp(d.trough_at)}; still below its high at the latest close${began}`,
+  }
+}
+
+/** Trades per day: average and busiest day. */
+export function tradesPerDayText(c: Pick<ConsistencyBlock, 'trades_per_day'> | null | undefined): {
+  value: string
+  hint: string
+} {
+  const t = c?.trades_per_day
+  if (!t) return { value: INSUFFICIENT_DATA, hint: '' }
+  return {
+    value: `${t.avg} avg, ${t.max} max`,
+    hint: `busiest day ${t.max_day}; ${t.days} trading day${t.days === 1 ? '' : 's'}`,
+  }
+}
+
+/** Objective re-entry timing after a losing trade. No judgement about the reason. */
+export function reentryText(c: Pick<ConsistencyBlock, 'reentry_after_loss'> | null | undefined): {
+  value: string
+  hint: string
+} {
+  const r = c?.reentry_after_loss
+  if (!r)
+    return { value: INSUFFICIENT_DATA, hint: 'needs a losing trade followed by another entry' }
+  return {
+    value: `${r.reentries_within_window} of ${r.losses_followed_by_entry}`,
+    hint: `Re-entered within ${r.window_minutes} min after a loss; shortest gap ${fmtSpan(r.shortest_gap_minutes)}`,
+  }
+}
+
+/**
+ * Position size (quantity) spread per symbol: smallest, median, largest. `key` is unique per
+ * exchange and symbol; `label` carries the exchange only when more than one exchange traded the
+ * symbol.
+ */
+export function quantityText(
+  c: Pick<ConsistencyBlock, 'quantity_by_symbol'> | null | undefined
+): { key: string; symbol: string; label: string; text: string; positions: number }[] {
+  const rows = c?.quantity_by_symbol ?? []
+  const exchanges = new Map<string, Set<string>>()
+  for (const q of rows) {
+    const set = exchanges.get(q.symbol) ?? new Set<string>()
+    set.add(q.exchange)
+    exchanges.set(q.symbol, set)
+  }
+  return rows.map((q) => ({
+    key: `${q.exchange}:${q.symbol}`,
+    symbol: q.symbol,
+    label:
+      (exchanges.get(q.symbol)?.size ?? 0) > 1 && q.exchange
+        ? `${q.symbol} (${q.exchange})`
+        : q.symbol,
+    positions: q.positions,
+    text: `${fmtQty(q.min_quantity)} / ${fmtQty(q.median_quantity)} / ${fmtQty(q.max_quantity)}`,
+  }))
 }
 
 /** Quantity as an integer when whole, otherwise trimmed. */
@@ -310,41 +536,6 @@ export function totalCard(
   }
 }
 
-/**
- * Backend lines that only restate what a card or the sync line already shows: the last-sync
- * stamp, the missing-sync days and "never synced" (all from sync_health), and "not requested"
- * (the Unrealized card). A prefix that stops matching only makes a line appear twice.
- */
-const INFORMATIONAL_WARNING_PREFIXES = [
-  'last successful sync:',
-  'no successful ledger sync',
-  'unrealized P&L not requested',
-]
-
-/**
- * The backend's ledger-wide line ("N unresolved fill(s) are excluded from P&L until
- * attributed."). It counts the whole ledger, not the selected range.
- */
-const LEDGER_UNRESOLVED_WARNING = /^\d+ unresolved fill\(s\) are excluded from P&L/
-
-/**
- * Backend warnings worth a banner: informational lines are left to the cards and the sync line.
- * When the server reports the in-range unresolved count (``unresolvedInRange`` present) the
- * ledger-wide unresolved line is dropped: the range banner says the same thing for the selected
- * range, and the ledger-wide count misleads on a narrow range. An older server (no
- * ``unresolved_in_range``) keeps the line. Every other warning is kept as is.
- */
-export function actionableWarnings(
-  warnings: string[] | undefined,
-  unresolvedInRange?: UnresolvedInRange | null
-): string[] {
-  return (warnings ?? []).filter(
-    (w) =>
-      !INFORMATIONAL_WARNING_PREFIXES.some((prefix) => w.startsWith(prefix)) &&
-      !(unresolvedInRange != null && LEDGER_UNRESOLVED_WARNING.test(w))
-  )
-}
-
 /** Text colour for a P&L figure: darker green in light theme (AA), lighter red in dark theme. */
 export function pnlTextClass(value: number): string {
   return value > 0 ? POSITIVE_TEXT : value < 0 ? NEGATIVE_TEXT : ''
@@ -380,19 +571,6 @@ export function netIncomplete(row: {
   charges_unavailable_trades?: number
 }): boolean {
   return row.net_charges_complete === false || (row.charges_unavailable_trades ?? 0) > 0
-}
-
-/** One line describing the ledger sync, and whether it needs attention. */
-export function syncSummary(health: SyncHealth | undefined): { text: string; problem: boolean } {
-  if (!health || !health.last_successful_sync) {
-    return { text: 'Ledger sync: no successful sync yet', problem: true }
-  }
-  const missing = health.days_without_sync ?? []
-  const base = `Ledger sync: last successful ${health.last_successful_sync} IST`
-  if (missing.length === 0) return { text: base, problem: false }
-  const shown = missing.slice(0, 5).join(', ')
-  const more = missing.length > 5 ? ` and ${missing.length - 5} more` : ''
-  return { text: `${base}; no sync on ${shown}${more}`, problem: true }
 }
 
 /**
@@ -437,7 +615,7 @@ export function awaitingAttribution(
 
 /** The empty-state message while every execution of the selection awaits attribution. */
 export function awaitingAttributionText(collected: number, unresolved: number): string {
-  return `No attributable trades available for performance analysis yet. ${collected} fills collected; ${unresolved} awaiting attribution. Their P&L is excluded until classification is resolved.`
+  return `No trades to show yet: ${unresolved} of the ${collected} fills in this period could not be matched to a trade, so their P&L is left out.`
 }
 
 /** Sorted distinct non-empty values, for a filter's choices. */
@@ -582,7 +760,7 @@ export function fmtPositionAge(openedAt: string | null | undefined, nowMs: numbe
 }
 
 export const DAILY_CHART_CAPTION =
-  'Daily realized P&L, gross (before charges): the same basis as the equity curve. Hover a bar for its estimated charges and net.'
+  'Daily realised net P&L, after estimated charges: the same basis as the equity curve. Hover a bar for its gross P&L and estimated charges. A weekday with no bar had no recorded trades: it is a gap, not a day of zero.'
 
 export interface DailyBar {
   date: string
@@ -590,11 +768,11 @@ export interface DailyBar {
   charges: number
   net: number
   netComplete: boolean
-  /** Bar length as a percent of the largest absolute day (0-100). */
+  /** Bar length as a percent of the largest absolute NET day (0-100). */
   pct: number
 }
 
-/** Bars of the daily P&L chart (one per day with a close) and the day counts behind them. */
+/** Bars of the daily P&L chart (one per day with a close, by NET P&L) and the day counts behind them. */
 export function dailyBars(rows: PeriodRow[] | undefined): {
   bars: DailyBar[]
   profitable: number
@@ -602,64 +780,49 @@ export function dailyBars(rows: PeriodRow[] | undefined): {
   flat: number
 } {
   const list = rows ?? []
-  const peak = Math.max(0, ...list.map((r) => Math.abs(r.realized_gross)))
+  const peak = Math.max(0, ...list.map((r) => Math.abs(r.net_of_charges)))
   const bars = list.map((r) => ({
     date: r.period,
     gross: r.realized_gross,
     charges: r.charges,
     net: r.net_of_charges,
     netComplete: !netIncomplete(r),
-    pct: peak > 0 ? (Math.abs(r.realized_gross) / peak) * 100 : 0,
+    pct: peak > 0 ? (Math.abs(r.net_of_charges) / peak) * 100 : 0,
   }))
   return {
     bars,
-    profitable: list.filter((r) => r.realized_gross > 0).length,
-    losing: list.filter((r) => r.realized_gross < 0).length,
-    flat: list.filter((r) => r.realized_gross === 0).length,
+    profitable: list.filter((r) => r.net_of_charges > 0).length,
+    losing: list.filter((r) => r.net_of_charges < 0).length,
+    flat: list.filter((r) => r.net_of_charges === 0).length,
   }
-}
-
-/** "based on N completed trades over D trading days" plus a low-sample note by the server's rule. */
-export function sampleNote(
-  sample: SampleContext | undefined
-): { text: string; low: boolean } | null {
-  if (!sample) return null
-  const base = `Ratios based on ${sample.completed_trades} completed trade(s) over ${sample.trading_days} trading day(s).`
-  if (sample.sufficient) return { text: base, low: false }
-  return {
-    text: `${base} Low sample: fewer than ${sample.min_trades} completed trades or ${sample.min_days} trading days, so win rate, profit factor and expectancy are indicative only.`,
-    low: true,
-  }
-}
-
-/** Whether a row's ratios rest on a sample below the edge-check rule (server flag, else sample_ok). */
-export function isLowSample(row: Pick<BreakdownRow, 'low_sample' | 'sample_ok'>): boolean {
-  if (typeof row.low_sample === 'boolean') return row.low_sample
-  return row.sample_ok === false
 }
 
 /**
- * Profit factor of a breakdown row: always the number (dash only when it is null), with
- * `low` set when the group is below the sample rule so the UI adds a muted "low sample" marker.
+ * "Ratios based on N completed trades over D trading days". Null when the range has no
+ * completed trade: the sentence would only state a zero.
+ */
+export function sampleNote(sample: SampleContext | undefined): { text: string } | null {
+  if (!sample || sample.completed_trades <= 0) return null
+  const n = sample.completed_trades
+  const d = sample.trading_days
+  return {
+    text: `Ratios based on ${n} completed trade${n === 1 ? '' : 's'} over ${d} trading day${d === 1 ? '' : 's'}.`,
+  }
+}
+
+/**
+ * Profit factor of a breakdown row: always the number (dash only when it is null). The row's
+ * Trades column shows the sample behind it.
  */
 export function rowProfitFactor(
   row: Pick<
     BreakdownRow,
-    'trades' | 'profit_factor' | 'wins' | 'losses' | 'sample_ok' | 'low_sample'
-  >,
-  sample?: Pick<SampleContext, 'min_trades' | 'min_days'>
-): { value: string; low: boolean; title?: string } {
-  if (row.trades === 0) return { value: '—', low: false, title: 'No completed trade in this group' }
-  const low = isLowSample(row)
-  const rule = sample
-    ? `at least ${sample.min_trades} completed trades over ${sample.min_days} trading days`
-    : 'a larger sample'
+    'trades' | 'profit_factor' | 'wins' | 'losses' | 'stats_unavailable_reason'
+  >
+): { value: string; title?: string } {
+  if (row.trades === 0) return { value: '—', title: 'No completed trade in this group' }
   return {
-    value: fmtProfitFactor(row.profit_factor, row.wins, row.losses),
-    low,
-    title: low
-      ? `Low sample: indicative only; needs ${rule} (this group has ${row.trades})`
-      : undefined,
+    value: fmtProfitFactor(row.profit_factor, row.wins, row.losses, !row.stats_unavailable_reason),
   }
 }
 
@@ -679,7 +842,7 @@ export const HOW_YOU_TRADE_OPTIONS: {
     key: 'time_of_day',
     label: 'Time of day',
     column: 'Entry time (IST)',
-    note: 'By the entry time of the position (IST). Each bucket includes its start and excludes its end; "other" is outside 09:15-15:30 (pre-open, MCX evening).',
+    note: 'By the entry time of the position (IST). Each bucket includes its start and excludes its end; "other" is outside NSE cash hours (before 09:15 or from 15:30: pre-open, MCX evening); it is not an error.',
   },
   {
     key: 'weekday',
@@ -698,7 +861,7 @@ export const HOW_YOU_TRADE_OPTIONS: {
 /** Human label for a "How you trade" bucket key. */
 export function bucketLabel(key: string): string {
   const labels: Record<string, string> = {
-    other: 'Other (outside 09:15-15:30)',
+    other: 'Other (outside NSE cash hours, 09:15-15:30)',
     '<5m': 'Under 5 min',
     '5-15m': '5-15 min',
     '15-60m': '15-60 min',
@@ -715,99 +878,6 @@ export function bucketLabel(key: string): string {
     Sun: 'Sunday',
   }
   return labels[key] ?? key
-}
-
-export interface DataQualityState {
-  key: 'collected' | 'awaiting' | 'open' | 'included' | 'not_placed'
-  step: string
-  label: string
-  count: number
-  detail?: string
-  title?: string
-}
-
-export const IN_COMPLETED_TITLE =
-  'Fills of completed trades. Partial exits of positions still open are counted under Attributed, position still open; their realised P&L is already in your totals.'
-export const ATTRIBUTED_OPEN_TITLE =
-  'Fills of positions still open. Partial exits among them contribute realised P&L, which is already in your totals.'
-
-/**
- * The execution states of the data-quality strip. Collected and In completed trades always show;
- * Awaiting attribution, Attributed (position still open) and Not placed only when their count is
- * not zero, so an unresolved fill is never hidden.
- */
-export function dataQualityStates(dq: DataQuality): DataQualityState[] {
-  const states: DataQualityState[] = [
-    {
-      key: 'collected',
-      step: '1',
-      label: 'Collected',
-      count: dq.collected,
-      detail: 'manual and unresolved fills',
-    },
-    {
-      key: 'awaiting',
-      step: '2',
-      label: 'Awaiting attribution',
-      count: dq.awaiting_attribution,
-      detail:
-        dq.awaiting_attribution > 0
-          ? `${dq.awaiting_grace} in the safety window, ${dq.awaiting_other} other`
-          : undefined,
-    },
-    {
-      key: 'open',
-      step: '3',
-      label: 'Attributed, position still open',
-      count: dq.attributed_open,
-      detail: 'partial exits: realised P&L already in totals',
-      title: ATTRIBUTED_OPEN_TITLE,
-    },
-    {
-      key: 'included',
-      step: '4',
-      label: 'In completed trades',
-      count: dq.included,
-      title: IN_COMPLETED_TITLE,
-    },
-  ]
-  if (dq.not_placed > 0) {
-    states.push({
-      key: 'not_placed',
-      step: '5',
-      label: 'Not placed',
-      count: dq.not_placed,
-      detail: 'opening not in the ledger or invalid',
-    })
-  }
-  return states.filter((s) => s.count > 0 || s.key === 'collected' || s.key === 'included')
-}
-
-/**
- * The single line shown when every fill is in a completed trade and the counts add up:
- * "26 fills, all in 5 completed trades". Null when anything is awaiting, open or unplaced, or
- * the counts do not reconcile.
- */
-export function dataQualityAllClear(dq: DataQuality, completedTrades: number): string | null {
-  const clear =
-    dq.reconciles &&
-    dq.awaiting_attribution === 0 &&
-    dq.attributed_open === 0 &&
-    dq.not_placed === 0 &&
-    dq.collected === dq.included
-  if (!clear) return null
-  return `${dq.collected} fill${dq.collected === 1 ? '' : 's'}, all in ${completedTrades} completed trade${completedTrades === 1 ? '' : 's'}`
-}
-
-/** One line on the open-position prices, or "prices not requested". */
-export function dataQualityPrices(dq: DataQuality): string {
-  const p = dq.prices
-  if (!p.requested) return 'Prices not requested'
-  if (p.open_positions === 0) return 'No open positions to price'
-  const parts: string[] = []
-  if (p.missing > 0) parts.push(`${p.missing} without a usable price`)
-  if (p.stale > 0) parts.push(`${p.stale} stale, last close or cached`)
-  return parts.length > 0 ? `Prices: ${parts.join(', ')}` : 'Prices: all live'
 }
 
 // ---------------------------------------------------------------- category, points, charts
@@ -842,7 +912,7 @@ export function unclassifiedReasonsText(reasons: Record<string, number> | undefi
   return entries.map(([code, n]) => `${n}: ${categoryReasonText(code)}`).join('; ')
 }
 
-/** One line under the category selector: closed positions of the range per category. */
+/** One line under the category selector: closed trades of the range per category. */
 export function classificationLine(c: ClassificationBlock | null | undefined): string | null {
   if (!c) return null
   const k = c.closed
@@ -860,11 +930,132 @@ export function unclassifiedScopeNote(
     : `${c.closed.unclassified} unclassified position(s) are left out of this view; they appear in All trades only.`
 }
 
-/** Text of the one-line warning about fills left out of the completed-trade statistics. */
-export function unresolvedWarningText(u: UnresolvedInRange | null | undefined): string | null {
-  if (!u || !(u.total > 0)) return null
-  const noun = u.total === 1 ? 'fill' : 'fills'
-  return `${u.total} ${noun} in the selected range could not be attributed and ${u.total === 1 ? 'is' : 'are'} excluded from completed-trade statistics.`
+const STALE_COLLECTION_DAYS = 2
+
+/** Calendar date (YYYY-MM-DD) and weekday (0 = Sunday) in India, whatever the browser's zone. */
+function istToday(now: Date): { date: string; weekday: number } {
+  const ist = new Date(now.getTime() + 5.5 * 3600 * 1000)
+  return { date: ist.toISOString().slice(0, 10), weekday: ist.getUTCDay() }
+}
+
+function dayGap(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000)
+}
+
+/** Sync-run statuses that count as a completed sync (the server's SYNC_OK_STATUSES). */
+const SYNC_OK = ['ok', 'partial']
+
+/**
+ * True when the newest day with sync runs in `sync_health.runs_by_day` holds only runs that did
+ * not complete. A day with any completed run is not reported: the day counts carry no order, so
+ * a failure after a success on the same day cannot be told apart from the reverse.
+ */
+export function lastSyncFailed(health: SyncHealthLike | null | undefined): boolean {
+  const byDay = health?.runs_by_day
+  if (!byDay) return false
+  const latest = Object.keys(byDay)
+    .filter((d) => Object.values(byDay[d] ?? {}).some((n) => n > 0))
+    .sort()
+    .pop()
+  if (!latest) return false
+  const statuses = Object.entries(byDay[latest]).filter(([, n]) => n > 0)
+  return statuses.length > 0 && !statuses.some(([k]) => SYNC_OK.includes(k))
+}
+
+type SyncHealthLike = { runs_by_day?: Record<string, Record<string, number>> }
+
+/**
+ * The one warning shown when missing or doubtful source data changes the P&L of the SELECTED
+ * report, in trader words. Null when nothing is wrong. Driven only by fields the server already
+ * sends; each part is shown only when the problem touches the selected range:
+ * - `unresolved_in_range.total` (fills of the range left out of the trades; the pending and
+ *   unplaced counts of `data_quality` on an older server);
+ * - `data_quality.prices.missing` (open positions with no price, when prices were requested);
+ * - `sync_health.days_without_sync` (weekdays of the range whose fills may be absent);
+ * - `positions` that are MIS, opened on a day before today and still open (a closing fill is
+ *   probably absent), when the range reaches the day they were opened;
+ * - `positions` and `trades` flagged `opening_unknown` (entry price unknown);
+ * - `sync_health.runs_by_day`: the newest day of sync runs holds no completed run (the last
+ *   sync with the broker did not complete);
+ * - `sync_health.last_successful_sync` older than two days on a weekday, when the range reaches
+ *   past that date and the days above do not already name the gap.
+ */
+export function materialDataWarning(
+  summary: Pick<DiscretionarySummary, 'unresolved_in_range' | 'data_quality' | 'sync_health'> &
+    Partial<Pick<DiscretionarySummary, 'period' | 'positions' | 'trades'>>,
+  now: Date = new Date()
+): string | null {
+  const dq = summary.data_quality
+  const rangeStart = summary.period?.start?.slice(0, 10)
+  const rangeEnd = summary.period?.end?.slice(0, 10)
+  const left =
+    summary.unresolved_in_range?.total ??
+    (dq ? (dq.awaiting_attribution ?? 0) + (dq.not_placed ?? 0) : 0)
+  const noPrice = dq?.prices?.requested ? (dq.prices.missing ?? 0) : 0
+  const days = (summary.sync_health?.days_without_sync ?? []).filter(
+    (d) => (!rangeStart || d >= rangeStart) && (!rangeEnd || d <= rangeEnd)
+  )
+  const today = istToday(now)
+  const positions = summary.positions ?? []
+  const staleIntraday = positions.filter((p) => {
+    const opened = p.opened_at?.slice(0, 10)
+    return (
+      p.product === 'MIS' && !!opened && opened < today.date && (!rangeEnd || opened <= rangeEnd)
+    )
+  }).length
+  const unknownOpening =
+    positions.filter(
+      (p) => p.opening_unknown && (!rangeEnd || (p.opened_at ?? '').slice(0, 10) <= rangeEnd)
+    ).length + (summary.trades ?? []).filter((t) => t.opening_unknown).length
+  const lastSync = summary.sync_health?.last_successful_sync?.slice(0, 10)
+  const staleSince =
+    days.length === 0 &&
+    lastSync &&
+    today.weekday >= 1 &&
+    today.weekday <= 5 &&
+    dayGap(lastSync, today.date) > STALE_COLLECTION_DAYS &&
+    (!rangeEnd || rangeEnd > lastSync)
+      ? lastSync
+      : null
+  const parts: string[] = []
+  if (lastSyncFailed(summary.sync_health)) {
+    parts.push(
+      'Your last sync with the broker did not complete. Recent trades may be missing. Use Refresh to try again.'
+    )
+  }
+  if (left > 0) {
+    parts.push(
+      `${left} ${left === 1 ? 'fill' : 'fills'} in this period could not be matched to a trade and ${left === 1 ? 'is' : 'are'} left out, so your P&L and trade count may be incomplete.`
+    )
+  }
+  if (noPrice > 0) {
+    parts.push(
+      `${noPrice} open ${noPrice === 1 ? 'position has' : 'positions have'} no current price, so open P&L may be incomplete.`
+    )
+  }
+  if (days.length > 0) {
+    const shown = days.slice(0, 3).join(', ')
+    const more = days.length > 3 ? ` and ${days.length - 3} more` : ''
+    parts.push(
+      `Trades from ${shown}${more} may be missing, so P&L for those days may be incomplete.`
+    )
+  }
+  if (staleSince) {
+    parts.push(`Trades after ${staleSince} may be missing, so your P&L may be incomplete.`)
+  }
+  if (staleIntraday > 0) {
+    parts.push(
+      `${staleIntraday} intraday ${staleIntraday === 1 ? 'position is' : 'positions are'} still open from an earlier day, so a closing trade may be missing and your P&L may be incomplete.`
+    )
+  }
+  if (unknownOpening > 0) {
+    parts.push(
+      unknownOpening === 1
+        ? '1 trade or position has no recorded entry, so its P&L may be wrong.'
+        : `${unknownOpening} trades or positions have no recorded entry, so their P&L may be wrong.`
+    )
+  }
+  return parts.length > 0 ? parts.join(' ') : null
 }
 
 /** Points per unit with an explicit sign ("+12.50"); an em dash when unknown. */
@@ -948,15 +1139,20 @@ function toBars(rows: { key: string; label: string; value: number; count: number
   return rows.map((r) => ({ ...r, pct: max > 0 ? (Math.abs(r.value) / max) * 100 : 0 }))
 }
 
-/** Monthly or weekday rows as net P&L bars (positions with a net are counted in `count`). */
+/**
+ * Monthly or weekday rows as net P&L bars (positions with a net are counted in `count`). A row
+ * with no completed position has no bar: it is a gap, never a bar of zero.
+ */
 export function calendarBars(rows: CalendarRow[] | null | undefined): NetBar[] {
   return toBars(
-    (rows ?? []).map((r) => ({
-      key: r.key,
-      label: r.key,
-      value: r.net_of_charges,
-      count: r.positions - r.net_unavailable_positions,
-    }))
+    (rows ?? [])
+      .filter((r) => r.positions > 0)
+      .map((r) => ({
+        key: r.key,
+        label: r.key,
+        value: r.net_of_charges,
+        count: r.positions - r.net_unavailable_positions,
+      }))
   )
 }
 
@@ -1045,6 +1241,8 @@ export interface CurvePoint {
   peak: number
   /** Peak minus equity, in rupees (0 at a new high). */
   drawdown: number
+  /** A day point whose figure is not complete (no charge estimate, or trades not collected). */
+  incomplete?: boolean
 }
 
 export interface NetCurve {
@@ -1160,6 +1358,128 @@ export function netEquityDaily(points: { date: string; value: number }[]): NetCu
   }
 }
 
+/**
+ * The Equity Curve: cumulative sum of the server's daily realised NET P&L rows (by_period.daily,
+ * after estimated charges), one point per day that has a row, oldest first. Days without a row
+ * (weekends, holidays, no activity) are not points, and no value is invented for them. The only
+ * arithmetic is the running sum; the drawdown rule is the one of netEquityDaily (peak from 0).
+ * `incompleteDays` counts days whose net lacks some charge estimates.
+ * The server rounds every day to 2 decimals, so the running sum of the days can sit a paisa or
+ * two from the period net (2,823.83 against 2,823.8226). When `periodNet` (the same response's
+ * realised net after charges) is given and the sum is within that rounding drift, the last point
+ * is the period net rounded once, so the chart and the headline show the same figure.
+ */
+export function netEquityFromDailyRows(
+  rows: PeriodRow[] | null | undefined,
+  notCollected: readonly string[] = [],
+  periodNet?: number | null
+): NetCurve & {
+  incompleteDays: number
+} {
+  const ordered = [...(rows ?? [])]
+    .filter((r) => Number.isFinite(r.net_of_charges))
+    .sort((a, b) => (a.period < b.period ? -1 : a.period > b.period ? 1 : 0))
+  let equity = 0
+  let peak = 0
+  let worst = 0
+  let worstAt: string | null = null
+  let incompleteDays = 0
+  const runningTotal = ordered.reduce((s, r) => s + cleanMoney(r.net_of_charges), 0)
+  const target =
+    periodNet != null && Number.isFinite(periodNet) ? Math.round(periodNet * 100) / 100 : null
+  const snapLast =
+    target != null &&
+    ordered.length > 0 &&
+    Math.abs(runningTotal - target) <= 0.01 * ordered.length + 1e-9
+  const points: CurvePoint[] = ordered.map((r, i) => {
+    const net = cleanMoney(r.net_of_charges)
+    equity = Math.round((equity + net) * 100) / 100
+    if (snapLast && target != null && i === ordered.length - 1) equity = target
+    peak = Math.max(peak, equity)
+    const drawdown = peak - equity
+    if (drawdown > worst) {
+      worst = drawdown
+      worstAt = r.period
+    }
+    const chargesMissing = netIncomplete(r)
+    if (chargesMissing) incompleteDays += 1
+    return {
+      index: i + 1,
+      id: i + 1,
+      closed_at: r.period,
+      symbol: null,
+      direction: null,
+      net,
+      equity,
+      peak,
+      drawdown,
+      // trades not collected on a day with a row: the figure is shown, but flagged
+      incomplete: chargesMissing || notCollected.includes(r.period),
+    }
+  })
+  return {
+    points,
+    used: points.length,
+    skipped: 0,
+    maxDrawdown: worst,
+    maxDrawdownAt: worstAt,
+    currentDrawdown: peak - equity,
+    peakEquity: peak,
+    latestEquity: equity,
+    incompleteDays,
+  }
+}
+
+/** Basis sentence under the Equity Curve. */
+export function equityCurveBasis(curve: { used: number; incompleteDays: number }): string {
+  const days = `${curve.used} trading day${curve.used === 1 ? '' : 's'} with realised P&L`
+  const incomplete =
+    curve.incompleteDays > 0
+      ? ` ${curve.incompleteDays} day(s) include trades without a charge estimate, so their net is not complete.`
+      : ''
+  return `Cumulative net P&L: the running total of daily realised net P&L after estimated charges, over ${days}. Unrealized P&L is not included, and this is not an account balance or a return on capital. Days with no closed trades are not shown.${incomplete}`
+}
+
+export interface EquityReconciliation {
+  kind: 'match' | 'mismatch'
+  text: string
+}
+
+/** Ties the last point of the curve to the period's realised net P&L from the same response. */
+export function equityCurveReconciliation(
+  curve: { latestEquity: number },
+  periodNet: number,
+  money: (v: number) => string,
+  scope = 'the selected period'
+): EquityReconciliation {
+  const diff = Math.abs(curve.latestEquity - periodNet)
+  if (diff <= 0.01) {
+    return {
+      kind: 'match',
+      text: `The last point (${money(curve.latestEquity)}) equals the realised net P&L of ${scope}.`,
+    }
+  }
+  return {
+    kind: 'mismatch',
+    text: `The last point (${money(curve.latestEquity)}) differs from the realised net P&L of ${scope} (${money(periodNet)}). Trades without a charge estimate are not complete in either figure.`,
+  }
+}
+
+/** Entry-time buckets with trades as net P&L bars, in the server's time order; label = bucket and trade count. */
+export function timeOfDayBars(rows: BreakdownRow[] | null | undefined): NetBar[] {
+  return toBars(
+    (rows ?? [])
+      .filter((r) => r.trades > 0)
+      .map((r) => ({
+        key: r.key ?? '',
+        // the count in brackets keeps the bar readable without the table
+        label: `${r.key === 'other' ? 'Other (outside NSE hours)' : (r.key ?? '')} (${r.trades})`,
+        value: r.net_of_charges,
+        count: r.trades,
+      }))
+  )
+}
+
 export type ReconcileKind =
   | 'match'
   | 'truncated'
@@ -1176,7 +1496,7 @@ export interface Reconciliation {
 const DD_TOLERANCE = 0.01
 
 /**
- * The caption that ties the curve's maximum drawdown to the Risk card, computed at run time from
+ * The caption that ties the chart's maximum drawdown to the Risk figure, computed at run time from
  * the numbers themselves (it only labels; no displayed figure is changed). Never leaves a
  * difference unexplained: a cut trade list, positions without a net and a plain mismatch each
  * say which basis the curve and the Risk card use.
@@ -1191,24 +1511,23 @@ export function drawdownReconciliation(args: {
 }): Reconciliation {
   const { curve, mode, tradesShown, tradesTotal, risk, formatCurrency: money } = args
   const curveDd = money(curve.maxDrawdown)
+  // The day chart is drawn from end-of-day equity; the Risk figure runs over each closed position
+  // in close order, so it can include a fall inside a day. Say so only when the two differ.
   if (mode === 'day') {
+    if (!risk) return { kind: 'day_no_risk', text: '' }
+    if (Math.abs(curve.maxDrawdown - risk.max_drawdown) <= DD_TOLERANCE) {
+      return { kind: 'match', text: '' }
+    }
     return {
-      kind: risk ? 'day_curve' : 'day_no_risk',
-      text: risk
-        ? `This curve is end-of-day: one point per close date, so intra-day falls are not drawn and its maximum drawdown (${curveDd}) can be smaller than the per-position Risk card figure (${money(risk.max_drawdown)}).`
-        : `This curve is end-of-day: one point per close date, so intra-day falls are not drawn. Maximum drawdown on this curve: ${curveDd}.`,
+      kind: 'day_curve',
+      text: `The chart's largest drawdown (${curveDd}) is measured on end-of-day totals, so a fall inside a day is not drawn. The Risk figure (${money(risk.max_drawdown)}) is measured on each closed trade in close order.`,
     }
   }
-  if (!risk) {
-    return {
-      kind: 'no_risk',
-      text: `Maximum drawdown on this curve: ${curveDd} (net, per closed trade by close time, peak starts at 0). The server sent no Risk card to compare with.`,
-    }
-  }
+  if (!risk) return { kind: 'no_risk', text: '' }
   if (tradesTotal > tradesShown) {
     return {
       kind: 'truncated',
-      text: `Curve shows the newest ${tradesShown} of ${tradesTotal} closed trades and starts from 0 at the first of them (maximum drawdown ${curveDd}); the Risk card covers all ${tradesTotal} (maximum drawdown ${money(risk.max_drawdown)}).`,
+      text: `The chart shows your latest ${tradesShown} of ${tradesTotal} closed trades, so its largest drawdown (${curveDd}) can differ from the Risk figure for all ${tradesTotal} (${money(risk.max_drawdown)}).`,
     }
   }
   const same =
@@ -1216,18 +1535,11 @@ export function drawdownReconciliation(args: {
     Math.abs(curve.currentDrawdown - risk.current_drawdown) <= DD_TOLERANCE &&
     curve.skipped === risk.net_unavailable_positions
   if (same) {
-    const left =
-      curve.skipped > 0
-        ? ` ${curve.skipped} position(s) without a net P&L are left out of both.`
-        : ''
-    return {
-      kind: 'match',
-      text: `Max drawdown on this curve equals the Risk card (${curveDd}).${left}`,
-    }
+    return { kind: 'match', text: '' }
   }
   return {
     kind: 'mismatch',
-    text: `Not reconciled: the curve uses ${curve.used} position(s) with a net P&L (${curve.skipped} left out) and gives a maximum drawdown of ${curveDd}; the Risk card uses ${risk.positions} (${risk.net_unavailable_positions} left out) and gives ${money(risk.max_drawdown)}. Both are net, by close time, peak from 0; the position sets differ.`,
+    text: `The chart's largest drawdown (${curveDd}) differs from the Risk figure (${money(risk.max_drawdown)}) because they count different trades: ${curve.used} on the chart, ${risk.positions} in the Risk figure. Trades without a net P&L are left out.`,
   }
 }
 
@@ -1322,6 +1634,18 @@ export function periodProfile(input: {
   }
 }
 
+const MORE_BREAKDOWNS_SENTENCE = 'Symbol, side and product breakdowns are under More breakdowns.'
+
+/**
+ * The profile note, without the pointer to "More breakdowns" when that section is not on
+ * screen (nothing in it has a comparison), so the page never points at a section it does not have.
+ */
+export function profileNoteText(note: string | null, moreBreakdownsShown: boolean): string | null {
+  if (!note || moreBreakdownsShown) return note
+  const rest = note.replace(MORE_BREAKDOWNS_SENTENCE, '').trim()
+  return rest.length > 0 ? rest : null
+}
+
 /** Distinct close dates: server daily rows with closed positions, else the shown trades' dates. */
 export function closeDateCount(
   summary: Pick<DiscretionarySummary, 'by_period' | 'trades'> | undefined
@@ -1332,92 +1656,198 @@ export function closeDateCount(
     .size
 }
 
-// ---------------------------------------------------------------- summary header text
-
-export interface Verdict {
-  tone: 'profit' | 'loss' | 'flat' | 'none'
-  text: string
-}
-
-/** One plain sentence: profitable or not on net, the amount, the closed count and the win rate. */
-export function verdictLine(
-  summary: Pick<
-    DiscretionarySummary,
-    'realized_net_of_charges' | 'metrics' | 'charges_unavailable_trades'
-  >,
-  formatCurrency: (v: number) => string
-): Verdict {
-  const n = summary.metrics.trades_count
-  if (n === 0) return { tone: 'none', text: 'No completed trade in this range yet.' }
-  const net = cleanMoney(summary.realized_net_of_charges)
-  const rate =
-    summary.metrics.win_rate == null ? '' : ` Win rate ${fmtWinRate(summary.metrics.win_rate)}.`
-  const incomplete =
-    summary.charges_unavailable_trades > 0
-      ? ' Some charges are not estimated, so net is not complete.'
-      : ''
-  const count = `${n} completed trade${n === 1 ? '' : 's'}`
-  if (net > 0)
-    return {
-      tone: 'profit',
-      text: `Profitable on net: ${formatCurrency(net)} after estimated charges from ${count}.${rate}${incomplete}`,
-    }
-  if (net < 0)
-    return {
-      tone: 'loss',
-      text: `Not profitable on net: ${formatCurrency(Math.abs(net))} lost after estimated charges over ${count}.${rate}${incomplete}`,
-    }
-  return {
-    tone: 'flat',
-    text: `Break-even on net after estimated charges over ${count}.${rate}${incomplete}`,
-  }
-}
-
 /**
  * The single biggest weakness, taken only from fields the server already sends, in this order:
  * charges turning a gross profit into a net loss; charges taking 30% or more of gross profit;
- * the largest loss bigger than the largest win; a current drawdown; a small sample. Null when
- * none applies. A description, not advice.
+ * the largest loss bigger than the largest win; a current fall below the period's highest
+ * point. Every line states how many completed trades it rests on, and there is no minimum
+ * count. Null when none applies. A description of the results, not advice.
  */
 export function weaknessLine(
   summary: Pick<
     DiscretionarySummary,
-    | 'realized_gross'
-    | 'realized_net_of_charges'
-    | 'metrics'
-    | 'consistency'
-    | 'costs'
-    | 'risk'
-    | 'sample'
+    'realized_gross' | 'realized_net_of_charges' | 'metrics' | 'consistency' | 'costs' | 'risk'
   >,
   formatCurrency: (v: number) => string
 ): string | null {
   if (summary.metrics.trades_count === 0) return null
   const net = cleanMoney(summary.realized_net_of_charges)
+  const count = summary.metrics.trades_count
+  const sampleText = `over ${count} completed trade${count === 1 ? '' : 's'}`
   if (summary.realized_gross > 0 && net < 0) {
-    return `Charges turned a gross profit of ${formatCurrency(summary.realized_gross)} into a net loss.`
+    return `Estimated charges turned a gross profit of ${formatCurrency(summary.realized_gross)} into a net loss, ${sampleText}.`
   }
   const pct = summary.costs?.charges_pct_of_gross_profit
   if (pct != null && pct >= 30) {
-    return `Charges take ${pct.toFixed(1)}% of gross profit.`
+    return `Estimated charges are ${pct.toFixed(1)}% of the gross profit of your winning trades, ${sampleText}.`
   }
   const win = summary.consistency?.largest_win
   const loss = summary.consistency?.largest_loss
   if (win && loss) {
-    const w = win.net_pnl ?? win.realized_pnl
-    const l = Math.abs(loss.net_pnl ?? loss.realized_pnl)
-    if (l > w) {
-      return `Largest loss (${formatCurrency(l)}) is bigger than the largest win (${formatCurrency(w)}).`
+    // Net only: a trade without a net P&L is unavailable, never compared on gross.
+    if (win.net_pnl != null && loss.net_pnl != null) {
+      const w = win.net_pnl
+      const l = Math.abs(loss.net_pnl)
+      if (l > w) {
+        return `Your biggest losing trade (${formatCurrency(l)}) is larger than your biggest winning trade (${formatCurrency(w)}), ${sampleText}.`
+      }
     }
-  } else if (loss && !win) {
-    return `Largest loss is ${formatCurrency(Math.abs(loss.net_pnl ?? loss.realized_pnl))} and there is no winning position.`
+  } else if (loss && !win && loss.net_pnl != null) {
+    return `Your biggest losing trade is ${formatCurrency(Math.abs(loss.net_pnl))} and none of your ${count} completed trade${count === 1 ? '' : 's'} won.`
   }
-  const cur = summary.risk?.current_drawdown ?? 0
-  if (cur > 0) {
-    return `Currently ${formatCurrency(cur)} below the best net equity so far.`
-  }
-  if (summary.sample && !summary.sample.sufficient) {
-    return `Low sample: ${summary.sample.completed_trades} completed trade(s) over ${summary.sample.trading_days} trading day(s), so ratios are indicative only.`
+  // A missing drawdown is unavailable, not zero.
+  const cur = summary.risk?.current_drawdown
+  if (cur != null && cur > 0) {
+    return `Your net P&L is ${formatCurrency(cur)} below its highest point in this period, ${sampleText}.`
   }
   return null
+}
+
+// ---------------------------------------------------------------- trade-by-trade progression
+
+/**
+ * One plain-English reading of the trade-by-trade curve: where it finished, how many trades won
+ * and lost, its highest point and its largest fall from a peak. Facts from the plotted points
+ * only; no judgement about the trader.
+ */
+export function progressionText(
+  curve: NetCurve,
+  mode: 'position' | 'day',
+  money: (v: number) => string
+): string {
+  const pts = curve.points
+  if (pts.length === 0) return ''
+  const unit = mode === 'position' ? 'trade' : 'day'
+  const n = pts.length
+  const wins = pts.filter((p) => p.net > 0).length
+  const losses = pts.filter((p) => p.net < 0).length
+  const last = pts[n - 1].equity
+  const high = pts.reduce((a, p) => (p.equity > a.equity ? p : a), pts[0])
+  const deep = pts.reduce((a, p) => (p.drawdown > a.drawdown ? p : a), pts[0])
+  const parts = [
+    `Net P&L finished at ${money(last)} after ${n} ${unit}${n === 1 ? '' : 's'}: ${wins} winning, ${losses} losing.`,
+    high.equity > 0
+      ? `The highest point was ${money(high.equity)} after ${unit} ${high.index}.`
+      : 'It never rose above zero.',
+    deep.drawdown > 0
+      ? `The largest fall from a peak was ${money(deep.drawdown)}, reached after ${unit} ${deep.index}.`
+      : 'It never fell below an earlier peak.',
+  ]
+  return parts.join(' ')
+}
+
+// ---------------------------------------------------------------- breakdown visibility
+
+export interface BreakdownVisibility {
+  symbol: boolean
+  side: boolean
+  product: boolean
+  holding: boolean
+  points: boolean
+  /** "How you trade" tabs that have something to compare. */
+  patterns: HowYouTradeKey[]
+  /** True when no table of the More breakdowns section is shown. */
+  noneShown: boolean
+}
+
+function populatedRows(rows: BreakdownRow[] | undefined): number {
+  return (rows ?? []).filter((r) => r.trades > 0).length
+}
+
+/**
+ * Which analytical breakdowns have a real comparison in them. One symbol, one product or one
+ * direction compares nothing against nothing, so at least two groups are needed.
+ */
+export function breakdownVisibility(summary: DiscretionarySummary): BreakdownVisibility {
+  const sides = populatedRows(summary.by_side)
+  const patterns = HOW_YOU_TRADE_OPTIONS.map((o) => o.key).filter(
+    (k) => populatedRows(summary.breakdowns?.[k]) > 1
+  )
+  const symbol = populatedRows(summary.by_symbol) > 1
+  const side = sides > 1
+  const product = populatedRows(summary.by_product) > 1
+  const holding = populatedRows(holdingRows(summary.by_holding)) > 1
+  return {
+    symbol,
+    side,
+    product,
+    holding,
+    points: (summary.points_by_instrument?.length ?? 0) > 1,
+    patterns,
+    noneShown: !(symbol || side || product || holding),
+  }
+}
+
+// ---------------------------------------------------------------- weekday / month visibility
+
+function populatedCalendarRows(rows: CalendarRow[] | null | undefined): CalendarRow[] {
+  return (rows ?? []).filter((r) => r.positions > 0)
+}
+
+/**
+ * Whether the month and weekday charts have a comparison in them: at least two months, or two
+ * weekdays, with a completed position. The rows of a visible chart are shown as the server
+ * sends them (a weekday without a position keeps its dash).
+ */
+export function calendarVisibility(
+  summary: Pick<DiscretionarySummary, 'monthly' | 'weekday'>,
+  profile: { showMonthly: boolean; showWeekday: boolean }
+): { monthly: boolean; weekday: boolean; any: boolean } {
+  const monthly = profile.showMonthly && populatedCalendarRows(summary.monthly).length > 1
+  const weekday = profile.showWeekday && populatedCalendarRows(summary.weekday).length > 1
+  return { monthly, weekday, any: monthly || weekday }
+}
+
+// ---------------------------------------------------------------- monthly note, reliable start
+
+/**
+ * Whether the month table's total differs from the headline net by more than 0.01. The table
+ * counts a position once, on the month of its final close, so partial exits of a position that
+ * is still open are in the headline but not in the table.
+ */
+export function monthlyTotalDiffers(
+  rows: CalendarRow[] | null | undefined,
+  headlineNet: number | null | undefined
+): boolean {
+  if (!rows || rows.length === 0 || typeof headlineNet !== 'number') return false
+  const total = rows.reduce((sum, r) => sum + r.net_of_charges, 0)
+  return Math.abs(total - headlineNet) > 0.01
+}
+
+export const MONTHLY_TABLE_NOTE =
+  'This table counts completed positions by the month of their final close. Partial exits of positions that are still open are not included, so its total can differ from the net P&L above and from the calendar.'
+
+const FIXED_WINDOW_DAYS: Record<string, number> = { '7d': 7, '15d': 15, '30d': 30, '90d': 90 }
+
+function shiftIsoDate(date: string, days: number): string {
+  const [y, m, d] = date.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10)
+}
+
+/**
+ * The start date the trader asked for, before the server moved it up to the first reliable
+ * date: a custom range's own start, or the rolling window or year start worked out from today.
+ * Null when no start is asked for ('1d' is the last session and 'all' starts at the first
+ * trade, so neither can reach back past the floor).
+ */
+export function requestedStartDate(
+  period: string,
+  range: { start: string; end: string } | undefined,
+  today: string
+): string | null {
+  if (period === 'custom') return range?.start ?? null
+  if (period === 'ytd') return `${today.slice(0, 4)}-01-01`
+  const days = FIXED_WINDOW_DAYS[period]
+  return days ? shiftIsoDate(today, -(days - 1)) : null
+}
+
+/** The notice shown when the requested start is earlier than the first reliable date. */
+export function reliableStartNotice(
+  requestedStart: string | null | undefined,
+  reliableSince: string | null | undefined,
+  formatDate: (iso: string) => string = (iso) => iso
+): string | null {
+  if (!requestedStart || !reliableSince) return null
+  if (requestedStart >= reliableSince) return null
+  return `Your ledger is reliable from ${formatDate(reliableSince)}. Earlier dates are not included.`
 }

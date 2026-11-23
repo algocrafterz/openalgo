@@ -21,6 +21,11 @@ import type {
   UnresolvedInRange,
 } from '@/api/discretionaryPnl'
 
+/** A last-collection stamp for today (IST), so no fixture looks stale whatever day the tests run. */
+export function freshSyncStamp(): string {
+  return `${new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10)} 09:30`
+}
+
 export function breakdownRow(key: string, extra: Partial<BreakdownRow> = {}): BreakdownRow {
   return {
     key,
@@ -146,7 +151,7 @@ export function summary(extra: Partial<DiscretionarySummary> = {}): Discretionar
     open_positions: 1,
     per_identity: [],
     sync_health: {
-      last_successful_sync: '2026-11-17 09:30',
+      last_successful_sync: freshSyncStamp(),
       runs_by_day: {},
       days_without_sync: [],
     },
@@ -249,6 +254,13 @@ export function emptySummary(): DiscretionarySummary {
     realized_net_of_charges: 0,
     charges_unavailable_trades: 0,
     warnings: [],
+    // the whole ledger is empty: the first reliable date is today and the range reaches it
+    period: {
+      period: '30d',
+      start: '2026-10-19',
+      end: freshSyncStamp().slice(0, 10),
+      reliable_since: freshSyncStamp().slice(0, 10),
+    },
     // nothing closed: no period rows either (the backend sends none without a closing leg)
     by_period: { daily: [], weekly: [], monthly: [] },
   })
@@ -387,7 +399,7 @@ export function dataQuality(extra: Partial<DataQuality> = {}): DataQuality {
     charges_incomplete_legs: 1,
     charges_incomplete_trades: 1,
     prices: { requested: false, open_positions: 1, statuses: {}, missing: 0, stale: 0 },
-    sync: { last_successful_sync: '2026-11-17 09:30', days_without_sync: [], problems: [] },
+    sync: { last_successful_sync: freshSyncStamp(), days_without_sync: [], problems: [] },
     ...extra,
   }
 }
