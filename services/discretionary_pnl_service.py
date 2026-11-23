@@ -199,6 +199,7 @@ COUNT_METRICS = (
 
 _rebuild_lock = threading.RLock()
 _tables_ready = False
+_tables_lock = threading.Lock()
 _quote_cache: dict[tuple[str, str, str], tuple[float, datetime]] = {}
 _calendar_cache: dict[tuple[date, str], tuple[int, int] | None] = {}
 _CALENDAR_EXCHANGES = frozenset({"NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX", "NCO"})
@@ -470,9 +471,14 @@ def reliable_since(fills: list[dict] | None = None) -> date:
 def _ensure_tables() -> None:
     """Create the derived tables once per process (not on every read)."""
     global _tables_ready
-    if not _tables_ready:
-        book.init_discretionary_book_db()
-        _tables_ready = True
+    if _tables_ready:
+        return
+    # Claim under the lock that checks: two first requests on pooled threads would both run
+    # create_all on a fresh database, and the second CREATE TABLE fails as "already exists".
+    with _tables_lock:
+        if not _tables_ready:
+            book.init_discretionary_book_db()
+            _tables_ready = True
 
 
 _last_mismatch: tuple | None = None
