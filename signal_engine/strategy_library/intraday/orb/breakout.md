@@ -224,7 +224,7 @@ is also the first place to look when a paper week comes out thin.
 | `breakingtrade.db` | the scanner | what the scanner CLAIMED, plus the BTST close-to-close paper ledger | scanner only | n/a |
 | tradebook snapshots | `eod.sh` | broker fills — the only source of actual fill prices | via `order_id` | n/a |
 | `intraday-*` channels | PineScript / scanner | what the strategy claimed, at bar-close prices | one channel each | no |
-| `signal-engine` channel | engine notifier | live commentary | tagged, not queryable | no |
+| `signal-engine` channel | none (the engine stopped posting on 2026-11-24) | history only | tagged, not queryable | no |
 
 `trades.db` joined to the tradebook snapshots on `order_id` is the only combination that holds
 signal, order and fill together. Everything else answers a narrower question, and the two

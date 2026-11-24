@@ -37,7 +37,8 @@ implemented: it needs an owner decision. The full audit report with severities i
 3. **Time-exit unread policy (G3 follow-up).** Today an unreadable position is treated as closed
    (now alerted). Alternative: treat it as unconfirmed, retry the square-off, write no closing row.
 4. **G11 schedule.** `eod.sh` at 15:45, `eod_claude_review.sh` at 15:55 (before the 16:00 stop).
-5. **Telegram.** See the audit report, Report A: staged `notify_level` change, no code removal.
+5. **Telegram.** Done in November 2026: routine notifications were removed from the code and
+   `notify_level` was retired. See `docs/PRD.md`, "Telegram notification cleanup (2026-11-24)".
 6. **G15, per-position time-exit square-off (follow-up, not started).** Replace both account-wide
    calls in `_square_off_strategies` and the `_verify_positions_closed` retry. Cancel only the
    tracked strategies' working orders, by order id. Send one MARKET exit per (symbol, exchange,

@@ -3,7 +3,7 @@
 Runs weekdays 16:30 from cron. One low-risk bug per run, fixed on a side branch, never merged.
 Policy lives in `signal_engine/bugs/autofix.py` (pure functions, tested); the shell script owns
 git, the worktree and the Claude call. `AUTOFIX_DRY=1` shows the pick; `AUTOFIX_ANYTIME=1`
-bypasses the market-hours guard; `AUTOFIX_NO_NOTIFY=1` suppresses Telegram; `AUTOFIX_CLAUDE_BIN`
+bypasses the market-hours guard; `AUTOFIX_CLAUDE_BIN`
 swaps in a stub for pipeline tests.
 
 ## Tiers
@@ -29,7 +29,7 @@ then marks it `fixed`.
 
 ## Pitfalls that cost time building it
 
-- Run tracker and Telegram helpers with `env -C <main repo> PYTHONPATH=<main repo>`. With cwd or
+- Run tracker helpers with `env -C <main repo> PYTHONPATH=<main repo>`. With cwd or
   PYTHONPATH in the worktree, `uv run python` imports the worktree's copy of the tracker module
   and reads its stale committed `bugs.json`.
 - `git stash pop` restores the fix to the work tree but not the index: `git add -A` again before

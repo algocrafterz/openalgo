@@ -49,7 +49,7 @@ cycles; a web UI; WebSocket tick handling (use closed bars); modifying `broker/*
 | Bars over HTTP | OpenAlgo `POST /api/v1/history` (see `analysis/breakingtrade/validate.py::fetch_bars`) | Payload `apikey, symbol, exchange, interval, start_date, end_date`; response `data[].timestamp` in epoch seconds |
 | Historical bars | `backtest/data.py::from_historify` (DuckDB, read-only, 1-minute source of truth) | Heavy file: use for warm-up and replay, not per-bar polling |
 | Engine wiring | `startup.py::start_engine` / `_run_engine` (creates the listener and `tracker.start()` tasks) | Add the runner as one more task here |
-| Strategy registry | `strategies.py::REGISTRY`, `config.yaml` `telegram.channels`, `strategy_profiles` | BREAKOUT is already registered |
+| Strategy registry | `strategies.py::REGISTRY`, `config.yaml` `telegram.channels` (inbound signals only), `strategy_profiles` | BREAKOUT is already registered |
 
 ## 3. Target flow
 
@@ -59,7 +59,7 @@ bar clock (every 5 min, IST) -> BarSource.fetch_closed_bars(symbols)      [broke
     -> build_breakout_inputs -> compute_signals -> take the row (if any) whose index == the just-closed bar
     -> fire_to_signal(row) -> Signal(strategy="BREAKOUT", ...)
     -> dispatch_signal(signal)   [extracted from handle_message: validate -> _handle_entry]
-    -> existing risk gates, sizing, MARKET entry, SL-M (tick-safe), notifications, tracker registration
+    -> existing risk gates, sizing, MARKET entry, SL-M (tick-safe), tracker registration
 open positions: each bar -> ExitDriver steps Ladder -> emits exits through the existing exit path
 ```
 
@@ -98,8 +98,8 @@ the runner on top of it would break the one-code-path rule. Recommended approach
 1. `ExitDriver` keeps one `Ladder` per open runner-managed position (created at the fill, anchored to the
    ACTUAL fill price and the signal's `tp1/tp2/tp3` and `sl`), stepped with each closed bar's O/H/L.
 2. When the Ladder fills a target it emits `Signal(direction=EXIT, tp_level="TP1", exit_qty_pct=<fraction of
-   the remaining position>, ...)` into `dispatch_signal`, which reuses the tested booking, retry, SL-cancel
-   and notification code in `_handle_exit`.
+   the remaining position>, ...)` into `dispatch_signal`, which reuses the tested booking, retry and SL-cancel
+   code in `_handle_exit`.
 3. The new stop comes from `Ladder.sl_eff`, not from `_replace_runner_sl`. Give `_replace_runner_sl` an
    optional `override_sl` (or bypass it for runner-managed positions) so there is exactly one stop rule.
    Add a test that the placed SL equals `Ladder.sl_eff` after each target.
@@ -385,7 +385,7 @@ Analyze caps are already `max_open_positions: 0` and `max_trades_per_day: 0` (un
 cap change is needed for a fourth sandbox strategy.
 
 **Wiring.** `strategies.REGISTRY` (`channel_base` None, `tradeable` False: no Telegram channel of its own, so
-lifecycle messages go to the admin notify channel and it appears in the consolidated day summary; False also keeps
+its safety alerts are log lines like every other strategy's; False also keeps
 it out of the live worst-case sizing floor), `blacklist` and `strategy_profiles` (same BHEL block and 0.20% stop
 floor as BREAKOUT), `pipeline/service.STRATEGY_FACTORIES` (`BreakoutStrategy(name="BREAKOUT-PY")`). The tag flows
 through `fire_to_signal`, `sig_id` and the cycle's own dedupe.

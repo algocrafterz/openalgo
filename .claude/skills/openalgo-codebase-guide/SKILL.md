@@ -35,7 +35,7 @@ Core is maintained upstream. signal_engine work never edits it.
 
 `listener.py` (Telegram) -> `parser.py` -> `validator.py` -> `risk.py` (sizing and limits,
 state in `risk_store.py`) -> `executor.py` (orders via OpenAlgo API) -> `tracker.py`
-(positions, SL and exits) -> `notifier.py`. Orchestration is `main.py`; all settings are in
+(positions, SL and exits). Orchestration is `main.py`; all settings are in
 `config.yaml`, loaded fail-fast by `config.py` with no in-code defaults. Design intent:
 `docs/HOW-IT-WORKS.md` and `docs/PRD.md`.
 

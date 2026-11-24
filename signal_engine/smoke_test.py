@@ -323,7 +323,7 @@ async def dry_run_entry_pipeline() -> str:
 
 # Checks classified by severity for startup integration
 # CRITICAL: abort startup if any fail
-# WARNING: log + notify but allow startup to proceed
+# WARNING: log but allow startup to proceed
 _CRITICAL_CHECKS = {"2. OpenAlgo reachable", "3. Broker auth (funds API)"}
 _WARNING_CHECKS = {"4. Quote API (SBIN LTP)", "5. Signal pipeline", "7. Database (risk store)"}
 
@@ -333,7 +333,7 @@ async def run_startup_checks() -> SmokeTestReport:
 
     Returns a report with pass/fail per check. Callers should abort if
     any CRITICAL check fails (OpenAlgo down, broker auth expired).
-    Warning-level failures are non-fatal but notify the user.
+    Warning-level failures are non-fatal and are logged.
 
     Skips dry-run pipeline check (which needs full risk engine state) to keep
     startup fast (~5s).

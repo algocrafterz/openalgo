@@ -16,15 +16,15 @@ One prompt, one report, finished by 16:25 IST. The building blocks keep their ow
 | 08:30 | OpenAlgo start, broker login, engine start (the task has a 10 h limit) | Windows task `openAlgoAutoStart` |
 | 08:36 | **recover**: retries only the open steps of the previous trading day; stops by 08:55; sends nothing on a clean day | cron, `ops/run_upkeep.sh recover` |
 | 09:10 | BreakingTrade poller start | Windows task `breakingTradeAutoStart` |
-| 09:12 | **open-day**: readiness checks; Telegram only if RED (`/open-day`) | cron, `signal_engine/ops/run_phase.sh` |
-| 09:27 | **liveness**: first cycle, first scan, storms; Telegram only if RED | cron, `run_phase.sh` |
+| 09:12 | **open-day**: readiness checks; the result is on `/logs/workflow` (`/open-day`) | cron, `signal_engine/ops/run_phase.sh` |
+| 09:27 | **liveness**: first cycle, first scan, storms; the result is on `/logs/workflow` | cron, `run_phase.sh` |
 | 14:45 | Engine time exit, each strategy's own legs | signal_engine |
 | 14:55 | Square-off failsafe | Windows task `openAlgoSquareOff` |
 | 15:35 | BreakingTrade poller stopped | Windows task `breakingTradeAutoStop` |
-| 15:36 | **close-day**: backfill (bg), eod, execution_health, logs, weekly (Fri), value_areas, jobs, track, review, notify | cron, `close_day.sh` |
-| ~15:50 | Report, tracker updates, the day's one Telegram line | `eod-<day>-claude-review.md` |
+| 15:36 | **close-day**: backfill (bg), eod, execution_health, logs, weekly (Fri), value_areas, jobs, track, review | cron, `close_day.sh` |
+| ~15:50 | Report and tracker updates | `eod-<day>-claude-review.md` |
 | 16:01 | **close-day retry**: retries only the failed or incomplete steps and keeps the earlier attempts; soft deadline 16:25, hard end 16:27 | cron, `close_day.sh --retry` |
-| 09:40, 16:28 | **dead-man**: one plain Telegram line when the 09:12/09:27 (09:40 run) or 15:36 and 16:01 (16:28 run) checkpoint left no status file or an incomplete or failed one; the 16:28 run judges the day; skips weekends and NSE holidays | cron, `ops/run_upkeep.sh deadman` |
+| 09:40, 16:28 | **dead-man**: prints a line and exits 1 (nothing is sent to Telegram) when the 09:12/09:27 (09:40 run) or 15:36 and 16:01 (16:28 run) checkpoint left no status file or an incomplete or failed one; the 16:28 run judges the day; skips weekends and NSE holidays | cron, `ops/run_upkeep.sh deadman` |
 | 16:31 | OpenAlgo stopped; the engine stops with it | Windows task `openAlgoAutoStop` |
 
 Every phase writes `signal_engine/reports/<phase>-<day>-status.tsv` and a manifest `signal_engine/reports/<phase>-<day>-run.json`; review attempts are under `signal_engine/reports/review-attempts/`. All of it is on `/logs/workflow`. There are no evening catch-up jobs, no retry-failed job and no auto-fix job. The review outcome is judged by its `close-day-verdict` block, not by its exit code.
@@ -111,8 +111,8 @@ Same report and order, with these limits:
   | open-day, liveness | `open-day-<day>.md`, `liveness-<day>.md` (morning) | 1, 2 |
 
 - Time is bounded: if short, finish sections 1-3, the verdict block and the bug-tracker block first.
-- End with two blocks: `close-day-verdict` (JSON: verdict GREEN/AMBER/RED and one plain line for
-  Telegram) and then the `bug-tracker` block. The `notify` step sends only that verdict line.
+- End with two blocks: `close-day-verdict` (JSON: verdict GREEN/AMBER/RED and one plain line)
+  and then the `bug-tracker` block. Nothing is sent to Telegram.
 
 ## When the review fails (check this first when auditing the automation)
 
@@ -133,11 +133,12 @@ Same report and order, with these limits:
 
 ## Telegram
 
-One scheduled message per trading day: the close-day verdict line (silence means the automation
-did not run). open-day and liveness send only when RED. The engine sends failures and safety
-alerts only (`notify_level: alerts` in `signal_engine/config.yaml`); outcomes, routine declines and
-success banners are on the Strategy P&L pages and in these reports, and a start or stop inside
-market hours always alerts. Everything is visible at `/logs/workflow`.
+The engine sends no outgoing Telegram message (removed November 2026): no close-day line, no
+open-day or liveness alert, no dead-man line, no day summary. Silence tells you nothing; read
+`/logs/workflow` and the status files. Strategy channels (`telegram.channels`) carry inbound trade
+signals only, and the scanner still posts its entry and TP-exit signals into them as signal
+transport. Outcomes are on the Strategy P&L and Performance pages and in these reports. The
+day-done marker records that the summary step ran, not that every close-day step succeeded.
 
 ## Holidays and partial days
 

@@ -253,7 +253,7 @@ function Invoke-Start {
     # (acquire_lock() in openalgoctl.sh) is now the single source of truth:
     # if a start/run is already in flight anywhere — this window, a stale
     # window, or a direct WSL invocation — the shell script refuses the
-    # duplicate itself, logs why, and notifies via Telegram. Nothing here
+    # duplicate itself and logs why. Nothing here
     # needs to kill anything pre-emptively anymore.
     if (Test-Path $servicePidFile) {
         $oldPid = Get-Content $servicePidFile -ErrorAction SilentlyContinue

@@ -6,7 +6,7 @@ repo `CLAUDE.md`; idea status lives in `research/REGISTRY.md`; change history li
 
 | Area | Path | Put here |
 | --- | --- | --- |
-| Live pipeline (runtime) | `main.py`, `listener.py`, `parser.py`, `validator.py`, `risk.py`, `executor.py`, `tracker.py`, `notifier.py`, `startup.py`, `config.py`, `config.yaml` | Code that runs during market hours. Kept flat because `signal_engine.<module>` is imported by scripts, cron and tests |
+| Live pipeline (runtime) | `main.py`, `listener.py`, `parser.py`, `validator.py`, `risk.py`, `executor.py`, `tracker.py`, `startup.py`, `config.py`, `config.yaml` | Code that runs during market hours. Kept flat because `signal_engine.<module>` is imported by scripts, cron and tests |
 | Strategy library | `strategy_library/{intraday,swing}/<name>/` | `.pine` sources, `STRATEGY-ANALYSIS.md` / `STRATEGY-LOG.md`, strategy-specific assets |
 | GoCharting ports | `strategy_library/lipiscripts/` | `.lipi` indicator ports |
 | Research | `research/` | Ideas, verdicts, backtest run records; see `research/README.md` |

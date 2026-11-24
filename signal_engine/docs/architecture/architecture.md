@@ -41,9 +41,6 @@ flowchart LR
     R --> RS[("data/runner_state.db")]
     R -->|warm-up, read-only| HF[("db/historify.duckdb")]
     R -->|today's bars| OA
-    N["notifier.py"] -->|Telethon| TGA[("admin + strategy channels")]
-    M --> N
-    TR --> N
     OA --> GUI["OpenAlgo GUI<br/>/strategy-pnl pages"]
 ```
 
@@ -62,7 +59,6 @@ flowchart LR
 | `tracker.py` | Position poll (close detection, missing-stop retry, no-progress exits, mode-flip check), 14:45 time exit, day summary | `PositionTracker.check_positions`, `time_exit_all`, `TimeExitScheduler` |
 | `order_reconcile.py` | Orders whose outcome is unknown after a timeout | `UncertainOrder` registry |
 | `mode_guard.py` | Process-wide phase and entry halt | `set_startup_phase`, `is_halted` |
-| `notifier.py` | Telegram notifications, level filter, phase tag | `notify_event`, `should_notify`, `notify_*` |
 | `db.py` | `trades.db` audit trail (one thread-local SQLite connection) | `save`, `save_declined`, `fetch_last_entry_trade` |
 | `pipeline/` | Python runner: bar source, warm-up context, cycle, sinks, exit and trail drivers, state store | `service.start`, `Runner`, `cycle.run_cycle`, `context.HistorifyLoader` |
 | `strategy_core/` | Strategy rules shared by backtest and runner | `breakout.py`, `ema_vwap_early.py`, `inputs.build_breakout_inputs` |
@@ -137,7 +133,7 @@ flowchart LR
     Y["signal_engine/config.yaml"] --> C["config.py<br/>fail-fast loader, frozen settings"]
     E["signal_engine/.env<br/>Telegram API, OpenAlgo key, bot token"] --> C
     RE["repo .env<br/>DB URLs, API_KEY_PEPPER"] --> OA["OpenAlgo app.py"]
-    C --> M["main / risk / tracker / notifier / listener"]
+    C --> M["main / risk / tracker / listener"]
     C --> RUN["pipeline.service (runner section)"]
     OAM["OpenAlgo analyze/live mode<br/>(read at startup and every poll)"] --> MG["mode_guard + runtime.apply_trade_mode"]
     MG --> M

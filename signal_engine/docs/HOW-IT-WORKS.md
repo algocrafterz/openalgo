@@ -159,7 +159,7 @@ Before placing the order it asks:
 - Are we already holding a position in this symbol?
 - Are we at the per-sector cap?
 
-If any limit is breached → skip and notify Telegram.
+If any limit is breached → skip and log the reason (nothing is sent to Telegram).
 
 ### Step 5 — Size the Position (`risk.py` + `main.py:_handle_entry`)
 
@@ -267,7 +267,7 @@ retention. Every line is pipe-delimited with a fixed set of columns:
 
 The **symbol column** is the one that matters. Every line emitted while handling a
 signal, polling a tracked position, or force-closing at time exit carries the symbol
-it concerns. Lines with no symbol context — startup, config, day summary — show `-`.
+it concerns. Lines with no symbol context — startup, config, day marker — show `-`.
 
 ### The four commands that answer most questions
 
@@ -389,7 +389,7 @@ The PineScript currently sends `ExitQtyPct: 100` on both `TP1.5 HIT` and `TP2 HI
 ### Already shipped (2026-05-04)
 
 - ✅ **Engine-restart tracker recovery** — `_handle_exit` fallback now reads original entry/SL/TP from `trades.db`; startup re-registers all open broker positions in the tracker. Eliminates the RBLBANK-style `new_sl=0.0` bug and the 7/16 historical "both legs missed" cases caused by restarts.
-- ✅ **Pre-flight broker reject list** — `broker_restrictions.flattrade.mis_rejected` skips known-reject symbols before order placement. Saves slot + Telegram noise. List is populated as rejections are observed (see `FLATTRADE-RESTRICTIONS.md`).
+- ✅ **Pre-flight broker reject list** — `broker_restrictions.flattrade.mis_rejected` skips known-reject symbols before order placement. Saves a wasted slot and a broker rejection. List is populated as rejections are observed (see `FLATTRADE-RESTRICTIONS.md`).
 - ✅ **Position concurrency** — `max_open_positions: 5 → 7`, `max_trades_per_day: 12 → 16`.
 
 ---

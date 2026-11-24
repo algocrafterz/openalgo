@@ -72,8 +72,8 @@ Write-Host "Task 1 created: openAlgoAutoStart  (Weekdays $startTime -- long-runn
 
 # -------------------------------------------------------
 # Task 2: Auto Stop
-# Calls openalgoctl.ps1 stop -- sends shutdown Telegram notification,
-# kills app.py + signal engine, terminates the AutoStart task window.
+# Calls openalgoctl.ps1 stop -- kills app.py + signal engine,
+# terminates the AutoStart task window.
 # -------------------------------------------------------
 
 Unregister-ScheduledTask -TaskName "openAlgoAutoStop" -Confirm:$false -ErrorAction SilentlyContinue
@@ -291,7 +291,7 @@ Write-Host "  8:30 AM  openAlgoAutoStart      -- starts app.py + signal engine, 
 Write-Host "  9:00 AM  openAlgoWatchdog       -- fires every 5 min; no-op if running, restarts if dead" -ForegroundColor White
 Write-Host "  9:05 AM  openAlgoHeartbeatCheck -- fires every 10 min; dead-man's switch, independent of WSL/bash/Python" -ForegroundColor White
 Write-Host "  2:55 PM  openAlgoSquareOff      -- failsafe: closes MIS positions if engine didn't (WakeToRun)" -ForegroundColor White
-Write-Host "  4:31 PM  openAlgoAutoStop       -- sends shutdown notification, kills all services (after the 16:01 close-day retry and the 16:28 dead-man)" -ForegroundColor White
+Write-Host "  4:31 PM  openAlgoAutoStop       -- kills all services (after the 16:01 close-day retry and the 16:28 dead-man)" -ForegroundColor White
 Write-Host ""
 Write-Host "Square-off design:" -ForegroundColor Cyan
 Write-Host "  Signal engine fires its own exit at 3:00 PM (asyncio scheduler, 5s polling)" -ForegroundColor White

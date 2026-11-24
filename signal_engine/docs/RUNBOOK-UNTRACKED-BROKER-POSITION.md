@@ -28,11 +28,11 @@ the same session.
 
 | When | Signal | Where |
 | --- | --- | --- |
-| At entry, both writes failed | `ENTRY NOT RECORDED: <SYM> [<STRATEGY>] order <ID> is open at the broker but trades.db could not record it` | Telegram admin channel; CRITICAL in `signal_engine/logs/errors_<DAY>.jsonl` |
-| At any engine restart | `RESTART: broker positions with no entry trade in trades.db today: <SYM> <+/-QTY>, ...` (event `untracked_broker_position`) | Telegram admin channel; CRITICAL `Tracker restore [<SYM>]: broker holds <QTY> but there is no entry trade in trades.db today` |
+| At entry, both writes failed | `ENTRY NOT RECORDED: <SYM> [<STRATEGY>] order <ID> is open at the broker but trades.db could not record it` | Log line; CRITICAL in `signal_engine/logs/errors_<DAY>.jsonl` |
+| At any engine restart | `RESTART: broker positions with no entry trade in trades.db today: <SYM> <+/-QTY>, ...` (event `untracked_broker_position`) | Log line; CRITICAL `Tracker restore [<SYM>]: broker holds <QTY> but there is no entry trade in trades.db today` |
 | At EOD | the symbol's fills listed as broker fills with no matching engine order | `reports/eod-<DAY>.md` |
 
-Both alerts are failure events: they are delivered at every `notify_level`, including `alerts`.
+Both are safety alerts. They are written to the logs and `/logs/workflow`; nothing is sent to Telegram (removed November 2026).
 
 ## 2. Identify the position (read-only)
 

@@ -3,6 +3,11 @@
 Autonomous trading pipeline: Telegram signals → OpenAlgo → Broker.
 Runs alongside OpenAlgo as a separate process managed by `openalgoctl.sh`.
 
+Outgoing Telegram notifications were removed on 2026-11-24: the engine only receives signals from
+Telegram (see "Telegram notification cleanup (2026-11-24)" at the end). Dated sections written
+before that day that describe `notifier.py`, `notify_channel`, `notify_level`, the admin channel,
+day summaries, outcome mirrors, strategy cards or Telegram ops alerts are HISTORICAL.
+
 ---
 
 ## Architecture
@@ -22,7 +27,6 @@ main.py (_handle_entry / _handle_exit)
       ├─ api_client.py  — fetch_available_capital(), fetch_margin(), fetch_positionbook()
       ├─ executor.py    — build_order(), send_order(), send_bracket_legs()
       ├─ tracker.py     — register position, poll SL fills, time exit, LTP monitoring
-      ├─ notifier.py    — Telegram notifications
       └─ db.py          — persist trade audit to SQLite
 ```
 
@@ -4029,7 +4033,6 @@ Note: as of 2026-04-22, `💰 LIVE`, `🎯 TP1 HIT`, `✅ TP WIN`, `❌ SL HIT`,
 | `executor.py` | Order construction + OpenAlgo API calls |
 | `tracker.py` | Position lifecycle: register, poll SL fills, time exit, no-progress detection; `TradeRecord` dataclass, `_compute_r()` R-multiple helper; three-guard close detection (Guard 1: min age, Guard 2: orderstatus with rejection/timeout-orphan, Guard 3: zero-PnL orphan); `ever_seen_nonzero_qty` flag — set when positionbook shows qty>0 at any poll; Guard 2 timeout treats position as real close (not orphan) when flag is set; all orphan paths cancel associated SL order; race guard (`_positions.get(key) is not pos`) under `_pnl_lock` prevents double-close; per-(key,kind) debug throttling via `_should_log_debug()` |
 | `api_client.py` | All async OpenAlgo API calls |
-| `notifier.py` | Telegram notification dispatch (entry, exit, risk, lifecycle, daily summary); `format_day_context()` / `format_slot_context()` helpers for running day telemetry lines |
 | `config.py` | Fail-fast config loader (`Settings` dataclass singleton); no_progress, tracking sections |
 | `models.py` | `Signal`, `Order`, `TradeResult`, `ValidationResult` |
 | `runtime.py` | Composition root (added 2026-08-23): `build_risk_engine()` wires `settings` -> `RiskEngine`. Used by both `main.py` and `smoke_test.py` — previously three separate constructions had drifted by three sizing parameters, so the dry run did not size like production. |
@@ -4045,13 +4048,6 @@ Note: as of 2026-04-22, `💰 LIVE`, `🎯 TP1 HIT`, `✅ TP WIN`, `❌ SL HIT`,
 |----------|--------|---------|
 | `record_rejection()` | `risk.py` | Release position slot AND un-count `trades_today` for rejected/phantom orders (position never existed at broker) |
 | `_is_be_series()` | `main.py` | Check if symbol is T2T (BE series) — MIS trading rejected |
-| `notify_orphaned_position()` | `notifier.py` | Telegram alert for order never filled |
-| `notify_be_stop_applied()` | `notifier.py` | Telegram: SL moved to break-even. Log-only 2026-04-22 to 2026-09-01; restored, see 2026-09-02 changelog |
-| `notify_partial_exit()` | `notifier.py` | Telegram: partial TP exit (TP1/TP1.5/TP2). Log-only 2026-04-22 to 2026-09-01; restored |
-| `notify_position_closed()` | `notifier.py` | Telegram: full position close (TP or SL). Log-only 2026-04-22 to 2026-09-01; restored |
-| `notify_no_progress_exit()` | `notifier.py` | Telegram: no-progress market exit fired. Log-only 2026-04-22 to 2026-09-01; restored |
-| `notify_entry_filled()` | `notifier.py` | Telegram: entry fill confirmed. Log-only 2026-04-22 to 2026-09-01; restored |
-| `notify_day_summary()` | `notifier.py` | EOD Telegram summary: trades, win rate, per-trade table, capital trajectory |
 | `_poll_positions()` | `tracker.py` | Detects closed positions with min_position_age_seconds guard |
 | `_check_no_progress()` | `tracker.py` | Detects stuck trades and moves SL to break-even |
 
@@ -4236,64 +4232,10 @@ Flattrade blocks raw MARKET and SL-MKT order types via API.
 
 ## Telegram Notifications
 
-All notifications sent via `notifier.py` to `telegram.notify_channel`. Format is trader-friendly with timestamps, direction arrows (▲/▼), hold duration, and risk-adjusted metrics.
-
-### Entry
-
-| Message | Trigger | Example |
-|---------|---------|---------|
-| `📤 ENTRY SENT` | Order placed to broker | `📤 ENTRY SENT \| SBIN LONG ▲ \| ORB \| 10:15 IST`<br>`Signal: 800.50 \| SL: 793.00 \| TP: 815.00 \| R:R 1:1.9` |
-| `🚫 ENTRY REJECTED` | Risk check failed or order rejected | `🚫 ENTRY REJECTED \| SBIN \| ORB \| 10:15 IST`<br>`No trade taken. Reason: max_open_positions exceeded` |
-| `🚨 SL NOT PLACED` | Entry filled but SL order failed | `🚨 SL NOT PLACED \| SBIN \| ORB \| 10:15 IST`<br>`Position UNPROTECTED. Reason: broker rejected`<br>`Place SL manually or close position.` |
-| `⚠️ ORDER NOT FILLED` | Entry order rejected or unconfirmed after timeout | `⚠️ ORDER NOT FILLED \| SBIN LONG ▲ \| ORB \| 10:15 IST`<br>`No position taken. Entry order was rejected by the broker.`<br>`Check broker terminal: order 260422XXXXXX` |
-
-### Exit
-
-| Message | Trigger | Example |
-|---------|---------|---------|
-| `⏰ TIME EXIT` | Forced close at `time_exit.hour:minute` | `⏰ TIME EXIT \| SBIN LONG ▲ \| ORB \| held 4h 45m`<br>`800.50 → — \| +₹243 (+0.6R)` |
-| `❌ EXIT FAILED` | Exit order placement failed | `❌ EXIT FAILED \| SBIN \| ORB \| 10:45 IST`<br>`Reason: API timeout` |
-
-### Risk & System
-
-| Message | Trigger |
-|---------|---------|
-| `🛑 TRADING HALTED` | Daily/weekly/monthly loss limit exceeded |
-| `🟢 Engine started` | Startup complete, capital initialised |
-| `🔴 Engine stopped` | Engine shutdown |
-| `🟢 READY` / `🔴 STARTUP FAILED` | Pre-market health check result |
-
-**Log-only (not sent to Telegram):** fill confirmation, partial TP exits, position close (TP win / SL hit), break-even SL move, no-progress exit. All appear in signal_engine.log at INFO level. Set `SIGNAL_ENGINE_LOG_LEVEL=DEBUG` for poll-level traces.
-
-### Risk and System Events
-
-| Message | Trigger |
-|---------|---------|
-| `🛑 TRADING HALTED` | Daily/weekly/monthly loss limit exceeded |
-| `⚠️ ORDER NOT FILLED` | Orphaned position detected (phantom/slow-fill order, slot released) |
-| `🟢 Engine started` | Startup complete, capital initialized |
-| `🔴 Engine stopped` | Engine shutdown |
-| `🟢 READY` / `🔴 STARTUP FAILED` | Pre-market health check result |
-
-### EOD Day Summary
-
-```
-📊 DAY SUMMARY | 22-Apr-2026
-Trades: 3 | W: 1  L: 0  T: 2 | Win Rate: 100%
-Net: +₹102 (+0.7%) | Avg R: +0.8R
-Capital: ₹14,465 → ₹14,567
-────────────────────────────────────────
-▲ EXIDEIND     339.80→347.90   +₹102    (+0.8R)  TP1+TP1.5
-▲ NATIONALUM   432.85→431.00   -₹17     (-0.1R)  TIME
-▲ JSWENERGY    554.35→554.50   +₹1      (+0.0R)  TIME
-```
-
-**Summary components:**
-- `W`/`L`: decided trades (TP or SL outcome). WR = W / (W+L), excludes time exits
-- Capital line: opening → closing values
-- Per-trade table: direction arrow, symbol, entry→exit, total P&L, total R (risk-adjusted), exit types (TP1, TP1.5, SL, TIME_EXIT)
-- `⚠️` flag: orphaned trades (0 PnL + entry ≈ exit price) indicate unfilled orders
-- Avg R: mean risk-multiple across decided trades (numeric summary of expected value)
+None. The engine sends no Telegram notification of its own (removed 2026-11-24; `notifier.py` is
+deleted). Monitoring is `/logs/workflow`, the OpenAlgo Strategy P&L and Performance pages, the
+logs and the reports. The message formats that used to be listed here (entry, exit, risk,
+engine and EOD day-summary messages) no longer exist.
 
 ---
 
@@ -4307,10 +4249,10 @@ telegram:
   channels:
     - name: "channel-label"
       id: -100XXXXXXXXX
-  notify_channel:           # system alerts (startup/shutdown/errors)
-    name: "admin"
-    id: -100XXXXXXXXX
 ```
+
+`channels` are inbound signal sources. A retired `notify_channel`, `notify_level` or
+`breakingtrade_btst_channels` key left in an old file is ignored.
 
 ### `sizing`
 | Key | Description |
@@ -6465,11 +6407,12 @@ Found in the 2026-10-26..30 sandbox week (bug tracker BUG-001, 003, 004, 006).
 - **Three phases, one duty per step** (owner request: no overlapping checks). open-day 09:12
   (`signal_engine/ops/run_phase.sh open-day`: readiness, reads the engine's own startup checks),
   liveness 09:27 (first runner cycle, first BreakingTrade scan, storms), close-day 15:36
-  (`close_day.sh`: backfill, eod, execution_health, logs, weekly on Fridays, jobs, review, notify).
+  (`close_day.sh`: backfill, eod, execution_health, logs, weekly on Fridays, jobs, review; the
+  `notify` step it had then was removed 2026-11-24).
   Each step writes one output; the Claude review interprets them and re-runs nothing. Replaces the
   six Orca automations, which never completed (interactive `claude` stuck on a sudo prompt, then
   the app was not running at the scheduled times).
-- **Telegram: failures only.** `notify_level: alerts`; routine pre-trade declines are a new
+- **Telegram: failures only (historical, superseded 2026-11-24: nothing is sent).** `notify_level: alerts`; routine pre-trade declines are a new
   `entry_declined` event and success banners `routine_status`, both dropped at alerts, except a
   start or stop inside market hours. One scheduled message a day: the close-day verdict. The EOD
   regression digest no longer posts on its own. Re-runs of an earlier day never post.
@@ -6528,3 +6471,42 @@ nets positions per symbol, so the broker-side position is the sum; the engine at
 - **Decision rule:** after at least 15 to 20 sessions the Pine ORB and ORB-PY are compared (signal match,
   replayed outcomes on the same fills and costs, ORB-PY's real paper P&L). The better one stays and the
   other is disabled, as with BREAKINGTRADE and BREAKINGTRADE-RI.
+
+## Telegram notification cleanup (2026-11-24)
+
+Owner decision: the signal_engine sends no outgoing Telegram notification of any kind. Strategy
+channels remain inbound signal sources. This section supersedes every earlier notification
+passage in this file (outcome mirroring 2026-09-11, strategy cards, BTST channels, the pinned day
+summary, `notify_level`, the admin channel, Telegram ops alerts, the close-day line, the
+dead-man line).
+
+- **How to monitor now.** `/logs/workflow` (every phase, step and run manifest), the OpenAlgo
+  Strategy P&L and Performance pages, `signal_engine/logs/`, `log/errors.jsonl`, and the reports
+  under `signal_engine/reports/`. Former alerts are log lines. The dead-man check
+  (`ops/run_upkeep.sh deadman morning|close`) prints its result and exits 1; it posts nothing.
+- **What still reaches Telegram.** Only the inbound signal transport. The scanner (BreakingTrade
+  family) posts its entry and TP-exit signals into the strategy channel from
+  `alerts.chat_id_for()` (`telegram.channels`) with `BREAKINGTRADE_BOT_TOKEN`:
+  `alerts.alert_trade_signal()` and `tp_watch._send_tp_hit()`. The listener reads those channels
+  and `ingest_sources`. `alerts.send()` posts only the three `trade_signal` kinds. Other
+  BreakingTrade notice kinds are still written to the alerts table, and posted nowhere.
+- **Removed.** `notifier.py`, `strategy_cards.py`, `ops/alerts.py`, `ops/bugalerts.py`,
+  `ops/loginalert.py`, the scheduler's `send_telegram_notification()` and `notify_failure()`, the
+  close-day `notify` step, per-trade notices, outcome mirroring, day summaries, pinned cards,
+  start, stop, login and shutdown banners, the weekly watchlist digest, the close-day line, the
+  deadman line, and the BreakingTrade notification kinds (transitions, BTST list, structure
+  flips, EOD scorecards, health).
+- **Configuration.** The keys `telegram.notify_channel`, `telegram.notify_level` and
+  `telegram.breakingtrade_btst_channels` are removed from `config.yaml` and from `Settings`. No
+  key was added. An older `config.yaml` that still has them loads: the loader ignores unknown
+  `telegram` keys (`tests/test_config_telegram_legacy_keys.py`). `telegram.channels`,
+  `ingest_sources`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_PHONE` and the session are
+  unchanged, so the engine needs no outgoing Telegram configuration to start.
+- **Close-day.** The day-done marker that `tracker.send_day_summary()` writes records that the
+  summary step ran. It does not record that every close-day operation succeeded. Read the
+  per-step status in `/logs/workflow` for that. Close-day processing (steps, retry, review,
+  tracker writes) was not redesigned in this change; only the Telegram sends were removed.
+- **Day summary.** `tracker.send_day_summary()` keeps its name. It sends nothing: it logs the
+  trade count, marks the day done and runs the reconciliation canary on the same cases as before.
+- **Tests.** `tests/test_no_outgoing_telegram.py` pins that no outgoing path remains.
+- **Outstanding.** `docs/CHANGELOG.md` has no entry for this removal yet.

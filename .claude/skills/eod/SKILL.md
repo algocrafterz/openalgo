@@ -38,7 +38,7 @@ until it's re-run while OpenAlgo is up.
 
 ## 2. Triage the regression check
 
-The report's last section ("EOD regression check... posted to Telegram") has PASS/FAIL lines
+The report's last section ("EOD regression check") has PASS/FAIL lines
 grouped TRADE / SIGNAL / SYSTEM. Read every FAIL — do not skip past one just because a prior EOD
 already flagged something similar. For each FAIL, go to the matching subsection below before
 concluding anything.
@@ -137,9 +137,9 @@ Anything that doesn't match one of those two patterns and recurs, or happened du
 is worth tracing to its source file:line (the JSON record has both) and reading the surrounding
 code.
 
-### SIGNAL — notifier / BreakingTrade delivery failures
+### SIGNAL — BreakingTrade signal delivery failures
 
-These are usually genuine — a Telegram send failing, or a scanner signal that never reached the
+These are usually genuine — a scanner signal post to the strategy channel failing, or a signal that never reached the
 engine. Trace via `signal_engine_analyze_<day>.log` around the failure's timestamp; there's no
 known-benign pattern to short-circuit this one.
 
