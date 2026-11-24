@@ -1163,3 +1163,19 @@ def test_filter_error_is_a_value_error_so_service_callers_still_catch_it():
     assert issubclass(pnl.FilterError, ValueError)
     with pytest.raises(pnl.FilterError):
         pnl.check_category("positional")
+
+
+def test_unresolved_route_carries_a_reason_code(client, env, monkeypatch):
+    enable(monkeypatch)
+    monkeypatch.setattr(
+        pnl,
+        "unresolved_reasons",
+        lambda fills, now=None: {
+            f["id"]: {"reason": "before_coverage", "coverage_from": "2026-11-19"} for f in fills
+        },
+    )
+    seed(env)
+    body = get(client, "/api/discretionary-pnl/unresolved").get_json()
+    (row,) = body["unresolved"]
+    assert (row["reason"], row["coverage_from"]) == ("before_coverage", "2026-11-19")
+    assert row["attribution_state"] == "unresolved"

@@ -59,7 +59,7 @@ function FillRows({ title, rows }: { title: string; rows: UnresolvedFill[] }) {
               <TableCell className="text-right font-mono">{fmtPrice(row.price)}</TableCell>
               <TableCell className="font-mono text-xs">{row.order_id || '—'}</TableCell>
               <TableCell className="text-xs">
-                {reasonText(row.reason ?? row.attribution_state)}
+                {reasonText(row.reason ?? row.attribution_state, row.coverage_from)}
                 {row.source_evidence && (
                   <div className="text-muted-foreground" data-testid="unresolved-evidence">
                     Source evidence: {row.source_evidence}

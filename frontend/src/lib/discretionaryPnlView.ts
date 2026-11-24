@@ -553,12 +553,32 @@ const REASON_TEXT: Record<string, string> = {
     'Could not tell whether a strategy or you placed this order, so it is left out of P&L',
   unresolved: 'Not yet attributed to a strategy or to you, so it is left out of P&L',
   opening_not_in_ledger: 'The fill that opened this position is not in the ledger',
+  // why an unresolved fill is still unresolved (server `reason` of the unresolved list)
+  before_coverage: 'Fill dated before attribution coverage began',
+  within_grace: 'Inside the safety window after the fill: a strategy tag may still arrive',
+  evidence_conflict: 'Conflicting evidence: the order tag and the order source disagree',
+  system_order: 'Broker, RMS or system-generated order (for example a square-off): never manual',
+  api_untagged: 'API order without an OpenAlgo tag: automated, strategy unknown',
+  non_human_source: 'The order source is not a recognised manual channel',
+  no_order_id: 'No usable broker order id',
+  non_live_tag: 'OpenAlgo tag of a non-live (sandbox) order',
+  unrecognised_remarks: 'Unrecognised OpenAlgo order remarks',
+  unknown_mode_tag: 'Strategy tag of an unknown trade mode',
+  engine_unreadable: 'The strategy engine trade records could not be read',
+  engine_unknown_mode: 'Strategy engine order of an unknown trade mode',
+  awaiting_sync: 'Can now be attributed: updates at the next ledger sync',
+  unknown: 'Reason not determined',
 }
 
-/** Plain text for a raw reason or attribution code; unknown codes are shown with spaces. */
-export function reasonText(code: string | null | undefined): string {
+/**
+ * Plain text for a raw reason or attribution code; unknown codes are shown with spaces.
+ * `coverageFrom` (ISO date) is added to the before-coverage text when the server sent it.
+ */
+export function reasonText(code: string | null | undefined, coverageFrom?: string | null): string {
   if (!code) return '—'
-  return REASON_TEXT[code] ?? code.replace(/_/g, ' ')
+  const text = REASON_TEXT[code] ?? code.replace(/_/g, ' ')
+  if (code === 'before_coverage' && coverageFrom) return `${text} (${fmtDayMonth(coverageFrom)})`
+  return text
 }
 
 /** Plain-text net definition (the server sends field names; the page shows what they mean). */
@@ -1911,4 +1931,19 @@ export function reliableStartNotice(
   if (!requestedStart || !reliableSince) return null
   if (requestedStart >= reliableSince) return null
   return `Your ledger is reliable from ${formatDate(reliableSince)}. Earlier dates are not included.`
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+function parseIsoDay(iso: string | null | undefined): { y: number; m: number; d: number } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso ?? '')
+  if (!match) return null
+  const [y, m, d] = [Number(match[1]), Number(match[2]), Number(match[3])]
+  return m >= 1 && m <= 12 ? { y, m, d } : null
+}
+
+/** '19 Nov' (or '19 Nov 2026' with `withYear`) from an ISO date; the input when unparsable. */
+export function fmtDayMonth(iso: string | null | undefined, withYear = false): string {
+  const p = parseIsoDay(iso)
+  return p ? `${p.d} ${MONTHS[p.m - 1]}${withYear ? ` ${p.y}` : ''}` : (iso ?? '')
 }

@@ -661,6 +661,33 @@ describe('unresolved fills warning', () => {
     expect(await screen.findByText('No unresolved fills.')).toBeInTheDocument()
   })
 
+  it('shows the plain-language reason of each unresolved fill and the coverage start', async () => {
+    unresolvedFn.mockResolvedValue({
+      unresolved: [
+        { ...fill, id: 1, symbol: 'TCS', reason: 'before_coverage', coverage_from: '2026-11-19' },
+        { ...fill, id: 2, symbol: 'INFY', reason: 'within_grace' },
+        { ...fill, id: 3, symbol: 'SBIN' },
+      ],
+      unresolved_count: 3,
+      orphans: [],
+      orphans_count: 0,
+    })
+    summaryFn.mockResolvedValue(summary({ unresolved_in_range: unresolvedInRange() }))
+    renderIt()
+    await userEvent.click(await screen.findByRole('button', { name: 'View details' }))
+    const dialog = await screen.findByTestId('unresolved-dialog')
+    expect(
+      await within(dialog).findByText('Fill dated before attribution coverage began (19 Nov)')
+    ).toBeInTheDocument()
+    expect(within(dialog).getByText(/Inside the safety window after the fill/)).toBeInTheDocument()
+    // an older server sends no reason: the state text stays
+    expect(
+      within(dialog).getByText(
+        'Not yet attributed to a strategy or to you, so it is left out of P&L'
+      )
+    ).toBeInTheDocument()
+  })
+
   it('shows an error with a retry when the list cannot be read', async () => {
     unresolvedFn.mockRejectedValueOnce(
       new DiscretionaryApiError('Could not read the fills.', undefined, 500)

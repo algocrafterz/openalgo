@@ -2164,3 +2164,127 @@ def test_unresolved_and_orphan_fills_in_range_are_counted_not_used(env, monkeypa
 def test_provisional_block_is_kept_because_the_frontend_reads_it(env):
     env.fill("BUY", 10, 100, d(12, 10, 0))
     assert "provisional" in pnl.get_performance(period="all")
+
+
+# ---------------------------------------------------------------- unresolved reasons (read only)
+
+REASON_ANCHOR = datetime(2026, 11, 16, 9, 0)  # coverage from 2026-11-17
+
+
+@pytest.fixture
+def reason_inputs(monkeypatch):
+    """The attribution inputs of unresolved_reasons, without the tag / engine / calendar DBs."""
+    from services import discretionary_ledger_service as ledger_svc
+
+    inputs = {"live": {}, "unknown": set(), "engine": set(), "anchor": REASON_ANCHOR}
+    monkeypatch.setattr(ledger_svc, "get_tag_min_created_at", lambda: None)
+    monkeypatch.setattr(
+        ledger_svc, "get_coverage_anchor", lambda tag_min, cur=None: inputs["anchor"]
+    )
+    monkeypatch.setattr(
+        ledger_svc, "_load_live_tags", lambda ids: (inputs["live"], inputs["unknown"])
+    )
+    monkeypatch.setattr(ledger_svc, "_engine_known_order_ids", lambda ids: inputs["engine"])
+    monkeypatch.setattr(ledger_svc, "_load_ok_runs", lambda days: {})
+    monkeypatch.setattr(ledger_svc, "_session_start", lambda day, ex: None)
+    monkeypatch.setattr(ledger_svc, "_strategy_code_names", lambda: {})
+    monkeypatch.setenv("DISCRETIONARY_SOURCE_FROM_ORDERBOOK", "true")
+    return inputs
+
+
+def _evidence(env_fill_order, **ev):
+    import json
+
+    base = {"ob": "ok", "os": "WEB", "rk": "empty", "tc": None, "tm": None, "rs": None}
+    base.update(ev)
+    ledger.set_source_evidence("flattrade", env_fill_order, json.dumps(base, sort_keys=True))
+
+
+def test_unresolved_reason_for_each_classifier_outcome(env, reason_inputs):
+    from utils.order_source_tag import strategy_code
+
+    env.now = d(17, 11, 0)
+    env.fill("BUY", 1, 10, d(16, 10), symbol="OLD", state="unresolved", order_id="OB")
+    env.fill("BUY", 1, 10, d(17, 10, 50), symbol="NEW", state="unresolved", order_id="OG")
+    env.fill("BUY", 1, 10, d(17, 9, 30), symbol="SYS", state="unresolved", order_id="OS")
+    _evidence("OS", sm="square_off")
+    env.fill("BUY", 1, 10, d(17, 9, 31), symbol="API", state="unresolved", order_id="OA")
+    _evidence("OA", os="API")
+    env.fill("BUY", 1, 10, d(17, 9, 32), symbol="CONF", state="unresolved", order_id="OC")
+    _evidence("OC", rk="tag", tc=strategy_code("Momentum Long"), tm="L", os="WEB")
+    env.fill("BUY", 1, 10, d(17, 9, 33), symbol="NOID", state="unresolved", order_id="")
+    env.fill("BUY", 1, 10, d(17, 9, 34), symbol="DUE", state="unresolved", order_id="OD")
+    env.fill("BUY", 1, 10, d(17, 9, 35), symbol="UNK", state="unresolved", order_id="OU")
+    reason_inputs["unknown"] = {"OU"}
+
+    rows = {u["symbol"]: u for u in pnl.get_unresolved()}
+    got = {s: rows[s]["reason"] for s in rows}
+    assert got == {
+        "OLD": "before_coverage",
+        "NEW": "within_grace",
+        "SYS": "system_order",
+        "API": "api_untagged",
+        "CONF": "evidence_conflict",
+        "NOID": "no_order_id",
+        "DUE": "awaiting_sync",  # past grace and covered: the next sync attributes it
+        "UNK": "unknown_mode_tag",
+    }
+    assert {r["coverage_from"] for r in rows.values()} == {"2026-11-17"}
+    assert set(got.values()) <= set(pnl.UNRESOLVED_REASONS)
+    # the old fields are all still there
+    for key in ("id", "symbol", "attribution_state", "source_label", "source_evidence"):
+        assert key in rows["OLD"]
+
+
+def test_unresolved_reason_code_mapping_and_fallback():
+    assert pnl.unresolved_reason_code("unresolved", "fill date before tag coverage") == (
+        "before_coverage"
+    )
+    assert pnl.unresolved_reason_code("unresolved", "something new") == "unknown"
+    assert pnl.unresolved_reason_code("unresolved", None) == "unknown"
+    assert pnl.unresolved_reason_code("manual", "absent from tags") == "awaiting_sync"
+
+
+def test_unresolved_reasons_are_read_only(env, reason_inputs):
+    env.fill("BUY", 1, 10, d(16, 10), symbol="OLD", state="unresolved")
+    env.fill("BUY", 1, 10, d(17, 9, 0), symbol="DUE", state="unresolved")
+    env.fill("BUY", 5, 100, d(17, 9, 5), symbol="SBIN")
+    pnl.rebuild()
+    before = env.snapshot()
+    rows = pnl.get_unresolved()
+    assert [r["attribution_state"] for r in rows] == ["unresolved", "unresolved"]
+    assert {r["reason"] for r in rows} == {"before_coverage", "awaiting_sync"}
+    assert env.snapshot() == before  # no state, audit row or derived table changed
+
+
+def test_unresolved_without_reasons_when_the_inputs_fail(env, monkeypatch):
+    from services import discretionary_ledger_service as ledger_svc
+
+    def boom(*a, **k):
+        raise RuntimeError("tags unreadable")
+
+    monkeypatch.setattr(ledger_svc, "get_tag_min_created_at", boom)
+    env.fill("BUY", 1, 10, d(16, 10), symbol="OLD", state="unresolved")
+    rows = pnl.get_unresolved()
+    assert [r["symbol"] for r in rows] == ["OLD"]
+    assert "reason" not in rows[0]
+
+
+def test_trade_rows_carry_entry_and_exit_fill_counts_tcs_shape(env):
+    # 2026-11-19 TCS: three entry fills, four partial exits, flat at the end
+    env.now = d(19, 15, 0)
+    env.fill("BUY", 10, 3000.0, d(19, 9, 20), symbol="TCS", order_id="E1")
+    env.fill("BUY", 20, 3001.5, d(19, 9, 21), symbol="TCS", order_id="E1")
+    env.fill("BUY", 30, 3002.0, d(19, 9, 40), symbol="TCS", order_id="E2")
+    for i, mm in enumerate((10, 20, 30, 40)):
+        env.fill("SELL", 15, 3010.0 + i, d(19, 11, mm), symbol="TCS", order_id=f"X{i}")
+    perf = pnl.get_performance(period="all")
+    (trade,) = perf["trades"]
+    assert (trade["entry_fills"], trade["exit_fills"]) == (3, 4)
+    assert trade["legs"] == 4
+    fills = pnl.get_trade_fills(trade["id"], perf["build_id"])["fills"]
+    roles = [f["role"] for f in fills]
+    assert (roles.count("ENTRY"), roles.count("EXIT")) == (3, 4)
+    # the weighted prices and duration are unchanged by the counts
+    assert trade["entry_price"] == pytest.approx((10 * 3000 + 20 * 3001.5 + 30 * 3002) / 60)
+    assert trade["hold_minutes"] == pytest.approx(140)

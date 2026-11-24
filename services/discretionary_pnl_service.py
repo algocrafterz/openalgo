@@ -731,8 +731,145 @@ def get_completed_trades(
 
 
 def get_unresolved(broker=None, account=None, symbol=None) -> list[dict]:
-    """Ledger fills still unresolved: listed, never counted in P&L."""
-    return _unresolved_of(_load_ledger_fills(), _clean_filters(broker, account, symbol))
+    """Ledger fills still unresolved: listed, never counted in P&L.
+
+    Each row also carries ``reason`` (a code of ``UNRESOLVED_REASONS``) and ``coverage_from``
+    (see ``unresolved_reasons``): display only. When they cannot be computed the rows are
+    returned without them."""
+    fills = _load_ledger_fills()
+    rows = _unresolved_of(fills, _clean_filters(broker, account, symbol))
+    if not rows:
+        return rows
+    ids = {row.get("id") for row in rows}
+    try:
+        # the stored fills (raw source evidence), not the display rows
+        reasons = unresolved_reasons([f for f in fills if f["id"] in ids])
+    except Exception as e:
+        logger.warning("Unresolved reasons unavailable: %s", type(e).__name__)
+        return rows
+    for row in rows:
+        row.update(reasons.get(row["id"], {}))
+    return rows
+
+
+# Display codes of why an unresolved fill is still unresolved, from the reason text that the
+# attribution decision (ledger_svc.classify_with_evidence) returns. Matched by prefix.
+_REASON_PREFIXES = (
+    ("no usable order id", "no_order_id"),
+    ("remarks tag conflicts", "evidence_conflict"),
+    ("evidence conflict", "evidence_conflict"),
+    ("remarks tag of a non-live mode", "non_live_tag"),
+    ("unrecognised OpenAlgo remarks", "unrecognised_remarks"),
+    ("tag of unknown mode", "unknown_mode_tag"),
+    ("signal_engine trades unreadable", "engine_unreadable"),
+    ("signal_engine row of unknown trade mode", "engine_unknown_mode"),
+    ("broker/RMS/system-generated order", "system_order"),
+    ("API order without an OpenAlgo tag", "api_untagged"),
+    ("order source not an allow-listed human channel", "non_human_source"),
+    ("fill date before tag coverage", "before_coverage"),
+    ("within manual grace period", "within_grace"),
+)
+# The decision would now attribute the fill; the stored state changes at the next sync.
+REASON_AWAITING_SYNC = "awaiting_sync"
+REASON_UNKNOWN = "unknown"
+UNRESOLVED_REASONS = (
+    *dict.fromkeys(code for _p, code in _REASON_PREFIXES),
+    REASON_AWAITING_SYNC,
+    REASON_UNKNOWN,
+)
+
+
+def unresolved_reason_code(state: str, reason: str | None) -> str:
+    """Display code of one (state, reason) outcome of ledger_svc.classify_with_evidence."""
+    if state != ledger.STATE_UNRESOLVED:
+        return REASON_AWAITING_SYNC
+    for prefix, code in _REASON_PREFIXES:
+        if (reason or "").startswith(prefix):
+            return code
+    return REASON_UNKNOWN
+
+
+def unresolved_reasons(fills: list[dict], now: datetime | None = None) -> dict[int, dict]:
+    """{fill id: {"reason": code, "coverage_from": ISO date or None}} for the unresolved
+    ``fills``. READ ONLY: writes nothing and changes no attribution state, rule or audit row.
+
+    Re-runs the SAME decision the ledger sync applies (ledger_svc.classify_with_evidence) on
+    the same inputs it gathers (live tags, signal_engine order ids, coverage anchor, same-day
+    coverage, stored source evidence when DISCRETIONARY_SOURCE_FROM_ORDERBOOK is on), at
+    ``now`` (default the IST clock). The stored state was decided at the last sync, so the
+    code says why the fill would stay unresolved if it were evaluated now; ``awaiting_sync``
+    when it would not (the next sync will attribute it). ``coverage_from`` is the first
+    covered date (coverage anchor day + 1), None when there is no anchor yet.
+    """
+    from datetime import timedelta
+
+    rows = []
+    for f in fills:
+        when = f.get("fill_time")
+        if isinstance(when, str):
+            try:
+                when = datetime.fromisoformat(when)
+            except ValueError:
+                when = None
+        if f.get("attribution_state") != ledger.STATE_UNRESOLVED or not isinstance(when, datetime):
+            continue
+        rows.append(
+            {
+                "id": f.get("id"),
+                "order_id": f.get("order_id") or "",
+                "broker": f.get("broker"),
+                "fill_time": when,
+                "exchange": f.get("exchange") or "",
+                "evidence": ledger_svc.parse_evidence(f.get("source_evidence")),
+            }
+        )
+    if not rows:
+        return {}
+    now = now or _now()
+    anchor = ledger_svc.get_coverage_anchor(ledger_svc.get_tag_min_created_at())
+    coverage_from = (anchor + timedelta(days=1)).date().isoformat() if anchor else None
+    use_evidence = ledger_svc.source_from_orderbook()
+    code_names = (
+        ledger_svc._strategy_code_names()
+        if use_evidence and any((r["evidence"] or {}).get("tc") for r in rows)
+        else {}
+    )
+    order_ids = sorted({r["order_id"] for r in rows if r["order_id"]})
+    live, unknown = ledger_svc._load_live_tags(order_ids)
+    engine_ids = ledger_svc._engine_known_order_ids(order_ids)
+    pending = {
+        r["fill_time"].date() for r in rows if not ledger_svc.is_covered(r["fill_time"], anchor)
+    }
+    runs_by_day = ledger_svc._load_ok_runs(pending)
+    starts: dict = {}
+
+    def start_fn(day, exchange):
+        if (day, exchange) not in starts:
+            starts[(day, exchange)] = ledger_svc._session_start(day, exchange)
+        return starts[(day, exchange)]
+
+    out: dict[int, dict] = {}
+    for r in rows:
+        day = r["fill_time"].date()
+        same_day = day in pending and ledger_svc.same_day_covered(
+            r["fill_time"], r["exchange"], runs_by_day.get(day, []), None, start_fn
+        )
+        state, _strategy, reason, _source, _label = ledger_svc.classify_with_evidence(
+            r,
+            live,
+            unknown,
+            engine_ids,
+            anchor,
+            now,
+            same_day=same_day,
+            evidence=r["evidence"] if use_evidence else None,
+            code_names=code_names,
+        )
+        out[r["id"]] = {
+            "reason": unresolved_reason_code(state, reason),
+            "coverage_from": coverage_from,
+        }
+    return out
 
 
 def get_orphans(broker=None, account=None, symbol=None) -> list[dict]:
@@ -2433,6 +2570,22 @@ def get_trade_fills(trade_id: int, build_id: str | None = None) -> dict | None:
     }
 
 
+def fill_counts(trade: dict, links: list[dict], build_id: str | None) -> dict:
+    """{"entry_fills", "exit_fills"}: distinct ledger fills linked as ENTRY / EXIT to the
+    legs (``leg_ids``) of one completed trade in ``build_id``; the same rows, merged per
+    (fill, role), that ``get_trade_fills`` returns. Display only."""
+    legs = set(trade.get("leg_ids") or [])
+    seen = {
+        (lk["fill_ref"], lk["role"])
+        for lk in links
+        if lk.get("trade_id") in legs and lk.get("build_id") == build_id
+    }
+    return {
+        "entry_fills": sum(1 for _ref, role in seen if role == "ENTRY"),
+        "exit_fills": sum(1 for _ref, role in seen if role == "EXIT"),
+    }
+
+
 def get_performance(
     period: str = "30d",
     start: str | None = None,
@@ -2454,7 +2607,8 @@ def get_performance(
     Win / loss figures are on the NET basis. MAE / MFE are NOT here (lazy ``get_excursions``).
 
     ``get_summary`` plus: by_period {daily, weekly, monthly}, by_symbol, by_side, by_product,
-    by_holding {intraday, overnight}, hold, trades (COMPLETED trades, each with ``legs``) /
+    by_holding {intraday, overnight}, hold, trades (COMPLETED trades, each with ``legs``,
+    ``entry_fills`` and ``exit_fills``, see ``fill_counts``) /
     positions (newest first, at most TABLE_LIMIT each, with ``*_total`` and ``*_truncated``;
     every total is computed before the cut), withheld and labels. Breakdown money sums the
     legs, breakdown counts the completed trades (see the module docstring). The
@@ -2497,7 +2651,9 @@ def get_performance(
     out["costs"] = _safe_block("costs", lambda: an.costs_summary(trades), out["warnings"])
 
     newest = sorted(trades, key=lambda t: (t["closed_at"], t["id"]), reverse=True)
-    out["trades"] = newest[:TABLE_LIMIT]
+    out["trades"] = [
+        {**t, **fill_counts(t, snap["links"], snap["build_id"])} for t in newest[:TABLE_LIMIT]
+    ]
     out["trades_total"] = len(newest)
     out["trades_shown"] = len(out["trades"])
     out["trades_truncated"] = max(0, len(newest) - TABLE_LIMIT)

@@ -1111,3 +1111,40 @@ describe('breakdownVisibility', () => {
     expect(breakdownVisibility({ ...base, by_side: [row('LONG', 8)] }).side).toBe(false)
   })
 })
+
+describe('unresolved reasons', () => {
+  it('maps every server reason code to plain text', () => {
+    const codes = [
+      'before_coverage',
+      'within_grace',
+      'evidence_conflict',
+      'system_order',
+      'api_untagged',
+      'non_human_source',
+      'no_order_id',
+      'non_live_tag',
+      'unrecognised_remarks',
+      'unknown_mode_tag',
+      'engine_unreadable',
+      'engine_unknown_mode',
+      'awaiting_sync',
+      'unknown',
+    ]
+    for (const code of codes) {
+      const text = reasonText(code)
+      expect(text).not.toContain('_')
+      expect(text.length).toBeGreaterThan(10)
+    }
+    expect(reasonText('system_order')).toMatch(/never manual/)
+    expect(reasonText('unknown')).toBe('Reason not determined')
+  })
+
+  it('adds the coverage start date to the before-coverage text only', () => {
+    expect(reasonText('before_coverage', '2026-11-19')).toBe(
+      'Fill dated before attribution coverage began (19 Nov)'
+    )
+    expect(reasonText('before_coverage')).toBe('Fill dated before attribution coverage began')
+    expect(reasonText('within_grace', '2026-11-19')).not.toContain('19 Nov')
+    expect(reasonText('brand_new_code', '2026-11-19')).toBe('brand new code')
+  })
+})
