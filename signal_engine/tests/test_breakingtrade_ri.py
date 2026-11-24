@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 import signal_engine.config as _se_config
-from signal_engine import strategies, strategy_cards
+from signal_engine import strategies
 from signal_engine.analysis.breakingtrade import alerts, entry_watch, store, tp_watch, trigger
 from signal_engine.analysis.breakingtrade.__main__ import _emit_trade_signals
 from signal_engine.config import TelegramChannel
@@ -88,7 +88,6 @@ def _settings(ri_enabled):
             TelegramChannel(name="intraday-breakingtrade-analyze", id=-100),
             TelegramChannel(name="intraday-breakingtrade-ri-analyze", id=-300, enabled=ri_enabled),
         ],
-        breakingtrade_btst_channels={},
     )
 
 
@@ -163,6 +162,5 @@ class TestWiring:
     def test_tp_watch_manages_ri_positions_on_their_own_channel(self):
         assert ("BREAKINGTRADE-RI", "trade_signal_ri") in tp_watch._WATCHED_STRATEGIES
 
-    def test_registry_and_card(self):
+    def test_registry_names_the_ri_channel(self):
         assert strategies.channel_base("BREAKINGTRADE-RI") == "intraday-breakingtrade-ri"
-        assert "intraday-breakingtrade-ri" in strategy_cards.CARDS

@@ -2,7 +2,7 @@
 
 A phase (open-day, liveness, a close-day step) is a list of checks. Each check has one status and
 the evidence for it; the phase verdict is the worst status. The report is markdown for people and
-a JSON file for the notify step and the /logs workflow page, so nothing parses prose.
+a JSON file for the /logs workflow page and the other ops steps, so nothing parses prose.
 """
 
 from __future__ import annotations
@@ -159,15 +159,17 @@ NOW_ENV = "OPS_RECOVERY_NOW"
 
 #: Steps that must finish for a phase to count as complete. The review has its own rule
 #: (signal_engine/ops/verdict.py review_outcome) and is not listed.
-#:  - open-day, liveness: `check` writes the report and `notify` is the only alert path for RED.
+#:  - open-day, liveness: `check` writes the report.
 #:  - close-day (signal_engine/analysis/close_day.sh): `eod` (tradebook snapshot and ledger,
 #:    everything else reads it), `backfill` (tomorrow's data), `execution_health` and `logs`
-#:    (the review's inputs), `value_areas` (needs the backfill), `jobs` (schedule audit), `track`
-#:    (records failed checks in the bug tracker even when the review cannot run) and `notify`
-#:    (the day's one Telegram line). `weekly` runs on Fridays only and is not critical.
+#:    (the review's inputs), `value_areas` (needs the backfill), `jobs` (schedule audit) and
+#:    `track` (records failed checks in the bug tracker even when the review cannot run).
+#:    `weekly` runs on Fridays only and is not critical.
+#: The `notify` step (a Telegram line) was removed in November 2026. A status row or manifest row
+#: named `notify` in an older day's files is ignored: it is not a critical step.
 CRITICAL_STEPS = {
-    "open-day": ("check", "notify"),
-    "liveness": ("check", "notify"),
+    "open-day": ("check",),
+    "liveness": ("check",),
     "close-day": (
         "eod",
         "backfill",
@@ -176,7 +178,6 @@ CRITICAL_STEPS = {
         "value_areas",
         "jobs",
         "track",
-        "notify",
     ),
 }
 #: These steps exit 1 on purpose when their own report says RED: it is a finding, not a crash.

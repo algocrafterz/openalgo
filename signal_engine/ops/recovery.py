@@ -52,7 +52,7 @@ WHAT THE RETRY AND THE RECOVERY WRITE (the true list; nothing else)
   Reports and run records, signal_engine/reports/:
     close-day-<day>-status.tsv (append), close-day-<day>-run.json, close-day-retry-<day>-run.json,
     close-day-recover-<day>-run.json, .ops-state.lock, .close-day-retry|recover-<day>.lock,
-    telegram-state.json, eod-<day>.md, execution-health-<day>.md(.part), logs|value-areas|
+    eod-<day>.md, execution-health-<day>.md(.part), logs|value-areas|
     jobs-<day>.json, eod-<day>-claude-review.md(.partial), review-attempts/*
   Logs: signal_engine/logs/recovery/*.log, the backfill and eod logs and their locks.
   Data: signal_engine/data/tradebook/tradebook_<today>.json (merge, never shrinks; no fetch for
@@ -76,7 +76,7 @@ STEP BUDGETS AND THE LEAST TIME A STEP NEEDS TO START (MIN_USEFUL_SECONDS)
 
 REPEAT SAFETY OF EACH STEP
   backfill, eod, execution_health, logs, value_areas, jobs, track: safe to repeat (merge, replace
-  or already recorded). notify: a second summary is sent on purpose. review: NOT strictly
+  or already recorded). review: NOT strictly
   idempotent. `bugs apply` appends a history note to a bug on every `note` action, so a review
   that applies its notes and is then retried can add the same note twice. The store has no
   duplicate check and this change does not alter the bug store. A review that was cut off by
@@ -110,7 +110,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from signal_engine.ops import actions, alerts, automation, jobs, logs, model, verdict
+from signal_engine.ops import actions, automation, jobs, logs, model, verdict
 
 try:
     import fcntl
@@ -139,12 +139,14 @@ RETRY_HARD_END = model.RETRY_HARD_END
 #: A retry that starts with less time than this before RETRY_DEADLINE does not start.
 RETRY_MIN_START_SECONDS = model.RETRY_MIN_START_SECONDS
 STARTED_TOO_LATE = "started too late"
-#: No step except the last notification starts or runs past this time (deadline minus two minutes).
+#: No step starts or runs past this time (deadline minus two minutes). The reserve once held the
+#: Telegram summary (removed in November 2026); it is kept so every step keeps the same cut-off.
 RETRY_NOTIFY_RESERVE_SECONDS = 120
 #: The review starts only when it can still run: not after this time.
 RETRY_REVIEW_LATEST_START = "16:20"
 #: The morning recovery stops here. The 09:00 to 09:15 window stays free for trading readiness.
 RECOVER_HARD_STOP = "08:55"
+#: Kept from the removed Telegram notice so the recovery steps keep the same cut-off.
 RECOVER_NOTICE_RESERVE_SECONDS = 60
 RECOVER_REVIEW_RESERVE_SECONDS = 150
 #: How often the broker-login wait looks again.
@@ -189,7 +191,6 @@ WORDS = {
     "jobs": "the scheduled-jobs check",
     "track": "the bug tracker update",
     "review": "the AI review",
-    "notify": "the Telegram summary",
 }
 
 #: Steps that write the price history and the value-area levels the engine reads at its warm-up.
@@ -223,7 +224,7 @@ class StepSpec:
 #: Dependency order of the afternoon retry. Budgets against the measured maximum of 8 days:
 #:  backfill 600 s (normal 433-529 s, one 8405 s day was a host sleep), eod 120 s (max 18 s),
 #:  execution_health and logs 60 s (max 2 s), value_areas 120 s (max 31 s), jobs 60 s (max 18 s),
-#:  track 30 s (max 2 s), review 600 s (max 121 s; recovery gives it 420 s), notify 120 s (max 2 s).
+#:  track 30 s (max 2 s), review 600 s (max 121 s; recovery gives it 420 s).
 STEPS: dict[str, StepSpec] = {
     s.name: s
     for s in (
@@ -235,7 +236,6 @@ STEPS: dict[str, StepSpec] = {
         StepSpec("jobs", 60, 60),
         StepSpec("track", 30, 30),
         StepSpec("review", 600, 420, prereqs=("eod", "execution_health", "logs")),
-        StepSpec("notify", 120, 60),
     )
 }
 RETRY_ORDER = (
@@ -247,7 +247,6 @@ RETRY_ORDER = (
     "jobs",
     "track",
     "review",
-    "notify",
 )
 #: In the morning the steps that need no login run first, at once; the download waits for the login.
 RECOVER_ORDER = (
@@ -259,7 +258,6 @@ RECOVER_ORDER = (
     "jobs",
     "track",
     "review",
-    "notify",
 )
 #: `weekly` is not here: it is Friday-only, not a critical step, and not worth a retry.
 
@@ -358,8 +356,8 @@ def outstanding(day: str, folder: str | None = None, *, now: datetime | None = N
         if _step_good(name, day, folder, row):
             continue
         if row is None:
-            # --no-review runs end without a review and a notify; that is not an outstanding step.
-            if name in ("review", "notify") and run["state"] == model.COMPLETED:
+            # --no-review runs end without a review; that is not an outstanding step.
+            if name == "review" and run["state"] == model.COMPLETED:
                 continue
             steps[name] = "never_started"
         elif row[2] == EXIT_TIMED_OUT:
@@ -383,7 +381,7 @@ class Ctx:
     day: str  # the close-day day being worked on
     phase: str
     deadline: datetime  # the run ends here; never extended
-    step_cutoff: datetime  # no step except notify may run past this
+    step_cutoff: datetime  # no step may run past this
     review_latest_start: datetime
     folder: str = REPORTS
     logs_dir: str = LOGS
@@ -470,8 +468,6 @@ def _command(step: str, ctx: Ctx, budget: int) -> tuple[list[str], dict, str | N
     reports, the market data store and the bug tracker are all they write."""
     day = ctx.day
     env = {"PYTHONPATH": REPO}
-    if step == "eod":
-        env["EOD_TELEGRAM"] = "0"  # the digest goes into the report, not to Telegram
     if step == "execution_health":
         part = os.path.join(ctx.folder, f"execution-health-{day}.md.part")
         return actions.command(step, day), env, part
@@ -481,9 +477,6 @@ def _command(step: str, ctx: Ctx, budget: int) -> tuple[list[str], dict, str | N
         env["CLOSE_DAY_BUDGET_SECONDS"] = str(max(DEFAULT_MIN_USEFUL_SECONDS, budget - 30))
         script = os.path.join(actions.SE, "analysis", "eod_claude_review.sh")
         return ["bash", script, day], env, None
-    if step == "notify":
-        argv = [sys.executable, "-m", "signal_engine.ops", "notify", "close-day", "--day", day]
-        return argv, env, None
     return actions.command(step, day), env, None
 
 
@@ -585,11 +578,6 @@ def verify(step: str, rc: int, ctx: Ctx, since: float, log_path: str) -> tuple[b
         if found["outcome"] != "verdict":
             return False, REVIEW_CAUSE_WORDS.get(found["cause"], "the review produced no verdict")
         return True, f"the review verdict is {found['verdict']}"
-    if step == "notify":
-        return (
-            rc == 0,
-            "the summary was delivered" if rc == 0 else "the summary was not delivered",
-        )
     return rc == 0, ""
 
 
@@ -824,8 +812,7 @@ def _review_gate(ctx: Ctx, cutoff: datetime) -> StepResult | None:
 
 
 def _past_deadline(ctx: Ctx, step: str) -> bool:
-    cutoff = ctx.deadline if step == "notify" else ctx.step_cutoff
-    return ctx.clock() >= cutoff
+    return ctx.clock() >= ctx.step_cutoff
 
 
 def execute(ctx: Ctx, todo: list[str]) -> list[StepResult]:
@@ -840,7 +827,7 @@ def execute(ctx: Ctx, todo: list[str]) -> list[StepResult]:
     for step in todo:
         spec = STEPS[step]
         at = ctx.clock()
-        cutoff = ctx.deadline if step == "notify" else ctx.step_cutoff
+        cutoff = ctx.step_cutoff
         started = _hms(at)
         unresolved = [p for p in spec.prereqs if p in results and results[p].result != RECOVERED]
         if unresolved:
@@ -1048,8 +1035,6 @@ def retry_main(
     if actions.running(state_dir):
         say("Another run is in progress - not retrying now.")
         return 0
-    if "notify" not in todo:
-        todo.append("notify")  # the corrected summary goes out after any retry
     ctx = Ctx(
         mode="retry",
         day=day,
@@ -1111,12 +1096,11 @@ def recover_main(
     logs_dir: str | None = None,
     snapshot_dir: str | None = None,
     db_path: str | None = None,
-    deliver: Callable | None = None,
     say: Callable[[str], None] = print,
 ) -> int:
     """run_upkeep.sh recover (08:36). Retries only the outstanding steps of the previous trading
-    day. Sends one notice, and only when something was outstanding. Exit 0 when nothing was open
-    or all was recovered, 1 otherwise."""
+    day. Prints one notice line, and only when something was outstanding. Exit 0 when nothing was
+    open or all was recovered, 1 otherwise."""
     clock = clock or _clock
     folder = folder or REPORTS
     now = clock()
@@ -1159,9 +1143,6 @@ def recover_main(
         login_ready=login_ready,
         snapshot_dir=snapshot_dir or SNAPSHOTS,
     )
-    # The summary of the old day is replaced by the one notice below, so notify is not run.
-    notify_open = "notify" in todo
-    todo = [s for s in todo if s != "notify"]
     say(
         f"=== close-day recover {day} (today {today}) {now.strftime('%H:%M:%S')}: {', '.join(todo)} ==="
     )
@@ -1178,22 +1159,7 @@ def recover_main(
                 result=SKIPPED_NA, attempt=ctx.run_id,
             )  # fmt: skip
         outcome, text = _notice(day, results)
-        send = deliver or alerts.deliver
-        sent = False
-        if clock() < stop:
-            sent = bool(
-                send(text, kind="recovery", phase="close-day", condition=outcome, severity="INFO")
-            )
-        say(f"recovery {outcome}; notice {'sent' if sent else 'NOT sent'}: {text}")
-        if notify_open and sent:
-            at = _hms(clock())
-            _record(
-                ctx,
-                StepResult("notify", RECOVERED, 0, "the recovery notice was delivered", ran=True),
-                at,
-                at,
-                to_status=True,
-            )
+        say(f"recovery {outcome}: {text}")
     return 0 if outcome == "recovered" else 1
 
 

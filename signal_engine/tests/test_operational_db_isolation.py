@@ -50,13 +50,10 @@ def test_runner_state_default_path_is_not_the_operational_file(tmp_path):
 
 
 def test_small_state_files_are_not_the_operational_files():
-    from signal_engine import notifier, strategy_cards
     from signal_engine.bugs import store as bug_store
     from signal_engine.shadow import store as shadow_store
 
     package_dir = os.path.dirname(DATA_DIR)
     real_bugs_file = os.path.realpath(os.path.join(package_dir, "bugs", "bugs.json"))
-    assert not _inside_data_dir(strategy_cards._STATE_PATH)
-    assert not _inside_data_dir(notifier._DAY_SUMMARY_PIN_STATE_PATH)
     assert not _inside_data_dir(str(shadow_store.DATA_DIR))
     assert os.path.realpath(bug_store.TRACKER_PATH) != real_bugs_file

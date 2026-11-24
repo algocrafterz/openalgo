@@ -80,7 +80,6 @@ const PHASES: { key: PhaseKey; title: string; duty: string }[] = [
 
 const STEP_INFO: Record<string, string> = {
   check: 'Run the checks',
-  notify: 'Telegram message (only when needed)',
   backfill: "Download the day's 1-minute and daily bars",
   eod: 'Tradebook snapshot, ledger, P&L pages vs fills',
   execution_health: 'Order and broker health',

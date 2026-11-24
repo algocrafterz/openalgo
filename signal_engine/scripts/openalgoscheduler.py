@@ -1,8 +1,11 @@
 """OpenAlgo scheduler — startup and shutdown automation.
 
-Startup: auto-login with TOTP, verify broker auth, send Telegram summary.
-Shutdown: send Telegram shutdown notification.
+Startup: auto-login with TOTP, verify broker auth, log the startup summary.
+Shutdown: log the shutdown summary and revoke the broker session (scheduled stop only).
 Squareoff: cancel all pending orders and close all MIS positions (3:02 PM failsafe).
+
+Nothing here sends to Telegram (outgoing notifications were removed in November 2026). Every
+failure is logged with logger.error or logger.exception and keeps its exit code.
 
 Usage:
     uv run python -m signal_engine.scripts.openalgoscheduler startup
@@ -240,19 +243,6 @@ def _authenticate_with_network_retry(
     return result
 
 
-def _alert_invalid_ip(error) -> None:
-    """BUG-029: tell the owner at once when the broker rejects the login as INVALID_IP.
-
-    Only an INVALID_IP failure acts; the hook never raises and never blocks the login.
-    """
-    try:
-        from signal_engine.ops import loginalert
-
-        loginalert.notify_login_failure(error)
-    except Exception as exc:  # noqa: BLE001
-        _log().warning("INVALID_IP alert hook failed: %s", type(exc).__name__)
-
-
 def _totp_session_token(
     broker_name: str, username: str, get_existing_auth,
     authenticate_with_totp, upsert_auth,
@@ -283,7 +273,6 @@ def _totp_session_token(
     )
     if error:
         logger.error("Broker authentication failed: %s", error)
-        _alert_invalid_ip(error)
         return False, error, None
     if not auth_token:
         logger.error("Broker authentication returned empty token for user: %s", username)
@@ -794,15 +783,15 @@ def _self_heal_master_contract() -> bool:
 
 
 def _ensure_openalgo_api_usable(context: str) -> bool:
-    """Smoke-test OpenAlgo's own API and self-heal once if it fails. Alerts either way.
+    """Smoke-test OpenAlgo's own API and self-heal once if it fails. Logs either way.
 
     Args:
-        context: label for log/alert messages ("startup" or "healthcheck").
+        context: label for log messages ("startup" or "healthcheck").
 
     Returns:
         True if the API is confirmed usable (first try or after self-heal),
         False if it is still broken after self-heal - the caller must treat this
-        as a hard failure (alert + exit), the same as a broker-auth failure.
+        as a hard failure (log + exit), the same as a broker-auth failure.
     """
     logger = _log()
 
@@ -818,19 +807,16 @@ def _ensure_openalgo_api_usable(context: str) -> bool:
 
     ok2, detail2 = _verify_openalgo_api(max_attempts=2, retry_delay=5.0)
     if ok2:
-        try:
-            asyncio.run(send_telegram_notification(
-                f"OpenAlgo API smoke test failed after {context} ({detail}) but recovered "
-                f"after a forced master-contract reload (heal_ran={healed}). Signals during "
-                "the outage window may have been dropped - check today's orderbook."
-            ))
-        except Exception:
-            logger.exception("Recovery notification failed (non-fatal)")
+        logger.warning(
+            "OpenAlgo API smoke test failed after %s (%s) but recovered after a forced "
+            "master-contract reload (heal_ran=%s). Signals during the outage window may have "
+            "been dropped - check today's orderbook.", context, detail, healed,
+        )
         return True
 
-    notify_failure(
-        f"{context}-api-smoke-test",
-        f"{detail2} (self-heal attempted, heal_ran={healed}, still failing)",
+    logger.error(
+        "%s-api-smoke-test FAILED: %s (self-heal attempted, heal_ran=%s, still failing). "
+        "The signal engine is NOT running. No trades will be taken.", context, detail2, healed,
     )
     return False
 
@@ -847,7 +833,7 @@ def build_startup_summary(
     order_type: str,
     channels: list,
 ) -> str:
-    """Build a human-readable startup summary for logs and Telegram.
+    """Build a human-readable startup summary for the log.
 
     Args:
         broker_name: Active broker.
@@ -900,7 +886,7 @@ def build_startup_summary(
 
 
 def build_shutdown_summary(broker_name: str, reason: str = "scheduled") -> str:
-    """Build a human-readable shutdown summary for logs and Telegram.
+    """Build a human-readable shutdown summary for the log.
 
     Args:
         broker_name: Active broker.
@@ -919,132 +905,6 @@ def build_shutdown_summary(broker_name: str, reason: str = "scheduled") -> str:
     ]
 
     return "\n".join(lines)
-
-
-async def send_telegram_notification(message: str, _client=None) -> bool:
-    """Send a message to all configured Telegram channels.
-
-    Args:
-        message: The formatted message string.
-        _client: Override TelegramClient for testing (DI).
-
-    Returns:
-        True if message sent successfully to at least one channel.
-    """
-    from utils.logging import get_logger
-    logger = get_logger(__name__)
-
-    try:
-        from signal_engine.config import settings
-
-        # Use dedicated notify_channel if configured, else fall back to signal channels.
-        # notify_channel is now {"analyze": ..., "live": ...} - broker-login status is
-        # mode-independent (it happens once a day regardless of analyze/live), so broadcast
-        # to every configured phase rather than picking one.
-        if settings.notify_channel:
-            notify_targets = list(settings.notify_channel.values())
-        elif settings.telegram_channels:
-            notify_targets = list(settings.telegram_channels)
-        else:
-            logger.warning("No Telegram channels configured, skipping notification")
-            return False
-
-        if _client is None:
-            from telethon import TelegramClient
-
-            session_path = "signal_engine/data/telegram"
-            client = TelegramClient(
-                session_path,
-                settings.telegram_api_id,
-                settings.telegram_api_hash,
-            )
-            await client.start(phone=settings.telegram_phone)
-            should_disconnect = True
-        else:
-            client = _client
-            should_disconnect = False
-
-        sent = False
-        for ch in notify_targets:
-            try:
-                await client.send_message(ch.id, message)
-                logger.info("Notification sent to channel: %s", ch.name)
-                sent = True
-            except Exception:
-                logger.exception(
-                    "Failed to send notification to channel: %s", ch.name
-                )
-
-        if should_disconnect:
-            await client.disconnect()
-
-        return sent
-
-    except Exception:
-        logger.exception("Failed to send Telegram notification")
-        return False
-
-
-def notify_failure(stage: str, detail: str, _send=None) -> bool:
-    """Announce a startup failure to Telegram.
-
-    Startup used to exit(1) before ever reaching the notification step, so a
-    failed auto-login was invisible: on 2026-08-24 a single 09:03 failure wrote
-    a 24h cooldown that blocked 80 further start attempts for the whole trading
-    day with nothing sent anywhere. Alerting has to happen on the failure path
-    itself, and it must never raise -- a dead Telegram must not mask the real
-    error underneath it.
-
-    Args:
-        stage: Which step failed (e.g. "auto-login", "broker-auth").
-        detail: The underlying error message.
-        _send: Override sender for testing (DI). Takes the message, returns bool.
-
-    Returns:
-        True if the alert was delivered to at least one channel.
-    """
-    from utils.logging import get_logger
-
-    logger = get_logger(__name__)
-
-    try:
-        host = os.uname().nodename
-    except Exception:
-        host = "unknown"
-
-    message = (
-        "OpenAlgo Startup FAILED\n"
-        "\n"
-        f"Stage : {stage}\n"
-        f"Error : {detail}\n"
-        f"Host  : {host}\n"
-        f"Time  : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        "\n"
-        "The signal engine is NOT running. No trades will be taken."
-    )
-
-    try:
-        sender = _send
-        if sender is None:
-            def sender(msg):
-                return asyncio.run(send_telegram_notification(msg))
-        return bool(sender(message))
-    except Exception:
-        logger.exception("Failed to send startup-failure alert (non-fatal)")
-        return False
-
-
-def _routine_notice_enabled() -> bool:
-    """Whether a success banner goes to Telegram (signal_engine.notifier.routine_status_enabled).
-
-    Unreadable config means send: a missing banner is the failure this must never cause.
-    """
-    try:
-        from signal_engine.notifier import routine_status_enabled
-
-        return routine_status_enabled()
-    except Exception:
-        return True
 
 
 # Exit code of the `tradingday` command when the exchange is closed.
@@ -1077,7 +937,7 @@ def tradingday_exit_code(today=None) -> int:
 
 
 def _run_startup():
-    """Full startup flow: login, verify, summarise, notify."""
+    """Full startup flow: login, verify, summarise. Every failure is logged and exits 1."""
     from utils.logging import get_logger
     logger = get_logger(__name__)
 
@@ -1086,12 +946,10 @@ def _run_startup():
         login_result = auto_login()
     except OSError as e:
         logger.error("Configuration error: %s", e)
-        notify_failure("configuration", str(e))
         sys.exit(1)
 
     if not login_result[0]:
         logger.error("Auto-login failed: %s", login_result[1])
-        notify_failure("auto-login", str(login_result[1]))
         sys.exit(1)
 
     # Unpack: (success, message, auth_token)
@@ -1103,17 +961,16 @@ def _run_startup():
     # which can fail if find_user_by_username() returns None in subprocess context.
     fund_data = verify_broker_auth(auth_token)
     if not fund_data:
-        logger.error("Broker auth token verification FAILED")
-        notify_failure(
-            "broker-auth",
-            "token returned by login did not work against the broker funds API",
+        logger.error(
+            "Broker auth token verification FAILED: the token returned by login did not work "
+            "against the broker funds API"
         )
         sys.exit(1)
 
     logger.info("Broker auth token verified - ready to trade")
 
     # 3. Prove OpenAlgo's own API (not just the broker) is usable with signal_engine's
-    # API key — self-heals via a forced master-contract reload, alerts either way.
+    # API key — self-heals via a forced master-contract reload, logs either way.
     # See _ensure_openalgo_api_usable's docstring for why step 2 above is not enough.
     if not _ensure_openalgo_api_usable("startup"):
         logger.error("OpenAlgo API smoke test failed and self-heal did not recover it")
@@ -1142,28 +999,14 @@ def _run_startup():
         if line.strip():
             logger.info(line)
 
-    # 5. Send Telegram notification (a clean scheduled login is routine; failures went out above)
-    if not _routine_notice_enabled():
-        logger.info("Startup summary not sent to Telegram (routine, notify_level)")
-    else:
-        try:
-            sent = asyncio.run(send_telegram_notification(summary))
-            if sent:
-                logger.info("Startup notification sent to Telegram")
-            else:
-                logger.warning("Startup notification not sent (no channels or send failed)")
-        except Exception:
-            logger.exception("Telegram notification failed (non-fatal)")
-
-    # 6. Weekly watchlist screen, LAST so it can never delay trading readiness or the
-    # notification above. Runs on whatever day the system actually next starts up
-    # rather than a fixed clock time - see watchlist_screen.py's module docstring for
-    # why, and why the Telegram send here does not race the listener's own session.
+    # 5. Weekly watchlist screen, LAST so it can never delay trading readiness. Runs on
+    # whatever day the system actually next starts up rather than a fixed clock time - see
+    # watchlist_screen.py's module docstring for why.
     try:
         from signal_engine.scripts.watchlist_screen import maybe_run_weekly_screen
 
         if maybe_run_weekly_screen():
-            logger.info("Weekly watchlist screen ran and notified Telegram")
+            logger.info("Weekly watchlist screen ran")
     except Exception:
         logger.exception("Weekly watchlist screen failed (non-fatal)")
 
@@ -1210,7 +1053,7 @@ def _revoke_broker_session_at_stop(
 
 
 def _run_shutdown(reason: str = "scheduled"):
-    """Shutdown flow: build summary, notify, exit."""
+    """Shutdown flow: build and log the summary, revoke the session."""
     from utils.logging import get_logger
     logger = get_logger(__name__)
 
@@ -1222,18 +1065,6 @@ def _run_shutdown(reason: str = "scheduled"):
             logger.info(line)
 
     _revoke_broker_session_at_stop(reason)
-
-    if not _routine_notice_enabled():
-        logger.info("Shutdown summary not sent to Telegram (routine, notify_level)")
-        return
-    try:
-        sent = asyncio.run(send_telegram_notification(summary))
-        if sent:
-            logger.info("Shutdown notification sent to Telegram")
-        else:
-            logger.warning("Shutdown notification not sent (no channels or send failed)")
-    except Exception:
-        logger.exception("Telegram notification failed (non-fatal)")
 
 
 def _healthcheck_broker_session():
@@ -1260,12 +1091,10 @@ def _healthcheck_broker_session():
         success, message, auth_token = auto_login()
     except OSError as e:
         logger.error("Healthcheck: configuration error: %s", e)
-        notify_failure("healthcheck", str(e))
         sys.exit(1)
 
     if not success:
         logger.error("Healthcheck: broker session dead and re-login FAILED: %s", message)
-        notify_failure("healthcheck", str(message))
         sys.exit(1)
 
     if message and "reused" in message.lower():
@@ -1275,15 +1104,11 @@ def _healthcheck_broker_session():
     # Non-reuse success means _totp_session_token() actually performed a
     # fresh TOTP login just now — the stored session was dead until this
     # check caught it.
-    logger.warning("Healthcheck: broker session had expired — auto re-login succeeded")
-    try:
-        asyncio.run(send_telegram_notification(
-            "Broker session had expired and was auto re-authenticated by the periodic "
-            "health check. Signals during the outage window may have been rejected, "
-            "delayed, or filled late at a stale price — check today's orderbook."
-        ))
-    except Exception:
-        logger.exception("Recovery notification failed (non-fatal)")
+    logger.warning(
+        "Healthcheck: broker session had expired — auto re-login succeeded. Signals during the "
+        "outage window may have been rejected, delayed, or filled late at a stale price — "
+        "check today's orderbook."
+    )
     return True
 
 
@@ -1310,13 +1135,13 @@ def _run_healthcheck():
     performs a fresh TOTP login when that check fails, so calling it every
     few minutes costs one cheap funds-API call in the common case (session
     still valid) and only pays for a real login when the session is actually
-    dead. This wraps it with quiet-by-default logging and alerts only on a
+    dead. This wraps it with quiet-by-default logging and logs a warning or error only on a
     genuine state change — session found dead, recovered, or re-login
     failing — not a message every cycle.
 
     Exit code 0 = session confirmed alive or recovered.
     Exit code 1 = session dead AND auto re-login also failed — the caller
-    (openalgoctl.sh) is expected to alert/cooldown same as a bootstrap
+    (openalgoctl.sh) is expected to log and cool down the same as a bootstrap
     failure, so a repeatedly-dead broker doesn't get hammered with logins.
     """
     logger = _log()
@@ -1331,7 +1156,7 @@ def _run_healthcheck():
     # 2026-09-28: the broker session was fine and verified every 15 minutes by this same
     # healthcheck, while /api/v1/funds and /api/v1/analyzer 403'd for ~90 minutes because
     # a master-contract download died mid-flight after the earlier login. Runs on every
-    # cycle, self-heals via a forced master-contract reload, and alerts either way.
+    # cycle, self-heals via a forced master-contract reload, and logs either way.
     if not _ensure_openalgo_api_usable("healthcheck"):
         logger.error("Healthcheck: OpenAlgo API smoke test failed and self-heal did not recover it")
         # Broker session is good yet OpenAlgo's own API still rejects us: the running app
@@ -1348,7 +1173,7 @@ _SQUAREOFF_CLOSE_RETRIES = 2
 #: server, and the close is account-wide: a second one sent too soon can close a position twice,
 #: which opens the opposite position.
 _SQUAREOFF_RETRY_DELAY_S = 15.0
-#: No retry starts after this many seconds, so the alert always goes out inside the task's
+#: No retry starts after this many seconds, so the failure is always logged inside the task's
 #: 5-minute limit.
 _SQUAREOFF_RETRY_DEADLINE_S = 180.0
 
@@ -1368,22 +1193,6 @@ def _open_mis_symbols(positions) -> list[str]:
     return still_open
 
 
-def _alert_squareoff_failed(detail: str, logger) -> None:
-    """Tell the trader the failsafe could not confirm a flat book. Never raises.
-
-    Sent whatever _routine_notice_enabled() says: that switch silences success banners only.
-    """
-    message = (
-        "14:55 safety square-off could not confirm that all intraday positions are closed "
-        f"({detail}). Check the position book now; the broker's own square-off is the only "
-        "remaining close."
-    )
-    try:
-        asyncio.run(send_telegram_notification(message))
-    except Exception:
-        logger.exception("Could not send the square-off failure alert")
-
-
 def _run_squareoff():
     """Afternoon failsafe: cancel all pending orders and close all MIS positions.
 
@@ -1395,8 +1204,8 @@ def _run_squareoff():
     The outcome is verified, not assumed: every cancel and close result is collected (a raised
     exception counts as a failure for that strategy and does not stop the others), a refused
     close is retried, and the position book is read once at the end. If any call still failed,
-    the book cannot be read, or an MIS position is still open, an alert is sent and the process
-    exits non-zero.
+    the book cannot be read, or an MIS position is still open, a CRITICAL line is logged and the
+    process exits non-zero.
     """
     from signal_engine.api_client import cancel_all_orders, close_all_positions, fetch_positionbook
     from signal_engine.config import settings
@@ -1484,19 +1293,13 @@ def _run_squareoff():
 
     if problems:
         detail = "; ".join(problems)
-        logger.critical(f"Squareoff: FAILED, flat position not confirmed ({detail})")
-        _alert_squareoff_failed(detail, logger)
+        logger.critical(
+            f"Squareoff: FAILED, flat position not confirmed ({detail}). Check the position book "
+            "now; the broker's own square-off is the only remaining close."
+        )
         sys.exit(1)
 
     logger.info("Squareoff: confirmed flat")
-
-    if not _routine_notice_enabled():
-        return  # the failsafe ran as scheduled; anything left open shows in the close-day report
-    try:
-        msg = f"Squareoff 14:55 (failsafe): {', '.join(mis_strategies)} processed, book is flat"
-        asyncio.run(send_telegram_notification(msg))
-    except Exception:
-        pass
 
 
 if __name__ == "__main__":
@@ -1517,13 +1320,7 @@ if __name__ == "__main__":
         sys.exit(tradingday_exit_code())
     elif command == "healthcheck":
         _run_healthcheck()
-    elif command == "notify":
-        # Lets openalgoctl.sh raise an alert from shell without duplicating
-        # Telegram wiring. Arg 2 is the stage, the rest is the detail.
-        stage = sys.argv[2] if len(sys.argv) > 2 else "supervisor"
-        detail = " ".join(sys.argv[3:]) if len(sys.argv) > 3 else "(no detail)"
-        sys.exit(0 if notify_failure(stage, detail) else 1)
     else:
         print("Usage: python -m signal_engine.scripts.openalgoscheduler "
-              "[startup|shutdown|squareoff|tradingday|healthcheck|notify] [reason|stage] [detail...]")
+              "[startup|shutdown|squareoff|tradingday|healthcheck] [reason]")
         sys.exit(1)

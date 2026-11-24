@@ -11,7 +11,7 @@ Canonical format:
     Time: 09:20        (optional)
 
 The normalizer handles:
-- Phase tag stripping ("[PAPER] "/"[LIVE] ", prepended by alerts.py/notifier.py's send paths)
+- Phase tag stripping ("[PAPER] "/"[LIVE] ", prepended by alerts.py's send())
 - Emoji/unicode decoration stripping
 - Separator line removal (dashes, equals, underscores)
 - TP HIT alerts: "[STRATEGY] TP1 HIT | SYMBOL" -> canonical "STRATEGY EXIT" format (0.0 placeholders)
@@ -42,7 +42,7 @@ _EMOJI_RE = re.compile(
 # Separator-only lines: dashes, equals, underscores, box-drawing chars
 _SEPARATOR_RE = re.compile(r"^[\-=_\s\u2500-\u257F]+$")
 
-# Phase tag alerts.py/notifier.py's send()/_deliver() prepend to EVERY outgoing message
+# Phase tag alerts.py's send() prepends to EVERY trade signal it posts
 # ("[PAPER] "/"[LIVE] ", see alerts.py's _PHASE_TAG) so a screenshot alone always says whether
 # it describes real money. BreakingTrade's trade-signal alerts are self-referential - the same
 # module both posts them and the engine's own Telethon listener reads them back - so this tag

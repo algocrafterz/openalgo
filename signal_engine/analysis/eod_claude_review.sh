@@ -109,8 +109,8 @@ you have, then the verdict block, then the tracker block.
 
 Just before that last block, write the day's verdict as a fenced code block with the info string
 close-day-verdict holding one JSON object: {"verdict": "GREEN" | "AMBER" | "RED", "line": "<one
-sentence a trader reads on Telegram: net P&L after charges and the one thing that needs attention,
-or 'nothing needs attention'>"}. close_day.sh sends that line; it is the day's only Telegram message.
+sentence a trader reads on the /logs/workflow page: net P&L after charges and the one thing that
+needs attention, or 'nothing needs attention'>"}. Nothing is sent to Telegram.
 
 The very last thing in your response is the bug-tracker block described in
 .claude/skills/bug-tracker/SKILL.md ("Unattended runs"): a fenced code block with the info

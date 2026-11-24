@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from loguru import logger
 
-from signal_engine import db, notifier, order_reconcile
+from signal_engine import db, order_reconcile
 from signal_engine.api_client import (
     cancel_order,
     fetch_net_position,
@@ -450,10 +450,8 @@ _BASELINE_READ_ATTEMPTS = 3  # startup reads of the day's realised P&L before gi
 _BASELINE_RETRY_SECONDS = 2.0
 
 
-#: A failing poll alerts on its first failure and then at most this often while it keeps failing.
+#: A failing poll is logged on its first failure and then at most this often while it keeps failing.
 _POLL_ALERT_INTERVAL_S = 300
-#: A Telegram send inside the poll loop is bounded so it can never stall the loop.
-_POLL_ALERT_SEND_TIMEOUT_S = 5.0
 
 
 class PositionTracker:
@@ -528,21 +526,6 @@ class PositionTracker:
         self._positionbook_failures = 0
         self._positionbook_outage_alerted = False
 
-    def day_context_line(self, max_trades: int | None = None) -> str:
-        """Compact per-day running context, from trades.db - carried on EVERY close message.
-
-        This read the in-memory counters, which __init__ sets to zero, so after a restart
-        every close notification understated the day. The engine restarted twice on
-        2026-09-11. Nothing user-facing is sourced from memory any more.
-        """
-        _records, counts = self._day_from_db()
-        return notifier.format_day_context(
-            day_trades=counts["trades"],
-            day_wins=counts["wins"],
-            day_losses=counts["losses"],
-            day_pnl=counts["net_pnl"],
-            max_trades=max_trades,
-        )
 
     def _should_log_debug(self, key: str, kind: str, interval_sec: int = 60) -> bool:
         """Return True if enough time has elapsed since the last debug log for this key/kind."""
@@ -726,16 +709,16 @@ class PositionTracker:
         """Book a position that has closed for good, and return its trade record.
 
         Single home for what every full-close path shares: derive the trade's
-        economics, file the trade record, advance the day counters, and send the
-        close notification. Used by the signal-driven exit, the SL-HIT reconcile and
+        economics, file the trade record, advance the day counters, and log the
+        close. Used by the signal-driven exit, the SL-HIT reconcile and
         the tracker's own close detection.
 
         The caller keeps what is specific to its path — cancelling broker orders,
         unregistering the position, releasing the risk slot, and deciding whether the
         day summary should now go out.
 
-        Time exit does not use this: it notifies through notify_time_exit and
-        attributes P&L across positions rather than per close.
+        Time exit does not use this: it books its own close and attributes P&L
+        across positions rather than per close.
         """
         base_price = pos.fill_price if pos.fill_price > 0 else pos.entry_price
         total_pnl = pos.realized_pnl + pnl_delta
@@ -754,7 +737,7 @@ class PositionTracker:
         )
         self.add_trade_record(record)
         # The audit trail, not just the in-memory record. Without this the close reaches the
-        # day counters and Telegram but never trades.db - which every performance report and
+        # day counters but never trades.db - which every performance report and
         # the ledger read - so the next restart's reconciliation books it a second time from
         # the broker's figures. See db.save_tracker_exit().
         #
@@ -780,24 +763,6 @@ class PositionTracker:
             new_realised_pnl=new_realised_pnl,
             exit_types=exit_types,
         )
-        # The close is already in the ledger and the counters. A failing notification must not
-        # raise from here: the caller would treat the close as unbooked, release the position and
-        # let the poll book the same close again (I2).
-        try:
-            await notifier.notify_position_closed(
-                pos.symbol,
-                total_pnl,
-                strategy=pos.strategy,
-                exit_price=exit_price,
-                direction=pos.direction.value,
-                r_multiple=record.r_multiple,
-                entry_price=base_price,
-                hold_minutes=hold_minutes,
-                exit_types=exit_types,
-                day_context=self.day_context_line(max_trades),
-            )
-        except Exception:
-            logger.exception(f"Close notification failed for {pos.symbol}; the close stays booked")
         return record
 
     @staticmethod
@@ -828,8 +793,8 @@ class PositionTracker:
         )
 
     async def send_day_summary(self) -> None:
-        """Send day summary to notify channel. No-op if already sent today with nothing new
-        to report since.
+        """Mark the trading day done and run the reconciliation canary. No-op if already done
+        today with nothing new to report since.
 
         Called when the last open position closes (SL hit or TP exit), and again at
         time_exit if any positions remain. Deduped via _day_summary_sent flag.
@@ -839,8 +804,8 @@ class PositionTracker:
         maybe_send_day_summary() instead; this is the low-level primitive time_exit_all()
         itself uses once the day is genuinely over.
 
-        Self-correcting: if a summary already went out today but trades.db now shows MORE
-        completed trades than that summary reported, this sends a corrected one rather than
+        Self-correcting: if the day was already marked today but trades.db now shows MORE
+        completed trades than that mark recorded, this marks it again (and re-runs the canary) rather than
         staying silent for the rest of the day. 2026-09-17: a premature send (a handful of
         trades in, mid-morning) permanently blocked the real 14:45 EOD summary under the old
         pure "sent or not" guard — every caller of this method already applies its own gate
@@ -849,48 +814,19 @@ class PositionTracker:
         call is exactly the case this correction exists for.
         """
         today = datetime.now(IST).date()
-        records, counts, degraded = self._day_from_db(want_degraded=True)
+        _records, counts = self._day_from_db()
         if self._day_summary_date == today or _summary_already_sent_today():
             prior_count = _prior_summary_trade_count()
             if prior_count is None or counts["trades"] <= prior_count:
                 return
             logger.warning(
-                f"Day summary: an earlier send today covered only {prior_count} trade(s); "
-                f"{counts['trades']} are on record now - sending a corrected summary."
+                f"Day summary: the earlier mark today covered only {prior_count} trade(s); "
+                f"{counts['trades']} are on record now - marking the day again."
             )
-        capital = self._risk_engine.total_last_known_capital() or 0.0
-        # Per-strategy opening capital, for the per-strategy EOD summaries notifier.py sends
-        # alongside the consolidated one — each strategy sizes off its OWN cached day-start
-        # capital (see RiskEngine's per-strategy isolation), so the consolidated Capital: X -> Y
-        # line is only ever meaningful per strategy, never pooled across them.
-        strategy_capital = {
-            r.strategy: self._risk_engine.last_known_capital_for(r.strategy) for r in records
-        }
-        if notifier.day_summary_enabled():
-            sent = await notifier.notify_day_summary(
-                trades=counts["trades"],
-                wins=counts["wins"],
-                losses=counts["losses"],
-                net_pnl=counts["net_pnl"],
-                capital=capital,
-                time_exits=counts["time_exits"],
-                trade_records=records,
-                strategy_capital=strategy_capital,
-                degraded=degraded,
-            )
-        else:
-            # notify_level `alerts`: the summary is on the GUI. The day is still marked and the
-            # reconciliation canary below still runs; a False here would be retried all day.
-            logger.info("Day summary not sent: notify_level suppresses it")
-            sent = True
-        if not sent:
-            # 2026-09-09: this used to mark itself done unconditionally, so a Telegram
-            # client that wasn't ready yet (transient - the client connects moments after
-            # the listener starts) silently ate the day summary for good, with nothing to
-            # retry against for the rest of the day. Leave both markers unset so the next
-            # caller (poll cycle, restart) tries again.
-            logger.warning("Day summary NOT delivered (notifier not ready) - will retry")
-            return
+        # No message is sent (outgoing Telegram notifications were removed in November 2026;
+        # the day is on the P&L and Performance pages). The day is marked done and the
+        # reconciliation canary below still runs, in the same cases as before the removal.
+        logger.info(f"Day summary: {counts['trades']} trade(s) on record; day marked done")
         self._day_summary_date = today
         _mark_summary_sent(counts["trades"])
 
@@ -904,7 +840,7 @@ class PositionTracker:
         except Exception as e:  # noqa: BLE001 - the canary must never break the summary
             logger.warning(f"Day summary: reconciliation check failed: {e}")
 
-    def _day_from_db(self, *, want_degraded: bool = False):
+    def _day_from_db(self):
         """(trade_records, counts) for today, read from trades.db.
 
         The in-memory counters are only what happened since the engine last started, so a
@@ -931,7 +867,7 @@ class PositionTracker:
                     "execution_exits": 0,
                 },
             )
-            return (*memory, True) if want_degraded else memory
+            return memory
 
         records = [
             TradeRecord(
@@ -964,7 +900,7 @@ class PositionTracker:
                 1 for r in records if db.EXIT_BAD_FILL_CLOSE in (r.exit_types or [])
             ),
         }
-        return (records, counts, False) if want_degraded else (records, counts)
+        return records, counts
 
     @staticmethod
     def _trade_mode_for_db() -> str:
@@ -980,8 +916,8 @@ class PositionTracker:
         max_trades_per_day still have room. send_day_summary() is one-shot (guarded by
         _day_summary_sent), so calling it the instant positions hit zero would
         permanently lock in an incomplete tally for the rest of the session — every
-        later trade would still update the in-memory counters but never reach
-        Telegram. Deferred to within 30 minutes of the scheduled time exit, or sent
+        later trade would still update the in-memory counters but never reach the
+        day-done marker. Deferred to within 30 minutes of the scheduled time exit, or sent
         immediately if time_exit is disabled entirely (nothing to defer to).
 
         Every full-close path should call this rather than send_day_summary()
@@ -1032,20 +968,6 @@ class PositionTracker:
             f"for {len(self._positions)} open position(s) until OpenAlgo answers again."
         )
         logger.critical(message.replace("\n", " "))
-        try:
-            delivered = await notifier.notify_event("positionbook_outage", message)
-        except Exception as e:  # noqa: BLE001 - alerting must not break the poll loop
-            logger.warning(f"Could not send positionbook outage alert: {e}")
-            return
-        if not delivered:
-            # Same class of bug as 2026-09-09's day summary (see notifier.notify()): marking
-            # this "alerted" on a silent no-op (notifier not ready, channel unconfigured)
-            # would permanently suppress the one alert that exists to say tracking is blind -
-            # leave the flag unset so the next failed poll retries the send.
-            logger.warning(
-                "Positionbook outage alert NOT delivered (notifier not ready) - will retry"
-            )
-            return
         self._positionbook_outage_alerted = True
 
     async def _note_positionbook_success(self) -> None:
@@ -1054,17 +976,6 @@ class PositionTracker:
             self._positionbook_outage_alerted = False
             failures = self._positionbook_failures
             logger.info(f"Positionbook recovered after {failures} failed polls")
-            try:
-                delivered = await notifier.notify_event(
-                    "positionbook_recovered",
-                    f"Position tracking RESUMED after {failures} failed polls.",
-                )
-                if not delivered:
-                    logger.warning(
-                        "Positionbook recovery alert NOT delivered (notifier not ready)"
-                    )
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"Could not send positionbook recovery alert: {e}")
         self._positionbook_failures = 0
 
     def _push_unrealised(self, book_data: dict) -> None:
@@ -1179,7 +1090,7 @@ class PositionTracker:
         return out
 
     async def _check_mode_flip(self) -> None:
-        """Notice a mid-session OpenAlgo mode change and alert on it.
+        """Notice a mid-session OpenAlgo mode change and log it.
 
         The poll loop is the only thing running continuously all session, so it is where
         this belongs. mode_guard does the comparing and the halting (and reports a flip
@@ -1191,12 +1102,7 @@ class PositionTracker:
         new_phase = await mode_guard.check_for_flip()
         if new_phase is None:
             return
-        try:
-            await notifier.notify_event(
-                "mode_flip_halt", f"ENTRIES HALTED\n{mode_guard.halt_reason()}"
-            )
-        except Exception as e:
-            logger.warning(f"Could not send mode-flip alert: {e}")
+        logger.critical(f"ENTRIES HALTED: {mode_guard.halt_reason()}")
 
     def _log_standdown(self) -> None:
         now = time.monotonic()
@@ -1308,12 +1214,9 @@ class PositionTracker:
             await self._audit_duplicate_stops()
             await resolve_pending_duplicate_stops()
             for strategy, symbol, _action in escalations():
-                logger.error(f"Duplicate stop cleanup for {symbol} [{strategy}] failed repeatedly")
-                await notifier.notify_sl_failed(
-                    symbol,
-                    "duplicate protective stop cleanup is unresolved after repeated attempts; "
-                    "more than one live stop may exist - check the order book",
-                    strategy=strategy,
+                logger.error(
+                    f"Duplicate stop cleanup for {symbol} [{strategy}] failed repeatedly; more "
+                    "than one live stop may exist - check the order book"
                 )
         except Exception:  # noqa: BLE001 - see docstring
             logger.exception("Protective stop reconciliation failed")
@@ -1372,14 +1275,6 @@ class PositionTracker:
             pos.sl_order_id = ""
             pos.sl_retry_count = 0
             pos.last_sl_retry_at = None
-            try:
-                await notifier.notify(
-                    f"{pos.symbol} [{pos.strategy}]: the broker {'rejected' if status == 'rejected' else 'cancelled'} "
-                    "the stop-loss order after it was placed, so the position had no stop. "
-                    "The engine is placing a new stop-loss now."
-                )
-            except Exception:  # noqa: BLE001 - the alert must not stop the repair
-                logger.exception(f"{key}: could not send the dead-stop alert")
 
     async def _retry_missing_sl(self, book_data: dict, _settings) -> None:
         """Re-attempt SL placement for positions whose initial bracket exhausted.
@@ -1445,12 +1340,6 @@ class PositionTracker:
                 if result.status == OrderStatus.SUCCESS:
                     pos.sl_order_id = result.order_id
                     logger.info(f"SL re-placed for {key}: id={result.order_id}")
-                    await notifier.notify_sl_placed(
-                        pos.symbol,
-                        result.order_id,
-                        strategy=pos.strategy,
-                        sl_price=pos.sl,
-                    )
                 elif result.message == HOLD_MESSAGE:
                     # Nothing was sent: an earlier submission is still unresolved. That is not a
                     # failed re-attempt, so it must not use one up.
@@ -1467,7 +1356,7 @@ class PositionTracker:
                         else f"STILL UNPROTECTED after {pos.sl_retry_count} attempts, "
                         f"retrying every {_UNPROTECTED_SLOW_CYCLE_S:.0f}s: {result.message}"
                     )
-                    await notifier.notify_sl_failed(pos.symbol, reason, strategy=pos.strategy)
+                    logger.error(f"SL FAILED | {pos.symbol} [{pos.strategy}]: {reason}")
 
     async def _adopt_late_stop(self, key: str, pos) -> bool:
         """Reconcile only: adopt a stop that landed after every submission looked unresolved."""
@@ -1489,9 +1378,6 @@ class PositionTracker:
             return False
         pos.sl_order_id = found.order_id
         logger.info(f"SL adopted for {key}: id={found.order_id}")
-        await notifier.notify_sl_placed(
-            pos.symbol, found.order_id, strategy=pos.strategy, sl_price=pos.sl
-        )
         return True
 
     async def _check_one_position(self, key: str, pos, book_data: dict, _settings) -> bool:
@@ -1630,7 +1516,7 @@ class PositionTracker:
             last = pos.absent_alerted_at
             if last is None or now - last >= _ABSENT_ALERT_REPEAT_S:
                 pos.absent_alerted_at = now
-                await self._send_poll_alert("position_absent_unproven", alert_text)
+                self._log_poll_alert("position_absent_unproven", alert_text)
 
     def _position_too_young(self, key: str, age: timedelta, _settings) -> bool:
         """Guard 1 — a freshly registered position showing qty=0 is usually positionbook lag.
@@ -1745,7 +1631,7 @@ class PositionTracker:
         return _FILL_ORPHANED
 
     async def _release_orphan(self, key: str, pos, reason: str) -> None:
-        """Cancel any orphaned SL, release the risk slot, flag the trade record, and alert.
+        """Cancel any orphaned SL, release the risk slot, flag the trade record, and log it.
 
         "No trade recorded" here means the tracker stops managing the position - but
         db.save() already wrote an entry row optimistically at order-placement time, and this
@@ -1762,12 +1648,9 @@ class PositionTracker:
             from signal_engine import db
 
             db.flag_data_quality(pos.entry_order_id, db.DATA_QUALITY_EXECUTION_ISSUE, reason)
-        await notifier.notify_orphaned_position(
-            pos.symbol,
-            pos.strategy,
-            pos.direction.value,
-            pos.entry_order_id,
-            reason,
+        logger.error(
+            f"ORPHANED POSITION {key}: {pos.direction.value} entry {pos.entry_order_id or '-'} "
+            f"released, no trade recorded: {reason}"
         )
 
     async def _book_broker_close(
@@ -1884,7 +1767,7 @@ class PositionTracker:
             # The close is already counted. Returning False here would make the next poll
             # count it again (the loss added twice, open_positions decremented twice).
             logger.exception(f"{key}: close counted but the trade record could not be saved")
-            await self._send_poll_alert(
+            self._log_poll_alert(
                 "close_record_failed",
                 f"{pos.symbol} [{pos.strategy}] closed and its result was counted, but the "
                 "trade record could not be fully saved. Check today's trades for this position.",
@@ -2331,12 +2214,10 @@ class PositionTracker:
             logger.error(f"No-progress market exit failed for {pos.symbol}: {result.message}")
             self._drop_no_progress_label(pos)
             restored = await self._restore_stop_after_failed_exit(pos)
-            await notifier.notify_sl_failed(
-                pos.symbol,
-                f"No-progress market exit failed after {age.total_seconds() / 60:.0f}min: "
-                f"{result.message}. "
-                + ("Stop restored." if restored else "Stop NOT restored - position unprotected."),
-                strategy=pos.strategy,
+            logger.error(
+                f"SL FAILED | {pos.symbol} [{pos.strategy}]: No-progress market exit failed after "
+                f"{age.total_seconds() / 60:.0f}min: {result.message}. "
+                + ("Stop restored." if restored else "Stop NOT restored - position unprotected.")
             )
             return
 
@@ -2356,25 +2237,18 @@ class PositionTracker:
                 self._drop_no_progress_label(pos)
                 pos.sl_order_id = ""
                 restored = await self._restore_stop_after_failed_exit(pos)
-                await notifier.notify_sl_failed(
-                    pos.symbol,
-                    f"No-progress market exit was {word} by the broker after "
-                    f"{age.total_seconds() / 60:.0f}min. "
-                    + ("Stop restored." if restored else "Stop NOT restored - position unprotected."),
-                    strategy=pos.strategy,
+                logger.error(
+                    f"SL FAILED | {pos.symbol} [{pos.strategy}]: No-progress market exit was "
+                    f"{word} by the broker after {age.total_seconds() / 60:.0f}min. "
+                    + ("Stop restored." if restored else "Stop NOT restored - position unprotected.")
                 )
                 return
         # book_close() reads sl_order_id as "the order that will close this position" -
         # the SL was just cancelled above, so this is the only closing order id we have.
         pos.sl_order_id = result.order_id
-        await notifier.notify_no_progress_exit(
-            pos.symbol,
-            ltp,
-            base_entry,
-            progress,
-            strategy=pos.strategy,
-            direction=pos.direction.value,
-            age_minutes=int(age.total_seconds() / 60),
+        logger.info(
+            f"No-progress exit | {pos.symbol} [{pos.strategy}] ltp={ltp:.2f} entry={base_entry:.2f} "
+            f"progress={progress:.0%} age={int(age.total_seconds() / 60)}min"
         )
 
         # Book the close now, from this order's own confirmed fill - do not leave it for the
@@ -2424,7 +2298,7 @@ class PositionTracker:
                 f"{pos.symbol} [{pos.strategy}]: no-progress close counted but the trade record "
                 "could not be saved"
             )
-            await self._send_poll_alert(
+            self._log_poll_alert(
                 "close_record_failed",
                 f"{pos.symbol} [{pos.strategy}] closed and its result was counted, but the "
                 "trade record could not be fully saved. Check today's trades for this position.",
@@ -2468,7 +2342,6 @@ class PositionTracker:
 
     async def _no_progress_break_even(self, pos, age, ltp, base_entry, be_price, progress) -> None:
         """Move the stop to break-even (or the profit-lock price) on a stalled position."""
-        original_sl = pos.sl  # captured before the assignment below overwrites it
         sl_result = await place_sl_order(
             symbol=pos.symbol,
             exchange=pos.exchange,
@@ -2484,23 +2357,10 @@ class PositionTracker:
             logger.info(
                 f"Break-even SL placed for {pos.symbol}: {be_price:.2f} id={sl_result.order_id}"
             )
-            await notifier.notify_be_stop_applied(
-                pos.symbol,
-                be_price,
-                ltp,
-                progress,
-                strategy=pos.strategy,
-                direction=pos.direction.value,
-                age_minutes=int(age.total_seconds() / 60),
-                entry_price=base_entry,
-                original_sl=original_sl if original_sl != be_price else None,
-            )
         else:
-            logger.error(f"No-progress: break-even SL failed for {pos.symbol}: {sl_result.message}")
-            await notifier.notify_sl_failed(
-                pos.symbol,
-                f"Break-even SL failed after {age.total_seconds() / 60:.0f}min no-progress: {sl_result.message}",
-                strategy=pos.strategy,
+            logger.error(
+                f"No-progress: break-even SL failed for {pos.symbol} [{pos.strategy}] after "
+                f"{age.total_seconds() / 60:.0f}min: {sl_result.message}"
             )
 
     async def time_exit_all(self) -> None:
@@ -2561,10 +2421,6 @@ class PositionTracker:
                 # The reads below would begin after the deadline. The closes stay tracked and the
                 # poll books them from the position book.
                 logger.warning("Time exit: hard deadline reached, booking left to the position poll")
-                await notifier.notify(
-                    "TIME EXIT: the time exit reached its 14:54:30 cut-off before it could book "
-                    "its closes. They are booked by the next position check."
-                )
             elif closed:
                 # A leg whose exit order result is unknown may still fill: the sweep never lists or
                 # cancels that leg's orders (its strategy and symbol), so the exit order stays. The
@@ -2824,7 +2680,7 @@ class PositionTracker:
                 )
         else:
             body = await self._left_open_state(strategy, symbols)
-        await notifier.notify(f"{head} {body}")
+        logger.error(f"{head} {body}")
 
     async def _left_open_state(self, strategy: str, symbols: set[str]) -> str:
         """Read the strategy's stop status and own position and describe them for the trader.
@@ -3075,12 +2931,8 @@ class PositionTracker:
                     continue
                 logger.critical(
                     f"Time exit: {key} - an exit is still in progress after "
-                    f"{_EXIT_LOCK_WAIT_SECONDS:.0f}s; no second order sent"
-                )
-                await notifier.notify(
-                    f"TIME EXIT: {pos.symbol} [{strategy}] was not closed by the time exit because "
-                    "an exit for it is still running. Check the position book before the broker "
-                    "square-off."
+                    f"{_EXIT_LOCK_WAIT_SECONDS:.0f}s; no second order sent. Check the position book "
+                    "before the broker square-off."
                 )
                 continue
             try:
@@ -3101,12 +2953,8 @@ class PositionTracker:
         if qty <= 0:
             logger.critical(
                 f"Time exit: {key} - the broker position leaves nothing for this leg to "
-                f"close (tracked {pos.quantity}); no order sent"
-            )
-            await notifier.notify(
-                f"TIME EXIT: {pos.symbol} [{strategy}] was not closed. The broker position "
-                f"does not hold this strategy's {pos.quantity} shares. Check the position "
-                "book before the broker square-off."
+                f"close (tracked {pos.quantity}); no order sent. Check the position book before the "
+                "broker square-off."
             )
             return
         order = build_exit_order(
@@ -3236,7 +3084,7 @@ class PositionTracker:
         strategies is still working; a cancel API "success" is not taken as proof.
 
         A working order (or an unreadable order book) is re-cancelled up to _CANCEL_RETRIES times.
-        If that cannot be confirmed, a critical log and a Telegram alert go out, whether or not the
+        If that cannot be confirmed, a critical line is logged, whether or not the
         positions are flat: a stop left working on a flat position can later open a reversed one.
         Cancels only: this never places an order.
         """
@@ -3249,12 +3097,8 @@ class PositionTracker:
             return
         logger.critical(
             f"Time exit: pending orders for {', '.join(sorted(strategies))} not confirmed cancelled "
-            f"({detail}); a stop order may still be working and could open a new position"
-        )
-        await notifier.notify(
-            f"TIME EXIT: pending orders for {', '.join(sorted(strategies))} not confirmed cancelled "
-            f"({detail}). A stop order may still be working and could open a new position - "
-            "check the order book now."
+            f"({detail}); a stop order may still be working and could open a new position - "
+            "check the order book now"
         )
 
     async def _clear_working_orders(
@@ -3407,42 +3251,35 @@ class PositionTracker:
         symbols_str = ", ".join(pos.symbol for _, pos in pending)
         logger.error(
             f"Time exit: FAILED to close {symbols_str} after {_MAX_CLOSE_ATTEMPTS} attempts. "
-            f"Broker auto-square-off will apply charges!"
-        )
-        await notifier.notify(
-            f"TIME EXIT FAILED: {symbols_str} not closed after {_MAX_CLOSE_ATTEMPTS} attempts. "
-            f"Close manually before 15:20!"
+            f"Broker auto-square-off will apply charges! Close manually before 15:20."
         )
         return left_open | held_open | {k for k, _ in pending}
 
     async def _alert_held_exits(self, held: list) -> None:
-        """The one time-exit alert per strategy and pass for legs whose exit result is not known."""
+        """The one time-exit log line per strategy and pass for legs whose exit result is not known."""
         for strategy in sorted({p.strategy for _, p in held}):
             if strategy in self._skip_alerted:
-                continue  # this strategy's alert for the pass has already gone out
+                continue  # this strategy's line for the pass has already been logged
             self._skip_alerted.add(strategy)
             names = sorted({p.symbol for _, p in held if p.strategy == strategy})
-            logger.critical(f"Time exit: exit order result not known for {strategy}: {', '.join(names)}; held")
-            one = len(names) == 1
-            await notifier.notify(
-                f"TIME EXIT {strategy}: the exit order for {', '.join(names)} was sent but "
-                f"{'its result is' if one else 'their results are'} not known. Do not exit by hand "
-                "while it may still fill. The 14:55 square-off closes anything left open."
+            logger.critical(
+                f"Time exit: exit order result not known for {strategy}: {', '.join(names)}; held. "
+                "Do not exit by hand while it may still fill. The 14:55 square-off closes anything "
+                "left open."
             )
 
     async def _unverified_at_deadline(self, left_open: set, still_open: list, unverified: list) -> set:
         """The hard deadline came before every close could be checked.
 
         Those positions are not claimed closed: they stay tracked and open in the result, and the
-        poll books them when the position book shows them flat. One alert lists them.
+        poll books them when the position book shows them flat. One log line lists them.
         """
         keys = {k for k, _ in still_open} | {k for k, _ in unverified}
         symbols = ", ".join(sorted({pos.symbol for _, pos in still_open + unverified})) or "the closed positions"
-        logger.error(f"Time exit: closes not verified before the hard deadline: {symbols}")
-        await notifier.notify(
-            f"TIME EXIT: could not confirm that {symbols} closed before the 14:54:30 cut-off. "
-            "The close orders were sent. Check the position book now; the broker square-off at "
-            "14:55 closes anything still open."
+        logger.error(
+            f"Time exit: closes not verified before the hard deadline: {symbols}. The close orders "
+            "were sent. Check the position book now; the broker square-off at 14:55 closes "
+            "anything still open."
         )
         return left_open | keys
 
@@ -3460,11 +3297,7 @@ class PositionTracker:
         symbols_str = ", ".join(pos.symbol for pos in positions)
         logger.error(
             f"Time exit: could not read the broker position for {symbols_str}; "
-            "treated as closed, not confirmed"
-        )
-        await notifier.notify(
-            f"TIME EXIT UNVERIFIED: could not read the broker position for {symbols_str}. "
-            "It is treated as closed but this is not confirmed - check the position book now."
+            "treated as closed, not confirmed - check the position book now"
         )
 
     async def _book_time_exit_trades(
@@ -3525,7 +3358,7 @@ class PositionTracker:
                     used_order_ids=used_order_ids,
                 )
         if deferred:
-            await notifier.notify(
+            logger.warning(
                 "TIME EXIT: the time exit reached its 14:54:30 cut-off before it could book "
                 f"{', '.join(deferred)}. They are booked by the next position check."
             )
@@ -3604,7 +3437,6 @@ class PositionTracker:
         total_pnl = pos.realized_pnl + per_pos_pnl
         exit_types = pos.exit_types[:] + ["TIME"]
         r = _compute_r(total_pnl, pos.original_quantity or pos.quantity, base_price, pos.sl)
-        hold_min = int((datetime.now(IST) - pos.entry_time).total_seconds() / 60)
         self._completed_trades.append(
             TradeRecord(
                 symbol=pos.symbol,
@@ -3635,27 +3467,6 @@ class PositionTracker:
         self._risk_engine.record_close(pnl=per_pos_pnl, strategy=pos.strategy, symbol=pos.symbol)
         self._day_trades += 1
         self._day_time_exits += 1
-        try:
-            await notifier.notify_time_exit(
-                pos.symbol,
-                strategy=pos.strategy,
-                direction=pos.direction.value,
-                pnl=total_pnl,
-                r_multiple=r,
-                entry_price=base_price,
-                hold_minutes=hold_min,
-                day_context=self.day_context_line(_settings.max_trades_per_day),
-            )
-        except Exception:
-            # The close is already counted (record_close above). Leaving the position registered
-            # would let the next poll count it again.
-            logger.exception(f"{key}: time exit counted but its notification could not be sent")
-            await self._send_poll_alert(
-                "close_record_failed",
-                f"{pos.symbol} [{pos.strategy}] closed at the square-off and its result was "
-                "counted, but the close message could not be sent. Check today's trades for "
-                "this position.",
-            )
         logger.info(f"Time exit: cleared tracker entry {key}")
         del self._positions[key]
 
@@ -3728,14 +3539,14 @@ class PositionTracker:
         """IST time of the last poll that finished without an error, None before the first."""
         return self._last_poll_ok_at
 
-    async def _send_poll_alert(self, event: str, text: str) -> None:
-        """Send a poll-supervision alert; bounded and guarded so it can never stall the loop."""
-        try:
-            await asyncio.wait_for(
-                notifier.notify_event(event, text), timeout=_POLL_ALERT_SEND_TIMEOUT_S
-            )
-        except Exception:  # noqa: BLE001 - an alert failure must not end the poll loop
-            logger.warning(f"Could not send the tracker poll alert ({event})")
+    @staticmethod
+    def _log_poll_alert(event: str, text: str, level: str = "ERROR") -> None:
+        """Log a poll-supervision event; it never raises, so it can never stall the loop.
+
+        A failure is ERROR. A recovery is INFO: it reports good news and must not be counted
+        with the errors.
+        """
+        logger.log(level, f"Tracker poll alert ({event}): {text}")
 
     async def _note_poll_failed(self) -> None:
         self._poll_failures += 1
@@ -3745,7 +3556,7 @@ class PositionTracker:
             return
         self._poll_last_alert_at = now
         self._poll_alerted = True
-        await self._send_poll_alert(
+        self._log_poll_alert(
             "tracker_poll_failed",
             "Position tracker check failed and is being retried. Open positions keep their "
             "broker stop-loss orders, but closes and missing stops are not being detected "
@@ -3758,10 +3569,11 @@ class PositionTracker:
             return
         self._poll_alerted = False
         self._poll_last_alert_at = None
-        await self._send_poll_alert(
+        self._log_poll_alert(
             "tracker_poll_recovered",
             "Position tracker is checking positions again. Closes and missing stops are "
             "being detected.",
+            level="INFO",
         )
 
     def stop(self) -> None:
@@ -3828,7 +3640,7 @@ class TimeExitScheduler:
             await asyncio.sleep(5)
 
     async def _fire(self) -> None:
-        """Run the time exit once. A failure is logged and alerted, never raised.
+        """Run the time exit once. A failure is logged, never raised.
 
         This loop runs as an unawaited task, so a raised exception would end it silently. The
         exit is not retried here: positions it did not close are left to the 14:55
@@ -3836,15 +3648,11 @@ class TimeExitScheduler:
         """
         try:
             await self._tracker.time_exit_all()
-        except Exception as e:  # noqa: BLE001 - the scheduler must outlive one failed exit
-            logger.exception("Time exit failed")
-            try:
-                await notifier.notify(
-                    f"TIME EXIT ERROR: the scheduled time exit failed ({type(e).__name__}: {e}). "
-                    "Positions and stop orders may still be open - check the position book now."
-                )
-            except Exception:  # noqa: BLE001
-                logger.exception("Time exit: could not send the failure alert")
+        except Exception:  # noqa: BLE001 - the scheduler must outlive one failed exit
+            logger.exception(
+                "TIME EXIT ERROR: the scheduled time exit failed. Positions and stop orders may "
+                "still be open - check the position book now."
+            )
 
     def stop(self) -> None:
         self._running = False

@@ -485,14 +485,10 @@ def test_a_warn_elsewhere_never_softens_the_price_history_fail(env, monkeypatch)
     assert by_name["price history for today"] == FAIL and result == "RED"
 
 
-def test_the_red_message_and_the_report_name_the_check_in_plain_words(env, monkeypatch):
+def test_the_red_report_names_the_check_in_plain_words(env, monkeypatch):
     _, _, checks = run_open_day(env, monkeypatch, 0, fresh_sessions(last="2026-11-11"))
     folder = str(env / "phase")
     model.write_phase("open-day", TODAY, checks, "Is everything ready?", folder=folder)
-    text = verdict.message("open-day", TODAY, folder)
-    assert (
-        text == f"open-day {TODAY}: RED. Failed: price history for today. Details: /logs/workflow"
-    )
     row = next(
         c for c in read_phase("open-day", TODAY, folder=folder)["checks"] if c["status"] == FAIL
     )

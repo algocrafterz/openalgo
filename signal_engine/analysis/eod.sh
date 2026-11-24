@@ -126,11 +126,8 @@ fi
   echo '## EOD regression check (trade / signal / system)'
   echo
   echo '```'
-  # Only the same-day run posts to Telegram; a re-run of an earlier day prints the digest instead
-  # of announcing an old session as today's.
-  POST_FLAG=""
-  { [ "$DAY" = "$(date +%F)" ] && [ "${EOD_TELEGRAM:-1}" = "1" ]; } || POST_FLAG="--dry-run"
-  run -m signal_engine.analysis.eod_review "$DAY" $POST_FLAG 2>&1 || echo "(eod_review exited non-zero — see CHECK results above)"
+  # The digest is printed into this report only; it is not posted to Telegram.
+  run -m signal_engine.analysis.eod_review "$DAY" 2>&1 || echo "(eod_review exited non-zero — see CHECK results above)"
   echo '```'
 } > "$REPORT"
 

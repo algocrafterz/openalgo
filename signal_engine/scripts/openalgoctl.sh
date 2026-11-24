@@ -15,8 +15,8 @@
 # (see acquire_lock()) before doing anything else. A second concurrent
 # start/run attempt — from any source: Task Scheduler, a manual ps1 run, or a
 # direct invocation of this script — is refused immediately with a logged
-# reason and a Telegram notification, instead of killing and replacing the
-# instance that's already up or mid-boot.
+# reason, instead of killing and replacing the instance that's already up or
+# mid-boot.
 
 set -euo pipefail
 
@@ -73,7 +73,7 @@ acquire_lock() {
     # Bounded wait, not an instant refusal (flock -n). cmd_restart kills the old
     # run's app/signal PIDs and comes straight back here -- but the OLD run
     # process only notices its children died on its next 5s poll, then spends
-    # up to another 10s in cleanup()'s shutdown-notification timeout before it
+    # up to another 10s in cleanup()'s shutdown-step timeout before it
     # exits and the kernel releases its flock. An instant -n here would refuse
     # a plain restart as a "duplicate" nearly every time. 20s covers that
     # teardown with margin and still refuses a genuine duplicate (a start
@@ -88,9 +88,6 @@ acquire_lock() {
         log "orders, and port clashes on 5000/8765/5555."
         log "Run '$0 status' to see what's running."
         log "=========================================="
-        timeout 15 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler \
-            notify "startup" "Duplicate start attempt blocked. OpenAlgo is already running or starting elsewhere -- refusing to start a second instance." \
-            >/dev/null 2>&1 || log "Duplicate-start alert could not be sent (non-fatal)"
         exit 2
     fi
 }
@@ -309,7 +306,7 @@ AUTH_COOLDOWN_FILE="$LOG_DIR/auth_cooldown.txt"
 # Written by cmd_stop() right before it kills app.py/signal_engine from a
 # SEPARATE process (the AutoStop task) than the one running this loop. Without
 # it, the run loop's own liveness check can't tell "I was told to stop" apart
-# from "I died", and fires a false "Stack is DOWN / app_crash" alert every
+# from "I died", and logs a false "Stack is DOWN / app_crash" crash every
 # single day at the scheduled stop time. See cmd_run()'s death-handling below.
 STOP_SENTINEL_FILE="$LOG_DIR/stop_requested.flag"
 HEARTBEAT_FILE="$LOG_DIR/heartbeat.txt"
@@ -335,7 +332,7 @@ cooldown_secs_for() {
     echo "${AUTH_COOLDOWN_STEPS[$(( n - 1 ))]}"
 }
 
-# Record a failure, escalating the counter, and alert once per failure.
+# Record a failure and escalate the counter.
 record_auth_failure() {
     local count=1
     if [ -f "$AUTH_COOLDOWN_FILE" ]; then
@@ -347,10 +344,6 @@ record_auth_failure() {
         echo "$count"
     } > "$AUTH_COOLDOWN_FILE"
     log "Auth failure #${count} — cooling down ${secs}s before the next attempt."
-    # Alert out-of-band: a failed startup is otherwise completely silent.
-    timeout 20 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler \
-        notify "startup" "Startup failed (attempt ${count}). Retrying after ${secs}s. Signal engine is DOWN." \
-        >/dev/null 2>&1 || log "Failure alert could not be sent (non-fatal)"
 }
 
 # Check if we're in auth cooldown (too many recent broker auth failures).
@@ -414,8 +407,8 @@ bootstrap() {
 
     wait_for_health "$APP_PID" || return 1
 
-    # Startup: auto-login + verify + summary + Telegram notify
-    log "Running startup (auto-login, verify, notify)..."
+    # Startup: auto-login + verify + summary (logged)
+    log "Running startup (auto-login, verify, summary)..."
 
     if "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler startup; then
         log "Startup successful"
@@ -423,9 +416,6 @@ bootstrap() {
             local _prior_failures; _prior_failures=$(_cooldown_count)
             if [ "$_prior_failures" -gt 1 ]; then
                 log "Recovered after ${_prior_failures} failed attempt(s)."
-                timeout 20 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler \
-                    notify "startup" "Recovered after ${_prior_failures} failed startup attempt(s). Signal engine is now UP." \
-                    >/dev/null 2>&1 || log "Recovery alert could not be sent (non-fatal)"
             fi
         fi
         rm -f "$AUTH_COOLDOWN_FILE"
@@ -490,11 +480,11 @@ cmd_run() {
         _CLEANUP_DONE=true
         log "Shutting down (reason: $_STOP_REASON)..."
         if [ -f "$STOP_SENTINEL_FILE" ]; then
-            log "Expected stop (sentinel present) — shutdown notification already sent by 'stop', skipping duplicate."
+            log "Expected stop (sentinel present) — shutdown step already run by 'stop', skipping duplicate."
             rm -f "$STOP_SENTINEL_FILE"
         else
             timeout 10 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler shutdown "$_STOP_REASON" 2>&1 || \
-                log "Shutdown notification failed (non-fatal)"
+                log "Shutdown step failed (non-fatal)"
         fi
         kill "$SIGNAL_PID" 2>/dev/null || true
         kill "$APP_PID" 2>/dev/null || true
@@ -602,7 +592,7 @@ cmd_run() {
         # Inner loop exited because someone (cmd_stop, run from a separate
         # process/task) deliberately killed app.py or signal_engine — not
         # because either one crashed. Honor that instead of misreporting a
-        # "Stack is DOWN" crash alert for a routine scheduled stop.
+        # "Stack is DOWN" crash for a routine scheduled stop.
         if [ -f "$STOP_SENTINEL_FILE" ]; then
             _STOP_REASON="$(cat "$STOP_SENTINEL_FILE" 2>/dev/null || echo scheduled)"
             log "Expected stop detected (reason: $_STOP_REASON) — not treating this as a crash."
@@ -612,9 +602,6 @@ cmd_run() {
         # app.py alive but not serving — the case liveness checks cannot see
         if [ "$_app_wedged" = true ]; then
             log "app.py is alive (PID $APP_PID) but failed ${_health_fails} consecutive health probes — treating as wedged."
-            timeout 20 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler \
-                notify "supervisor" "app.py stopped responding on $HEALTH_URL after ${_health_fails} probes. Stack is DOWN." \
-                >/dev/null 2>&1 || log "Wedge alert could not be sent (non-fatal)"
             _STOP_REASON="app_unresponsive"
             break
         fi
@@ -622,9 +609,6 @@ cmd_run() {
         # app.py died — fatal, can't recover without it
         if ! kill -0 "$APP_PID" 2>/dev/null; then
             log "app.py exited unexpectedly — cannot recover."
-            timeout 20 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler \
-                notify "supervisor" "app.py exited unexpectedly. Stack is DOWN." \
-                >/dev/null 2>&1 || log "Crash alert could not be sent (non-fatal)"
             _STOP_REASON="app_crash"
             break
         fi
@@ -635,9 +619,6 @@ cmd_run() {
 
         if (( _RESTART_COUNT > _MAX_RESTARTS )); then
             log "Signal engine crashed $_RESTART_COUNT times — giving up."
-            timeout 20 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler \
-                notify "supervisor" "Signal engine crashed ${_RESTART_COUNT} times and will not be restarted. No trades will be taken." \
-                >/dev/null 2>&1 || log "Crash-loop alert could not be sent (non-fatal)"
             _STOP_REASON="signal_engine_crash_loop"
             break
         fi
@@ -678,12 +659,12 @@ cmd_stop() {
     # killing anything — see STOP_SENTINEL_FILE comment above.
     echo "${STOP_REASON:-scheduled}" > "$STOP_SENTINEL_FILE"
 
-    # Send shutdown notification while app.py is still running (Telegram needs it).
-    # 10s timeout — if Telegram is slow or the session is busy (signal_engine holds
-    # the same Telethon session), this must not block kill_from_pidfile indefinitely.
-    log "Sending shutdown notification..."
+    # Log the shutdown summary and revoke the broker session (scheduled stop only) while
+    # app.py is still running (the summary reads broker data). 10s timeout so this can never
+    # block kill_from_pidfile indefinitely.
+    log "Running shutdown (summary, session revoke)..."
     timeout 10 "$UV_BIN" run python -m signal_engine.scripts.openalgoscheduler shutdown "${STOP_REASON:-scheduled}" 2>&1 || \
-        log "Shutdown notification failed (non-fatal)"
+        log "Shutdown step failed (non-fatal)"
 
     kill_from_pidfile
     log "STOP SUCCESS: OpenAlgo stopped"

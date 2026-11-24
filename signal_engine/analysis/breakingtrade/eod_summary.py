@@ -1,12 +1,12 @@
-"""End-of-day Telegram summary: what actually happened to today's calls.
+"""End-of-day scorecard: what actually happened to today's calls. Recorded, not posted.
 
 WHY THIS EXISTS
 
 A watchlist notice is a claim about the future ("this looks worth watching"), sent the moment
 it fires and never revisited. Nothing currently closes the loop - a trader has to remember
 every symbol flagged that day and go check prices themselves to know whether the calls were any
-good, and nothing is left behind for later analysis beyond the raw alerts table. This sends one
-message per day, after the close, scoring every call against what the stock actually did -
+good, and nothing is left behind for later analysis beyond the raw alerts table. This records one
+message per day in the alerts table (kind eod_summary), after the close, scoring every call against what the stock actually did -
 purely informational, exactly like the watchlist notices themselves. It never places, closes or
 implies a trade.
 
@@ -133,13 +133,12 @@ def _row(c: dict, width: int) -> str:
 
 
 def alert_intraday_eod_summary(day: str, captured_at: datetime) -> bool:
-    """Score every symbol first flagged today against its closing price. Sends once per day.
+    """Score every symbol first flagged today against its closing price. Records once per day.
 
     Grouped by outcome (right/wrong/no price) rather than one interleaved list sorted by
     return, since "how many of today's calls actually worked" is the question this answers and
-    a reader shouldn't have to tally right/wrong marks down a mixed list to see it. Sent as a
-    monospace block (see alerts.send(monospace=True)) so the column alignment actually renders
-    on the phone instead of collapsing under Telegram's default proportional font.
+    a reader shouldn't have to tally right/wrong marks down a mixed list to see it. Recorded in
+    the alerts table only; it is not posted (see alerts._SIGNAL_KINDS).
     """
     if _already_sent_today(day, "INTRADAY"):
         return False
@@ -164,7 +163,7 @@ def alert_intraday_eod_summary(day: str, captured_at: datetime) -> bool:
 
     date_label = datetime.strptime(day, "%Y-%m-%d").strftime("%d-%b-%Y")
     # "SCORECARD", not "EOD SUMMARY" - this measures direction-only right/wrong on calls that
-    # were mostly never real trades, a different thing from notifier.py's day_summary (real
+    # were mostly never real trades, a different thing from the engine's day results (real
     # P&L on real fills) and eod_summary.py's own BTST summary below (real basket P&L). All
     # three used to share the generic "EOD SUMMARY" title, which let a trader conflate a
     # watchlist hit-rate with an actual trading result.
@@ -184,14 +183,12 @@ def alert_intraday_eod_summary(day: str, captured_at: datetime) -> bool:
     lines += ["", "Informational only - most of these were never real trades."]
     message = "\n".join(lines)
 
-    delivered, message_id = alerts.send(message, "intraday_transition", monospace=True)
+    # Recorded only, not posted into the strategy channel (see alerts._SIGNAL_KINDS).
     alerts.record(
         "eod_summary",
         message,
         scan="INTRADAY",
         deliver=False,
-        delivered=delivered,
-        message_id=message_id,
     )
     return True
 
@@ -277,8 +274,8 @@ def alert_btst_eod_summary(day: str) -> bool:
     """Summarize whatever BTST positions settled (closed against today's session) today.
 
     Reads directly from paper_trades - paper.settle_open_trades() already computed the final
-    entry/exit/return_pct, so this is purely a formatting and delivery step, not a new
-    calculation. Sends once per day; callers should call this right after
+    entry/exit/return_pct, so this is purely a formatting and recording step, not a new
+    calculation. Records once per day; callers should call this right after
     paper.settle_open_trades() in the same poll that performed the settling.
 
     Every row states BOTH dates explicitly (recommended on / evaluated on) - a stock in a
@@ -349,13 +346,11 @@ def alert_btst_eod_summary(day: str) -> bool:
     ]
     message = "\n".join(lines)
 
-    delivered, message_id = alerts.send(message, "btst", monospace=True)
+    # Recorded only, not posted (see alerts._SIGNAL_KINDS).
     alerts.record(
         "eod_summary",
         message,
         scan="BTST",
         deliver=False,
-        delivered=delivered,
-        message_id=message_id,
     )
     return True

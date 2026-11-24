@@ -77,14 +77,14 @@ def _net(qty):
 
 class TestEntryTimeoutRecoveryIgnoresStaleOrders:
     @pytest.mark.asyncio
-    async def test_earlier_closed_fill_recorded_in_trades_db_is_not_adopted(self):
+    async def test_earlier_closed_fill_recorded_in_trades_db_is_not_adopted(self, logged):
         """The 10:50 entry (26100185347601) is closed and unregistered, so the tracker no
         longer holds it; trades.db still does. It must not be recovered as the 11:20 fill."""
         old = _entry_order("26100185347601")
         tracker, h = _timeout_harness([old], known_ids={"26100185347601"})
         with h.stack, _sized(h):
             await _handle_entry(_entry_signal(strategy="BREAKOUT-PY"))
-            h.notifier.notify_order_rejected.assert_awaited_once()
+            assert logged.has("Entry timeout recovery for RELIANCE: no matching completed order")
         assert tracker.tracked_count == 0
 
     @pytest.mark.asyncio
@@ -99,13 +99,13 @@ class TestEntryTimeoutRecoveryIgnoresStaleOrders:
         assert pos.entry_order_id == "26100112637622"
 
     @pytest.mark.asyncio
-    async def test_order_tagged_for_another_strategy_is_not_adopted(self):
+    async def test_order_tagged_for_another_strategy_is_not_adopted(self, logged):
         """Same symbol/side/qty under the Pine tag belongs to Pine, not to BREAKOUT-PY."""
         pine = _entry_order("PINE1", strategy="BREAKOUT")
         tracker, h = _timeout_harness([pine])
         with h.stack, _sized(h):
             await _handle_entry(_entry_signal(strategy="BREAKOUT-PY"))
-            h.notifier.notify_order_rejected.assert_awaited_once()
+            assert logged.has("Entry timeout recovery for RELIANCE: no matching completed order")
         assert tracker.tracked_count == 0
 
     @pytest.mark.asyncio
@@ -136,7 +136,7 @@ class TestEntryTimeoutRecoveryIgnoresStaleOrders:
 
 class TestRestartFallbackDoesNotTakeAnotherStrategysPosition:
     @pytest.mark.asyncio
-    async def test_tcs_pine_exit_does_not_sell_breakout_py_shares(self):
+    async def test_tcs_pine_exit_does_not_sell_breakout_py_shares(self, logged):
         """Broker net TCS = +107, all of it BREAKOUT-PY's. Pine's TP1 (not in tracker) finds no
         position of its own, so nothing is sold."""
         tracker = _real_tracker()
@@ -146,8 +146,8 @@ class TestRestartFallbackDoesNotTakeAnotherStrategysPosition:
         h = harness(tracker=tracker)
         with h.stack, _net(107):
             await _handle_exit(_exit_signal(strategy="BREAKOUT", symbol="TCS", tp_level="TP1"))
-            h.notifier.notify_exit_no_position.assert_awaited_once_with("TCS", "BREAKOUT")
             h.send_order.assert_not_awaited()
+            assert logged.has("EXIT: no open position for TCS (strategy=BREAKOUT)")
         assert tracker.find_position("TCS", "BREAKOUT-PY").quantity == 107
 
     @pytest.mark.asyncio
@@ -163,12 +163,12 @@ class TestRestartFallbackDoesNotTakeAnotherStrategysPosition:
         assert h.send_order.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_unshared_position_recovery_is_unchanged(self):
+    async def test_unshared_position_recovery_is_unchanged(self, logged):
         tracker = _real_tracker()
         h = harness(tracker=tracker)
         with h.stack, _net(0):
             await _handle_exit(_exit_signal(strategy="BREAKOUT", symbol="TCS"))
-            h.notifier.notify_exit_no_position.assert_awaited_once()
+            assert logged.has("EXIT: no open position for TCS (strategy=BREAKOUT)")
 
 
 class TestOwnNetPosition:
@@ -401,7 +401,6 @@ class TestTrackerDetectedStopCloseUsesTheStopsFill:
             patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=0.0)),
             patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=3297.0)),
             patch("signal_engine.tracker.cancel_order", AsyncMock(return_value=False)),
-            patch("signal_engine.notifier.notify_position_closed", AsyncMock()),
             patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()),
             patch.object(tracker, "_position_too_young", return_value=False),
             patch.object(tracker, "_maybe_send_day_summary", AsyncMock()),

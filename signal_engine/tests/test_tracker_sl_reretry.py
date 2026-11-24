@@ -10,6 +10,7 @@ import pytest
 
 from signal_engine.models import OrderStatus, TradeResult
 from signal_engine.strategies import ORB
+from signal_engine.tests.log_capture import capturing
 from signal_engine.tests.tracker_fixtures import _AGED, _make_engine, _make_position
 from signal_engine.tracker import PositionTracker
 
@@ -37,7 +38,6 @@ class TestSlReretry:
             patch(
                 "signal_engine.tracker.place_sl_order", new_callable=AsyncMock, return_value=success
             ) as mock_sl,
-            patch("signal_engine.tracker.notifier.notify_sl_placed", new_callable=AsyncMock),
         ):
             await tracker.check_positions()
 
@@ -63,8 +63,6 @@ class TestSlReretry:
             patch(
                 "signal_engine.tracker.place_sl_order", new_callable=AsyncMock, return_value=failure
             ) as mock_sl,
-            patch("signal_engine.tracker.notifier.notify_sl_placed", new_callable=AsyncMock),
-            patch("signal_engine.tracker.notifier.notify_sl_failed", new_callable=AsyncMock),
         ):
             await tracker.check_positions()  # attempt 1
             await tracker.check_positions()  # too soon — cooldown not elapsed
@@ -73,7 +71,7 @@ class TestSlReretry:
         assert pos.sl_retry_count == 1
 
     @pytest.mark.asyncio
-    async def test_gives_up_and_alerts_after_max_reretries(self):
+    async def test_gives_up_and_logs_after_max_reretries(self):
         from signal_engine.config import settings
 
         engine = _make_engine()
@@ -96,15 +94,15 @@ class TestSlReretry:
             patch(
                 "signal_engine.tracker.place_sl_order", new_callable=AsyncMock, return_value=failure
             ),
-            patch(
-                "signal_engine.tracker.notifier.notify_sl_failed", new_callable=AsyncMock
-            ) as mock_notify,
+            capturing() as logs,
         ):
             await tracker.check_positions()
 
         assert pos.sl_retry_count == settings.bracket_max_sl_reretries
-        mock_notify.assert_awaited_once()
-        assert "re-retry exhausted" in mock_notify.await_args.args[1]
+        # No message goes out: giving up is one SL FAILED error line naming the exhausted re-retry.
+        failed = [m for m in logs.messages("ERROR") if m.startswith("SL FAILED |")]
+        assert len(failed) == 1
+        assert "re-retry exhausted" in failed[0]
 
     @pytest.mark.asyncio
     async def test_skips_positions_that_already_have_an_sl(self):

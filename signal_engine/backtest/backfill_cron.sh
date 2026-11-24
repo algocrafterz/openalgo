@@ -116,14 +116,10 @@ for interval in 1m D; do
   fi
 done
 
-# A failure used to reach only this log file. The alert goes through the stateless Bot API
-# (eod_review.send_to_admin_channel), never the Telethon session the running engine holds.
+# A failure is recorded in this log, in the exit status (the close-day `backfill` step and the
+# /logs workflow page read it), and nowhere else: nothing is sent to Telegram.
 if [ "$status" -ne 0 ]; then
-  run -c 'import sys
-from signal_engine.analysis.eod_review import send_to_admin_channel
-sys.exit(0 if send_to_admin_channel(sys.argv[1], "analyze") else 1)' \
-    "BACKFILL $DAY: extend or verify failed - backtest data may be stale or incomplete. See signal_engine/logs/backfill_cron.log." \
-    || echo "WARNING: backfill failure alert not delivered"
+  echo "ERROR: BACKFILL $DAY: extend or verify failed - backtest data may be stale or incomplete."
 fi
 
 exit "$status"

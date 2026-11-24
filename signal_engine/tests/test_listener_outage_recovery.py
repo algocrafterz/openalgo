@@ -53,14 +53,11 @@ async def _drive(connect, sleeps):
     async def _sleep(secs):
         sleeps.append(secs)
 
-    notify = AsyncMock()
     with patch.object(listener, "_connect", connect), \
          patch.object(listener.asyncio, "sleep", _sleep), \
          patch.object(listener, "_build_client", MagicMock()), \
-         patch.object(listener, "_serve", AsyncMock()), \
-         patch.object(listener.notifier, "notify_event", notify):
+         patch.object(listener, "_serve", AsyncMock()):
         await listener.start_listener(AsyncMock())
-    return notify
 
 
 class TestOutageDoesNotEndTheListener:
@@ -76,10 +73,10 @@ class TestOutageDoesNotEndTheListener:
         assert state["calls"] >= failures + 1
 
     @pytest.mark.asyncio
-    async def test_entries_are_blocked_while_down_and_released_on_reconnect(self):
+    async def test_entries_are_blocked_while_down_and_released_on_reconnect(self, logged):
         budget = listener.settings.listener_max_retries
         state, connect = _run_scenario(budget + 2)
-        notify = await _drive(connect, [])
+        await _drive(connect, [])
 
         flags = state["halted_at_connect"]
         assert flags[budget] is True          # budget spent, feed declared down
@@ -87,17 +84,18 @@ class TestOutageDoesNotEndTheListener:
         assert flags[budget + 3] is False     # the first attempt after recovery sees it lifted
         assert not mode_guard.is_halted()
 
-        events = [c.args[0] for c in notify.await_args_list]
-        assert events.count("listener_down") == 1
-        assert events.count("listener_restored") == 1
+        # The halt and its lift are each logged once (they were Telegram alerts before).
+        assert logged.count("ENTRIES HALTED (feed down, recoverable)", "CRITICAL") == 1
+        assert logged.count("Signal feed restored - feed-down entry halt lifted") == 1
 
     @pytest.mark.asyncio
-    async def test_a_short_blip_never_halts_anything(self):
+    async def test_a_short_blip_never_halts_anything(self, logged):
         state, connect = _run_scenario(listener.settings.listener_max_retries - 1)
-        notify = await _drive(connect, [])
+        await _drive(connect, [])
 
         assert not any(state["halted_at_connect"])
-        assert [c.args[0] for c in notify.await_args_list] == []
+        assert logged.count("ENTRIES HALTED", "CRITICAL") == 0
+        assert logged.count("Signal feed restored") == 0
 
     @pytest.mark.asyncio
     async def test_backoff_is_capped_so_recovery_is_noticed_quickly(self):

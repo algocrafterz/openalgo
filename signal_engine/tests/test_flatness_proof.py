@@ -16,6 +16,7 @@ import pytest
 
 from signal_engine import mode_guard
 from signal_engine.strategies import ORB
+from signal_engine.tests.log_capture import capture
 from signal_engine.tests.tracker_fixtures import _make_engine, _make_position
 from signal_engine.tracker import PositionTracker
 
@@ -72,19 +73,16 @@ class _Poll:
         self.cancel = s.enter_context(
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True)
         )
-        self.notify = s.enter_context(
-            patch("signal_engine.tracker.notifier.notify_event", new_callable=AsyncMock)
-        )
-        s.enter_context(
-            patch("signal_engine.tracker.notifier.notify_orphaned_position", new_callable=AsyncMock)
-        )
+        self.logged = capture(s)
         return self
 
     def __exit__(self, *exc):
         return self.stack.__exit__(*exc)
 
     def alerts(self):
-        return [c for c in self.notify.await_args_list if c.args[0] == "position_absent_unproven"]
+        """The former position_absent_unproven Telegram alerts, now ERROR log lines."""
+        prefix = "Tracker poll alert (position_absent_unproven): "
+        return [m[len(prefix):] for m in self.logged.messages("ERROR") if m.startswith(prefix)]
 
 
 # --- E-02: absent row ------------------------------------------------------------------------
@@ -187,7 +185,7 @@ async def test_six_absent_polls_send_exactly_one_alert():
             await tracker.check_positions()
     alerts = poll.alerts()
     assert len(alerts) == 1  # the 6th poll alerts; the 7th-9th stay inside the 10 minutes
-    text = alerts[0].args[1]
+    text = alerts[0]
     assert "RELIANCE" in text and ORB in text
     assert "not in the position book" in text
     assert "its closing order has not executed" in text
@@ -201,7 +199,7 @@ async def test_absent_row_alert_without_a_stop_id_says_there_is_no_stop():
     with _Poll([], status="open") as poll:
         for _ in range(6):
             await tracker.check_positions()
-    text = poll.alerts()[0].args[1]
+    text = poll.alerts()[0]
     assert "has no stop-loss order on record" in text
     assert "protect the position by hand if it is still open" in text
     assert "closing order has not executed" not in text
@@ -279,7 +277,7 @@ async def test_absent_row_and_unreadable_entry_status_counts_toward_the_alert():
         for _ in range(6):
             await tracker.check_positions()
     assert len(poll.alerts()) == 1
-    assert "not in the position book" in poll.alerts()[0].args[1]
+    assert "not in the position book" in poll.alerts()[0]
     assert tracker.tracked_count == 1
 
 
@@ -353,7 +351,7 @@ async def test_the_flip_is_noticed_and_alerted_on_the_poll_that_sees_it():
         mode_guard, "halt_reason", return_value="mode changed"
     ):
         await tracker.check_positions()
-    assert any(c.args[0] == "mode_flip_halt" for c in poll.notify.await_args_list)
+    assert poll.logged.has("ENTRIES HALTED: mode changed", level="CRITICAL")
     poll.pb.assert_not_awaited()
     assert tracker.tracked_count == 1
 

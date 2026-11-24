@@ -60,31 +60,26 @@ class TestRecoveryReplay:
         with (
             patch("signal_engine.main.tracker", t),
             patch("signal_engine.main.settings", SimpleNamespace(exchange="NSE", product="MIS")),
-            patch("signal_engine.main.notifier", MagicMock(notify_exit_no_position=AsyncMock())),
-            patch("signal_engine.tracker.fetch_net_position", AsyncMock(return_value=0)),
+            patch("signal_engine.tracker.fetch_net_position", AsyncMock(return_value=0))
         ):
             assert await _recover_position_from_broker(_exit_signal()) is None
 
     async def test_after_the_other_strategy_unregisters_recovery_sees_a_flat_book(self):
         t = PositionTracker(MagicMock(spec=RiskEngine))
-        notifier = MagicMock(notify_exit_no_position=AsyncMock())
         with (
             patch("signal_engine.main.tracker", t),
             patch("signal_engine.main.settings", SimpleNamespace(exchange="NSE", product="MIS")),
-            patch("signal_engine.main.notifier", notifier),
-            patch("signal_engine.tracker.fetch_net_position", AsyncMock(return_value=0)),
+            patch("signal_engine.tracker.fetch_net_position", AsyncMock(return_value=0))
         ):
             assert await _recover_position_from_broker(_exit_signal()) is None
-        notifier.notify_exit_no_position.assert_awaited_once()
 
     async def test_a_genuine_restart_recovery_with_no_one_exiting_still_works(self):
         t = PositionTracker(MagicMock(spec=RiskEngine))
         with (
             patch("signal_engine.main.tracker", t),
             patch("signal_engine.main.settings", SimpleNamespace(exchange="NSE", product="MIS")),
-            patch("signal_engine.main.notifier", MagicMock(notify_exit_no_position=AsyncMock())),
             patch("signal_engine.tracker.fetch_net_position", AsyncMock(return_value=320)),
-            patch("signal_engine.main._recover_entry_context", return_value=(890.0, 880.0, 0.0, "E1")),
+            patch("signal_engine.main._recover_entry_context", return_value=(890.0, 880.0, 0.0, "E1"))
         ):
             pos = await _recover_position_from_broker(_exit_signal())
         assert pos is not None and pos.quantity == 320 and pos.direction == Direction.LONG

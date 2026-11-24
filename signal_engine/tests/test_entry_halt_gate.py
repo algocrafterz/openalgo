@@ -26,7 +26,6 @@ class TestHaltBlocksEntries:
     async def test_halted_engine_refuses_an_entry(self):
         mode_guard.halt("mode flipped to LIVE mid-session")
         with patch.object(main, "_decline", AsyncMock()) as decline, \
-             patch.object(main.notifier, "notify_risk_limit_hit", AsyncMock()), \
              patch.object(main, "_entry_rejected_by_symbol_rules", AsyncMock(return_value=False)), \
              patch.object(main, "send_order", AsyncMock()) as send:
             await main._handle_entry(_make_signal())
@@ -35,15 +34,18 @@ class TestHaltBlocksEntries:
         assert decline.await_args.kwargs["stage"] == "halted"
 
     @pytest.mark.asyncio
-    async def test_the_halt_reason_reaches_telegram(self):
+    async def test_the_halt_reason_is_logged(self, logged):
         mode_guard.halt("listener exhausted its reconnect budget")
-        with patch.object(main, "_decline", AsyncMock()), \
-             patch.object(main.notifier, "notify_risk_limit_hit", AsyncMock()) as notify, \
+        with patch.object(main, "_decline", AsyncMock()) as decline, \
              patch.object(main, "_entry_rejected_by_symbol_rules", AsyncMock(return_value=False)), \
-             patch.object(main, "send_order", AsyncMock()):
+             patch.object(main, "send_order", AsyncMock()) as send:
             await main._handle_entry(_make_signal())
-        notify.assert_awaited_once()
-        assert "reconnect budget" in notify.await_args.args[0]
+        send.assert_not_awaited()
+        decline.assert_awaited_once()
+        assert decline.await_args.kwargs["stage"] == "halted"
+        assert "reconnect budget" in decline.await_args.kwargs["reason"]
+        assert logged.has("ENTRY REFUSED (engine halted)", "CRITICAL")
+        assert logged.has("reconnect budget", "CRITICAL")
 
     @pytest.mark.asyncio
     async def test_an_unhalted_engine_proceeds_past_the_gate(self):
@@ -57,8 +59,7 @@ class TestExitsAreNeverHalted:
     async def test_halt_does_not_block_closing_a_position(self):
         """A halt stops NEW risk. Refusing to close an open position would strand it."""
         mode_guard.halt("mode flipped")
-        with patch.object(main, "tracker") as tr, \
-             patch.object(main.notifier, "notify_exit_no_position", AsyncMock()):
+        with patch.object(main, "tracker") as tr:
             tr._time_exit_active = False
             tr.find_position.return_value = None
             tr.fetch_own_position = AsyncMock(return_value=0)

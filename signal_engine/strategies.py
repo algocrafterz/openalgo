@@ -7,8 +7,8 @@ keys and the PineScript alert strings must all move with it.
 WHY THE REGISTRY EXISTS (2026-09-11)
 
 Adding a strategy used to mean editing SIX hand-maintained places: config.yaml's
-`telegram.channels`, `strategy_profiles` and `blacklist`, plus notifier's
-_STRATEGY_CHANNEL_BASE, strategy_cards' CARDS and (for a Python strategy) alerts'
+`telegram.channels`, `strategy_profiles` and `blacklist`, plus the former notifier's
+_STRATEGY_CHANNEL_BASE, the former strategy_cards' CARDS and (for a Python strategy) alerts'
 _CHANNEL_NAME_BY_GROUP. EMA9 and EMA9VWAP had the first three and none of the last three -
 so no part of the running system knew they existed, and nothing in the code recorded whether
 that was deliberate. It is (both are measured, not traded), but that was indistinguishable
@@ -20,10 +20,8 @@ REGISTRY is now the single statement of what a strategy IS. `channel_base` of No
 have nowhere to be traded from. config.validate_channels() and startup's config check are
 what turn a gap here into a visible startup message instead of silence.
 
-For the messaging side of adding a new strategy (what Telegram actually sends once it's in
-this registry) see notifier.py's module docstring - short version: nothing there is
-strategy-specific, so registering it here plus its config.yaml channel entries is the whole
-job.
+For the messaging side of adding a new strategy: the engine sends no Telegram notification at
+all, so registering it here plus its config.yaml channel entries is the whole job.
 """
 
 from dataclasses import dataclass
@@ -78,7 +76,7 @@ class StrategyMeta:
     """What one strategy is wired to.
 
     channel_base: the config.yaml `telegram.channels` name WITHOUT its -analyze/-live
-        suffix, and the strategy_cards.CARDS key. None means the strategy deliberately has
+        suffix. None means the strategy deliberately has
         no engine channel - see the module docstring.
     tradeable: whether this strategy is intended to reach a broker at all. False is a
         statement in the file, not an absence from it.

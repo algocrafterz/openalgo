@@ -38,24 +38,19 @@ class TestRunnerConfigGuard:
         log.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_python_source_with_disabled_runner_refuses_and_notifies(self):
-        with (
-            patch.object(
-                startup, "settings", SimpleNamespace(runner=runner_cfg("python", enabled=False))
-            ),
-            patch.object(startup.notifier, "notify_startup_result", AsyncMock()) as notify,
+    async def test_python_source_with_disabled_runner_refuses_and_logs_critical(self, logged):
+        with patch.object(
+            startup, "settings", SimpleNamespace(runner=runner_cfg("python", enabled=False))
         ):
             assert await startup.runner_config_ok() is False
-        notify.assert_awaited_once()
-        assert notify.await_args.kwargs["all_passed"] is False
+        assert logged.has("refusing to start", "CRITICAL")
 
     @pytest.mark.asyncio
     async def test_ladder_owner_with_pine_source_refuses(self):
         with (
             patch.object(
                 startup, "settings", SimpleNamespace(runner=runner_cfg("pine", owner="ladder"))
-            ),
-            patch.object(startup.notifier, "notify_startup_result", AsyncMock()),
+            )
         ):
             assert await startup.runner_config_ok() is False
 
@@ -84,23 +79,8 @@ class TestStartRunnerService:
         # Entries stop on any halt; the runner's exits stop only on a mode flip.
         assert kw["halted"] is startup.mode_guard.is_halted
         assert kw["exits_halted"] is startup.mode_guard.mode_halted
-        assert kw["failure_alert"] is startup._runner_failure_alert
-
-    @pytest.mark.asyncio
-    async def test_warm_up_exclusions_are_alerted_through_the_notifier(self):
-        st = SimpleNamespace(
-            runner=runner_cfg(enabled=True), time_exit_hour=14, time_exit_minute=45,
-            stale_signal_seconds=60, product="MIS",
-        )
-        with (
-            patch.object(startup, "settings", st),
-            patch.object(service, "start", AsyncMock(return_value=object())) as start,
-            patch.object(startup.notifier, "notify_event", AsyncMock()) as notify_event,
-        ):
-            await startup._start_runner_service(MagicMock(), "analyze", AsyncMock())
-            await start.await_args.kwargs["alert"]("RUNNER WARM-UP 2026-10-14: 1 symbol(s) excluded")
-        notify_event.assert_awaited_once()
-        assert notify_event.await_args.args[0] == "runner_warmup_rejected"
+        # Nothing is sent to Telegram: no alert callbacks are handed to the runner.
+        assert "failure_alert" not in kw and "alert" not in kw
 
     @pytest.mark.asyncio
     async def test_start_errors_are_contained_and_logged(self):
@@ -151,8 +131,6 @@ def _engine_patches(stack, *, cfg_ok=True, service_obj=None, serve=None):
     stack.enter_context(patch.object(startup.mode_guard, "set_startup_phase", MagicMock()))
     stack.enter_context(patch.object(startup, "reconcile_open_positions", AsyncMock()))
     stack.enter_context(patch.object(startup, "fetch_available_capital", AsyncMock(return_value=0)))
-    stack.enter_context(patch.object(startup.notifier, "notify_startup_summary", AsyncMock()))
-    stack.enter_context(patch.object(startup, "_resolve_broker_name", MagicMock(return_value="x")))
     stack.enter_context(
         patch.object(startup, "_start_time_exit_scheduler", MagicMock(return_value=(None, None)))
     )

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tier-1 auto-fix: after the market, take ONE low-risk open bug, fix it on a side branch, prove
-# it, commit it there, and tell the owner. Nothing is merged, pushed or restarted.
+# it and commit it there. Nothing is merged, pushed or restarted, and nothing is sent to Telegram.
 #
 # WHAT IT MAY FIX (policy in signal_engine/bugs/autofix.py, enforced after the run, not trusted):
 #   LOW/MEDIUM bugs of kind BUG or DATA in area ops, data or signal_engine, where the change stays
@@ -15,7 +15,7 @@
 #                ruff clean. Any miss discards the branch and notes why on the bug.
 #   5. commit    on autofix/<BUG> only; the bug stays in_progress with the commit named, because a
 #                fix on an unmerged branch is not running code
-#   6. notify    one Telegram line
+# The outcome is in this script's output, the run log and the bug's tracker notes.
 # The owner merges (git merge autofix/<BUG>) and then marks the bug fixed. A bug is attempted at
 # most twice.
 #
@@ -35,7 +35,7 @@ cd "$REPO" || { echo "FATAL: cannot cd to $REPO"; exit 1; }
 
 UV="$(command -v uv || echo /home/anand/.local/bin/uv)"  # cron has a minimal PATH
 CLAUDE_BIN="${AUTOFIX_CLAUDE_BIN:-$(command -v claude || echo /home/anand/.local/bin/claude)}"  # override: pipeline tests
-# The tracker and Telegram helpers always run against the main checkout, whatever PYTHONPATH the
+# The tracker helpers always run against the main checkout, whatever PYTHONPATH the
 # worktree steps below export.
 PY=(env -C "$REPO" PYTHONPATH="$REPO" "$UV" run python)
 
@@ -77,22 +77,12 @@ WT="$(dirname "$REPO")/openalgo-autofix/$BUG"
 LOG="$REPO/signal_engine/logs/autofix/$BUG-$(date +%Y%m%d-%H%M%S).log"
 echo "=== autofix $BUG $(date +%T) (log $LOG) ==="
 
-notify() {  # notify TEXT: one Telegram line, never fatal (AUTOFIX_NO_NOTIFY=1 for pipeline tests)
-  [ -z "${AUTOFIX_NO_NOTIFY:-}" ] || { echo "[no-notify] $1"; return 0; }
-  "${PY[@]}" - "$1" <<'PYEOF' || true
-import sys
-from signal_engine.analysis.eod_review import send_to_admin_channel
-from signal_engine.ops import verdict
-send_to_admin_channel(sys.argv[1], verdict._phase())
-PYEOF
-}
-
 cleanup_worktree() {
   git -C "$REPO" worktree remove --force "$WT" >/dev/null 2>&1 || rm -rf "$WT"
   git -C "$REPO" worktree prune
 }
 
-give_up() {  # give_up REASON: discard the branch, reopen the bug, say why
+give_up() {  # give_up REASON: discard the branch, reopen the bug, say why (stdout and tracker note)
   local reason="$1"
   cd "$REPO" || true  # the work area is removed below; never run from inside it
   echo "autofix $BUG gave up: $reason"
@@ -100,7 +90,6 @@ give_up() {  # give_up REASON: discard the branch, reopen the bug, say why
   git -C "$REPO" branch -D "$BRANCH" >/dev/null 2>&1 || true
   "${PY[@]}" -m signal_engine.bugs update "$BUG" --status open \
     --note "autofix gave up: $reason (log signal_engine/logs/autofix/$(basename "$LOG"))" >/dev/null
-  notify "Auto-fix of $BUG did not produce a safe fix: $reason. The bug stays open for you."
   exit 1
 }
 
@@ -203,5 +192,4 @@ cleanup_worktree
 "${PY[@]}" -m signal_engine.bugs update "$BUG" --status in_progress --commit "$SHA" \
   --fix "Unattended fix on branch $BRANCH, not merged: $FILES" \
   --note "autofix ready: $BRANCH @ $SHA; merge it, then mark fixed" >/dev/null
-notify "Auto-fix ready for $BUG: branch $BRANCH ($SHA). Tests added and passing. Merge it when you have looked at it."
 echo "autofix $BUG ready on $BRANCH @ $SHA"

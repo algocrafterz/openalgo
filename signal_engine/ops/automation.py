@@ -2,8 +2,9 @@
 
 Both use only what already exists. The retry runs the same fixed actions as the page's Run again
 button (signal_engine/ops/actions.py). The dead-man check reads the run manifest, the status file
-and the reports of each phase. It sends one Telegram line when a checkpoint is missing,
-incomplete or failed. Neither touches orders, positions, config or code.
+and the reports of each phase. It prints the finding and exits 1 when a checkpoint is
+missing, incomplete or failed (nothing is sent to Telegram). Neither touches orders, positions,
+config or code.
 
     uv run python -m signal_engine.ops retry-failed          08:56 weekdays (installed until the
                                                              08:36 recover line replaces it): redo

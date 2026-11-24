@@ -238,14 +238,9 @@ class TestMaybeRunWeeklyScreen:
         )
         monkeypatch.setattr(wls, "run_daily_scan", lambda: daily)
         monkeypatch.setattr(wls, "_beta_vs_nifty", lambda syms: dict.fromkeys(syms, 1.5))
-        sent = {"called": False}
-
-        async def fake_send(message):
-            sent["called"] = True
-            return True
-
-        monkeypatch.setattr(wls, "send_digest", fake_send)
-        return sent
+        # The weekly finalize is observed through the file it writes: since November 2026 it
+        # sends no Telegram digest.
+        return tmp_path / "watchlist.txt"
 
     def test_daily_scan_always_runs_even_when_gated_off(self, tmp_path, monkeypatch):
         """This is the whole point of the redesign: the cheap scan must run on every
@@ -263,28 +258,29 @@ class TestMaybeRunWeeklyScreen:
         assert called["n"] == 1  # but the daily scan still ran
 
     def test_finalizes_and_marks_the_gate_on_first_call(self, tmp_path, monkeypatch):
-        sent = self._stub_pipeline(monkeypatch, tmp_path)
+        watchlist = self._stub_pipeline(monkeypatch, tmp_path)
         assert maybe_run_weekly_screen() is True
-        assert sent["called"] is True
+        assert watchlist.exists()
         assert should_run_this_week() is False
 
     def test_second_call_same_week_skips_finalize_not_the_daily_scan(self, tmp_path, monkeypatch):
-        sent = self._stub_pipeline(monkeypatch, tmp_path)
+        watchlist = self._stub_pipeline(monkeypatch, tmp_path)
         maybe_run_weekly_screen()
-        sent["called"] = False
+        watchlist.unlink()
         assert maybe_run_weekly_screen() is False
-        assert sent["called"] is False, "gated finalize must not touch Telegram at all"
+        assert not watchlist.exists(), "a gated finalize must not rewrite the file"
 
     def test_force_bypasses_an_already_satisfied_gate(self, tmp_path, monkeypatch):
-        sent = self._stub_pipeline(monkeypatch, tmp_path)
+        watchlist = self._stub_pipeline(monkeypatch, tmp_path)
         maybe_run_weekly_screen()
-        sent["called"] = False
+        watchlist.unlink()
         assert maybe_run_weekly_screen(force=True) is True
-        assert sent["called"] is True
+        assert watchlist.exists()
 
-    def test_digest_sent_carries_daily_history_conviction(self, tmp_path, monkeypatch):
-        """The digest actually sent must reflect real accumulated daily history, not
-        an empty conviction dict - a real regression this split could hide."""
+    def test_watchlist_file_carries_daily_history_conviction(self, tmp_path, monkeypatch):
+        """The weekly result must reflect real accumulated daily history, not an empty
+        conviction dict - a real regression this split could hide. Until November 2026 this
+        was read from the Telegram digest; the file is now the only output."""
         monkeypatch.setattr(wls, "STATE_FILE", tmp_path / "state.json")
         monkeypatch.setattr(wls, "WATCHLIST_FILE", tmp_path / "watchlist.txt")
         state = {"daily_history": [
@@ -295,15 +291,8 @@ class TestMaybeRunWeeklyScreen:
         daily = DailyScan(["TCS"], 1, False, "2026-09-12")
         monkeypatch.setattr(wls, "run_daily_scan", lambda: daily)
         monkeypatch.setattr(wls, "_beta_vs_nifty", lambda syms: {"TCS": 1.5})
-        captured = {}
-
-        async def fake_send(message):
-            captured["message"] = message
-            return True
-
-        monkeypatch.setattr(wls, "send_digest", fake_send)
         maybe_run_weekly_screen()
-        assert f"TCS (2/{DAILY_WINDOW})" in captured["message"]
+        assert f"TCS  # 2/{DAILY_WINDOW}" in (tmp_path / "watchlist.txt").read_text()
 
 
 class TestSurveillanceFetchFallback:

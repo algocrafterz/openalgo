@@ -1,10 +1,11 @@
-"""INVALID_IP alert: tell the owner to update the Flattrade IP allow-list (BUG-024).
+"""INVALID_IP finding: log that the Flattrade IP allow-list needs an update (BUG-024).
 
 The broker rejects the login when the public IP is not on its allow-list. The failure text of the
 funds check does not always carry the reason (2026-11-06 reported 'Invalid openalgo apikey' while
 OpenAlgo's own log held 'INVALID_IP'), so the check also looks for INVALID_IP in today's OpenAlgo
-log. The egress IP is logged and sent masked (a.b.xxx.xxx). Never raises. The core hook that raises
-INVALID_IP (the OpenAlgo scheduler auto-login) is outside signal_engine and is not changed here.
+log. The egress IP is logged masked (a.b.xxx.xxx). Never raises. Nothing is sent to Telegram
+(outgoing notifications were removed in November 2026); the open-day report carries the failed
+broker check.
 """
 
 from __future__ import annotations
@@ -59,35 +60,19 @@ def _read_log(day: str) -> str:
         return ""
 
 
-def _send(text: str, **kwargs) -> bool:
-    from signal_engine.ops import alerts
-
-    return alerts.deliver(text, **kwargs)
-
-
-def maybe_alert(
+def log_invalid_ip(
     failure_text: str,
     day: str,
     *,
-    send: Callable[..., bool] = _send,
     egress: Callable[[], str] = egress_ip,
     read_log: Callable[[str], str] = _read_log,
 ) -> bool:
-    """Alert when the broker failure is INVALID_IP. True when an alert was sent; never raises."""
+    """Log the finding when the broker failure is INVALID_IP. True when it was logged; never raises."""
     try:
         if MARKER not in (failure_text or "") and MARKER not in read_log(day):
             return False
-        masked = mask_ip(egress())
-        logger.error("Broker login rejected with INVALID_IP; egress public IP is {}", masked)
-        return bool(
-            send(
-                MESSAGE.format(ip=masked),
-                kind="invalid-ip",
-                phase="open-day",
-                condition=MARKER,
-                severity="RED",
-            )
-        )
+        logger.error(MESSAGE.format(ip=mask_ip(egress())))
+        return True
     except Exception as exc:  # noqa: BLE001
-        logger.error("INVALID_IP alert failed: {}", type(exc).__name__)
+        logger.error("INVALID_IP check failed: {}", type(exc).__name__)
         return False

@@ -144,7 +144,6 @@ class TestCleanAbsentReadStartsAWatch:
         with (
             patch.object(main, "fetch_orderbook", AsyncMock(return_value=None)),
             patch.object(main, "fetch_order_ids_today", MagicMock(return_value=set())),
-            patch.object(main.notifier, "notify", AsyncMock()),
         ):
             await main._recover_ambiguous_entry_timeout(_signal(), _order(), datetime.now(IST))
         pending = order_reconcile.get_uncertain("BREAKOUT-PY", "NTPC")
@@ -452,8 +451,6 @@ class TestWatchedEntryKeepsItsSlot:
                 patch.object(main, "_decline", decline),
                 patch.object(main, "fetch_order_ids_today", MagicMock(return_value=set())),
                 patch.object(main, "fetch_orderbook", books),
-                patch.object(main.notifier, "notify", AsyncMock()),
-                patch.object(main.notifier, "notify_risk_limit_hit", AsyncMock()),
             ):
                 for sig in signals:
                     await main._handle_entry(sig)
@@ -501,7 +498,6 @@ class TestWatchedEntryKeepsItsSlot:
                 ),
             ),
             patch.object(main, "save", MagicMock()),
-            patch.object(main.notifier, "notify", AsyncMock()),
         ):
             await main.sweep_unresolved_orders()
         assert engine.open_positions_for("BREAKOUT-PY") == 1  # not 2

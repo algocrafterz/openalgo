@@ -44,8 +44,8 @@ def _fresh_state(monkeypatch, tmp_path):
     """No state, database or alert sender leaks between tests or reaches the live ones."""
     monkeypatch.setattr(scans, "_tpo_state", None)
     monkeypatch.setattr(store, "_DB_PATH", str(tmp_path / "breakingtrade.db"))
-    sent = []
-    monkeypatch.setattr(critical, "notifier", critical.CriticalNotifier(deliver=sent.append))
+    sent = []  # the banners the poller records (nothing is delivered)
+    monkeypatch.setattr(critical, "issues", critical.CriticalIssues(record=sent.append))
     return sent
 
 
@@ -231,9 +231,7 @@ def test_alert_repeats_on_the_next_day(monkeypatch, _fresh_state):
     sent = _fresh_state
     day = {"now": datetime(2026, 11, 13, 10, 5)}
     monkeypatch.setattr(
-        critical,
-        "notifier",
-        critical.CriticalNotifier(deliver=sent.append, clock=lambda: day["now"]),
+        critical, "issues", critical.CriticalIssues(record=sent.append, clock=lambda: day["now"])
     )
     empty = _frame(tpo_pos=None)
     poller._tpo_pos_watch(empty, day["now"])

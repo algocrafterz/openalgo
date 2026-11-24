@@ -1,6 +1,6 @@
 """G8a: the message of an order that was never sent is for a trader, not the exception text.
 
-notify_sl_failed / notify_exit_failed forward TradeResult.message to Telegram.
+The stop and exit failure paths log TradeResult.message, so it must read as plain trader text.
 """
 
 from unittest.mock import AsyncMock, patch

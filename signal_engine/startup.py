@@ -12,7 +12,7 @@ from datetime import datetime
 
 from loguru import logger
 
-from signal_engine import mode_guard, notifier, order_reconcile
+from signal_engine import mode_guard, order_reconcile
 from signal_engine.api_client import fetch_available_capital, fetch_trading_mode
 from signal_engine.config import settings
 from signal_engine.db import fetch_last_entry_trade, set_trade_mode
@@ -170,14 +170,11 @@ def log_startup_banner() -> None:
 async def run_startup_health_checks():
     """Run pre-flight checks before accepting any signals.
 
-    A critical failure aborts startup and sends the failure alert here, immediately.
-    A passing (or warning-only) result sends nothing itself — the caller still needs
-    trading mode and capital to build the one consolidated startup message
-    (notifier.notify_startup_summary), so it folds this report into that instead of
-    this function sending its own separate message.
+    A critical failure aborts startup and is logged at CRITICAL here, immediately.
+    Warnings are logged and do not stop the start.
 
     Returns the SmokeTestReport if the engine may start, or None if startup must
-    abort (the failure notification has already been sent).
+    abort (the failure has already been logged).
     """
     from signal_engine.smoke_test import _CRITICAL_CHECKS, _WARNING_CHECKS, run_startup_checks
 
@@ -198,8 +195,6 @@ async def run_startup_health_checks():
     if failed_critical:
         fail_lines = "\n".join(f"  FAIL {c.name}: {c.message}" for c in failed_critical)
         logger.critical(f"Startup checks FAILED — aborting:\n{fail_lines}")
-        summary = "\n".join(f"FAIL: {c.name}\n  {c.message}" for c in failed_critical)
-        await notifier.notify_startup_result(all_passed=False, summary=summary)
         return None
 
     return startup_report
@@ -290,12 +285,8 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
             logger.critical(
                 f"Reconciliation: {symbol} is flat at the broker but {pos['strategy']} and at least "
                 "one other strategy both show it open in trades.db; the broker's P&L is for the "
-                "whole symbol, so no close is booked for it. Check the trade book."
-            )
-            await notifier.notify(
-                f"RESTART: {symbol} is flat at the broker, but more than one strategy shows it "
-                "open in the engine's records. The result cannot be split between them, so no "
-                "close was booked for it. Check the trade book and the risk counters."
+                "whole symbol, so no close is booked for it. Check the trade book and the risk "
+                "counters."
             )
             continue
         pnl = float(broker_row.get("today_realized_pnl", broker_row.get("pnl", 0)) or 0)
@@ -322,17 +313,6 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
         risk_engine.record_close(
             pnl - pos.get("legs_pnl", 0.0), strategy=pos["strategy"], symbol=symbol
         )
-        try:
-            await notifier.notify_position_closed(
-                symbol,
-                pnl,
-                strategy=pos["strategy"],
-                exit_price=fill_price,
-                entry_price=pos["entry"],
-                day_context="(reconciled after restart - exact fill time unknown)",
-            )
-        except Exception:
-            logger.warning(f"Could not send reconciliation notification for {symbol}")
 
     actual_open = len(open_broker_positions)
 
@@ -401,7 +381,7 @@ async def reconcile_open_positions(risk_engine, tracker) -> None:
     restored = _restore_tracker_positions(
         tracker, open_broker_positions, configured_product, sl_orders, unmatched=unmatched
     )
-    await _alert_unmatched_positions(unmatched)
+    _log_unmatched_positions(unmatched)
     if restored > 0:
         logger.info(f"Tracker restoration complete: {restored}/{actual_open} position(s) restored")
     risk_engine.seed_concentration((p.strategy, p.symbol) for p in tracker.tracked_positions())
@@ -684,8 +664,8 @@ def _restore_tracker_positions(
     return restored
 
 
-async def _alert_unmatched_positions(unmatched: list) -> None:
-    """One alert for broker positions the restart could not match to an entry row.
+def _log_unmatched_positions(unmatched: list) -> None:
+    """One log line for broker positions the restart could not match to an entry row.
 
     The entry row is written when the broker accepts the order, so an engine position should
     always match; one that does not is a manual trade or a lost record, and nothing manages it.
@@ -693,10 +673,9 @@ async def _alert_unmatched_positions(unmatched: list) -> None:
     if not unmatched:
         return
     listed = ", ".join(f"{sym} {qty:+d}" for sym, qty in unmatched)
-    await notifier.notify_event(
-        "untracked_broker_position",
+    logger.critical(
         f"RESTART: broker positions with no entry trade in trades.db today: {listed}. "
-        "The engine does not track them (no stop management, no time exit). Check the broker now.",
+        "The engine does not track them (no stop management, no time exit). Check the broker now."
     )
 
 
@@ -871,16 +850,6 @@ def _invert_timestamp(executed_at) -> tuple:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_broker_name() -> str:
-    """Best-effort broker name for the startup message — never blocks startup."""
-    try:
-        from signal_engine.scripts.openalgoscheduler import get_broker_name
-
-        return get_broker_name()
-    except Exception:
-        return "unknown"
-
-
 async def runner_config_ok() -> bool:
     """Refuse to start when the runner's signal sources are inconsistent.
 
@@ -894,7 +863,6 @@ async def runner_config_ok() -> bool:
         single_source.check_consistency(settings.runner, REGISTRY.keys())
     except single_source.SingleSourceError as exc:
         logger.critical(f"Runner configuration inconsistent, refusing to start: {exc}")
-        await notifier.notify_startup_result(all_passed=False, summary=f"Runner config: {exc}")
         return False
     single_source.log_active_sources(settings.runner)
     return await _check_runner_against_spec()
@@ -921,7 +889,6 @@ async def _check_runner_against_spec() -> bool:
         spec = strategy_spec.load_spec()
     except strategy_spec.SpecError as exc:
         logger.critical(f"Strategy specification unreadable, refusing to start: {exc}")
-        await notifier.notify_startup_result(all_passed=False, summary=f"Strategy spec: {exc}")
         return False
     time_exit = (settings.time_exit_hour, settings.time_exit_minute)
     problems = [
@@ -932,7 +899,6 @@ async def _check_runner_against_spec() -> bool:
     if problems:
         summary = f"config differs from {spec.id} {spec.version}: " + "; ".join(problems)
         logger.critical(f"Refusing to start: {summary}")
-        await notifier.notify_startup_result(all_passed=False, summary=summary)
         return False
     return True
 
@@ -952,10 +918,8 @@ async def _start_runner_service(tracker, trade_mode: str, dispatch_signal):
             time_exit=(settings.time_exit_hour, settings.time_exit_minute),
             halted=mode_guard.is_halted,
             exits_halted=mode_guard.mode_halted,
-            failure_alert=_runner_failure_alert,
             stale_limit_s=settings.stale_signal_seconds,
             product=settings.product,
-            alert=_runner_warmup_alert,
         )
     except (service.RunnerStartError, single_source.SingleSourceError):
         logger.exception("Python signal runner could not start")
@@ -963,18 +927,6 @@ async def _start_runner_service(tracker, trade_mode: str, dispatch_signal):
     except Exception:  # noqa: BLE001 - a database or warm-up error must never abort the engine
         logger.exception("Python signal runner could not start (unexpected error)")
         return None
-
-
-async def _runner_failure_alert(text: str) -> None:
-    """The first runner warm-up or cycle failure of a session. Not in notifier.EVENT_LEVELS, so
-    it is delivered at every notify_level."""
-    await notifier.notify_event("runner_cycle_failed", text)
-
-
-async def _runner_warmup_alert(text: str) -> None:
-    """Symbols the runner excluded for stale or incomplete history. Not in notifier.EVENT_LEVELS,
-    so it is delivered at every notify_level, like every other failure alert."""
-    await notifier.notify_event("runner_warmup_rejected", text)
 
 
 def start_engine(risk_engine, tracker, handle_message, dispatch_signal=None) -> None:
@@ -1013,14 +965,8 @@ async def _confirm_trading_mode():
         return mode_str, is_analyze
     logger.critical(
         "Startup aborted: could not confirm whether OpenAlgo is in live or sandbox mode "
-        f"after {_MODE_RETRY_ATTEMPTS} retries; not defaulting to live"
-    )
-    await notifier.notify_startup_result(
-        all_passed=False,
-        summary=(
-            "Engine did not start: could not confirm whether OpenAlgo is in live or sandbox "
-            "mode. Check that OpenAlgo is running, then start the engine again."
-        ),
+        f"after {_MODE_RETRY_ATTEMPTS} retries; not defaulting to live. Check that OpenAlgo is "
+        "running, then start the engine again."
     )
     return None
 
@@ -1028,8 +974,9 @@ async def _confirm_trading_mode():
 def _background_task_ended(name: str, alert_text: str, stopping: asyncio.Event):
     """Done-callback for a task that must run for the whole session.
 
-    An exception, or a normal end while the engine is not stopping, is logged at CRITICAL and
-    alerted. A cancellation, or a normal end during shutdown, is silent.
+    An exception, or a normal end while the engine is not stopping, is logged at CRITICAL with
+    `alert_text` (what the trader must do). A cancellation, or a normal end during shutdown, is
+    silent.
     """
 
     def _callback(task: asyncio.Task) -> None:
@@ -1039,25 +986,11 @@ def _background_task_ended(name: str, alert_text: str, stopping: asyncio.Event):
         if exc is None and stopping.is_set():
             return
         if exc is not None:
-            logger.opt(exception=exc).critical(f"{name} task stopped with an error: {exc}")
+            logger.opt(exception=exc).critical(f"{name} task stopped with an error: {exc}. {alert_text}")
         else:
-            logger.critical(f"{name} task ended while the engine is still running")
-        alert = asyncio.get_running_loop().create_task(_alert_task_ended(name, alert_text))
-        _alert_tasks.add(alert)
-        alert.add_done_callback(_alert_tasks.discard)
+            logger.critical(f"{name} task ended while the engine is still running. {alert_text}")
 
     return _callback
-
-
-#: Strong references to in-flight alert tasks, so none is garbage-collected mid-send.
-_alert_tasks: set = set()
-
-
-async def _alert_task_ended(name: str, alert_text: str) -> None:
-    try:
-        await asyncio.wait_for(notifier.notify_event("engine_task_stopped", alert_text), timeout=5.0)
-    except Exception:  # noqa: BLE001
-        logger.warning(f"Could not send the alert that the {name} task stopped")
 
 
 async def _run_engine(risk_engine, tracker, handle_message, dispatch_signal=None) -> None:
@@ -1111,11 +1044,6 @@ async def _run_engine(risk_engine, tracker, handle_message, dispatch_signal=None
     startup_capital = await fetch_available_capital()
     if startup_capital > 0:
         risk_engine.log_startup_summary(startup_capital)
-
-    mode_label = "ANALYZE" if is_analyze else "LIVE"
-    await notifier.notify_startup_summary(
-        startup_report, mode_label, startup_capital, _resolve_broker_name()
-    )
 
     stopping = asyncio.Event()  # set once the shutdown sequence begins
     tracker_task = asyncio.create_task(tracker.start())
@@ -1234,19 +1162,13 @@ async def _serve_until_shutdown(handle_message, shutdown_event) -> None:
         await _enter_degraded_mode()
         await shutdown_task
 
-    # Send stopped notification while the Telethon client is still alive
-    # (listener_task not yet cancelled — must happen before task.cancel())
-    try:
-        await asyncio.wait_for(notifier.notify_engine_stopped(), timeout=5.0)
-    except Exception:
-        logger.debug("Could not send engine stopped notification")
     for task in (listener_task, shutdown_task):
         if not task.done():
             task.cancel()
 
 
 async def _enter_degraded_mode() -> None:
-    """Announce that no further signals will arrive, and block new entries.
+    """Log that no further signals will arrive, and block new entries.
 
     Open positions keep their tracker, their stop-losses and their time exit. What stops is
     NEW risk: with no signal feed the engine cannot see a TP or EXIT alert either, so taking
@@ -1259,9 +1181,3 @@ async def _enter_degraded_mode() -> None:
     )
     logger.critical(f"DEGRADED MODE: {reason}")
     mode_guard.halt(reason)
-    try:
-        await asyncio.wait_for(
-            notifier.notify_event("listener_degraded", f"DEGRADED MODE\n{reason}"), timeout=5.0
-        )
-    except Exception:
-        logger.warning("Could not send degraded-mode alert")

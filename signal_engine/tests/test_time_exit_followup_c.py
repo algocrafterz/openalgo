@@ -166,7 +166,7 @@ class TestF1_HeldLegAtTheDeadline:
         w, b, tracker = _verify_rig(held=False)
         h, result, positions, notes = await _run_verify(w, b, tracker, held=False, spend=14.0)
         assert set(result) == set(positions), result
-        assert any("could not confirm that" in a for a in h.alerts), h.alerts
+        assert any("closes not verified before the hard deadline" in a for a in h.alerts), h.alerts
 
 
 # ---------------------------------------------------------------------------------------------
@@ -372,9 +372,7 @@ class TestF3_ScanBeforeClear:
             executor.asyncio, "sleep", AsyncMock()
         ), patch("signal_engine.tracker.place_sl_order", executor.place_sl_order), patch.object(
             tracker_mod, "_now_ist", w.wall, create=True
-        ), patch.object(tracker_mod, "_monotonic", w.mono), patch(
-            "signal_engine.tracker.notifier", AsyncMock()
-        ):
+        ), patch.object(tracker_mod, "_monotonic", w.mono):
             for _ in range(2):
                 pb = [{"symbol": "PFC", "exchange": "NSE", "product": "MIS", "quantity": 10, "ltp": 100.0}]
                 await tracker._retry_missing_sl(tracker_mod._index_positionbook(pb), settings)

@@ -11,6 +11,7 @@ from signal_engine.tracker import PositionTracker, TrackedPosition
 _IST = timezone(timedelta(hours=5, minutes=30))
 _AGED = datetime.now(_IST) - timedelta(minutes=5)  # past Guard 1 (30s min age)
 
+from signal_engine.tests.log_capture import capturing
 from signal_engine.tests.tracker_fixtures import _make_engine, _make_position
 
 
@@ -474,13 +475,34 @@ class TestOrphanSlCancel:
         with (
             patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
             patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value="rejected"),
-            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel,
-            patch("signal_engine.tracker.notifier.notify_orphaned_position", new_callable=AsyncMock),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel
         ):
             await tracker.check_positions()
 
         assert tracker.tracked_count == 0
         mock_cancel.assert_awaited_once_with("SL_ORPHAN_REJ", pos.strategy)
+
+    @pytest.mark.asyncio
+    async def test_a_released_orphan_is_logged_at_error(self):
+        """Releasing a rejected entry leaves no trade record: the line that says so is ERROR."""
+        engine = _make_engine()
+        engine._state(ORB).open_positions = 1
+        tracker = PositionTracker(engine)
+        pos = _make_position(fill_price=0.0, entry_order_id="ENTRY_LOG")
+        pos.sl_order_id = "SL_LOG"
+        tracker.register(pos)
+
+        with (
+            patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
+            patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value="rejected"),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
+            capturing() as logs,
+        ):
+            await tracker.check_positions()
+
+        assert tracker.tracked_count == 0
+        assert logs.has("ORPHANED POSITION", "ERROR")
+        assert logs.has("entry ENTRY_LOG released, no trade recorded", "ERROR")
 
     @pytest.mark.asyncio
     async def test_guard3_zero_pnl_cancels_sl(self):
@@ -498,8 +520,7 @@ class TestOrphanSlCancel:
             patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
             patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value="complete"),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
-            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel,
-            patch("signal_engine.tracker.notifier.notify_orphaned_position", new_callable=AsyncMock),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel
         ):
             await tracker.check_positions()
 
@@ -525,11 +546,11 @@ class TestOrphanSlCancel:
             patch("signal_engine.tracker.fetch_order_fill_price", new_callable=AsyncMock, return_value=None),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
-            patch("signal_engine.tracker.notifier.notify_orphaned_position", new_callable=AsyncMock) as orphan,
+            capturing() as logs,
         ):
             await tracker.check_positions()
 
-        orphan.assert_not_awaited()
+        assert not logs.has("ORPHANED POSITION", "ERROR")  # not released as an orphan
         assert tracker.tracked_count == 0  # booked as a real close
         assert pos.fill_price == pos.entry_price
 
@@ -546,8 +567,7 @@ class TestOrphanSlCancel:
         with (
             patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
             patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value="rejected"),
-            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock) as mock_cancel,
-            patch("signal_engine.tracker.notifier.notify_orphaned_position", new_callable=AsyncMock),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock) as mock_cancel
         ):
             await tracker.check_positions()
 
@@ -596,8 +616,7 @@ class TestGuard2Timeout:
         with (
             patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=[]),
             patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value=""),
-            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel,
-            patch("signal_engine.tracker.notifier.notify_orphaned_position", new_callable=AsyncMock),
+            patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel
         ):
             await tracker.check_positions()
 
@@ -627,13 +646,12 @@ class TestGuard2Timeout:
             patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value=""),
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock) as mock_cancel,
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=1200.0),
-            patch("signal_engine.tracker.notifier.notify_orphaned_position", new_callable=AsyncMock) as mock_orphan,
-            patch("signal_engine.tracker.notifier.notify_position_closed", new_callable=AsyncMock),
+            capturing() as logs,
         ):
             await tracker.check_positions()
 
         # Must NOT be treated as orphan — slot released via record_close, not record_rejection
-        mock_orphan.assert_not_awaited()
+        assert not logs.has("ORPHANED POSITION", "ERROR")
         # SL cancel is attempted defensively (2026-09-23 fix) — orderstatus never resolved,
         # so the engine cannot actually know the SL is already gone; cancel_order safely
         # no-ops broker-side if it is. See TestSLCancelledOnBrokerDetectedClose.
@@ -668,7 +686,6 @@ class TestSLCancelledOnBrokerDetectedClose:
             patch("signal_engine.tracker.fetch_positionbook", new_callable=AsyncMock, return_value=book),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=100.0),
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel,
-            patch("signal_engine.tracker.notifier.notify_position_closed", new_callable=AsyncMock),
             patch("signal_engine.tracker.db.save_tracker_exit"),
             patch.object(tracker, "_position_too_young", return_value=False),
             patch.object(tracker, "_maybe_send_day_summary", new_callable=AsyncMock),
@@ -701,7 +718,6 @@ class TestFilledSLIsNotCancelled:
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=-100.0),
             patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value=status),
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True) as mock_cancel,
-            patch("signal_engine.tracker.notifier.notify_position_closed", new_callable=AsyncMock),
             patch("signal_engine.tracker.db.save_tracker_exit"),
             patch.object(tracker, "_position_too_young", return_value=False),
             patch.object(tracker, "_maybe_send_day_summary", new_callable=AsyncMock),

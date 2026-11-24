@@ -17,8 +17,8 @@
 #   15:37  execution_health, logs (error signatures), Fridays weekly (seconds each)
 #   ~15:43 backfill joined; value_areas (the day's VAH/POC/VAL rows); jobs (scheduled-job audit)
 #   ~15:43 track      the day's FAIL checks recorded in the bug tracker (plain code, seconds)
-#   ~15:43 review     Claude close-day review, report-only, reads every output above (2-10 minutes)
-#   ~15:50 notify     the day's single Telegram line (verdict); hard deadline 15:58
+#   ~15:43 review     Claude close-day review, report-only, reads every output above (2-10 minutes);
+#                     hard deadline 15:58. Nothing is sent to Telegram: the result is on /logs/workflow.
 #   16:01  --retry    only the steps still open (see RETRY below); ends by 16:25
 #   16:28  the close dead-man (run_upkeep.sh deadman close) judges the day after the retry
 #
@@ -171,7 +171,7 @@ step() {  # step NAME CMD... : run with the deadline as its timeout, record the 
 echo "=== close day $DAY (started $(date +%T)) ==="
 
 # One duty per step, one output per step. The review interprets the outputs; it never re-runs a
-# step, and only the notify step talks to Telegram.
+# step. No step sends anything to Telegram.
 OPS=(env PYTHONPATH=. "$UV" run python -m signal_engine.ops)
 
 # The backfill only needs OpenAlgo and is the longest step: start it first, join it before the
@@ -179,8 +179,8 @@ OPS=(env PYTHONPATH=. "$UV" run python -m signal_engine.ops)
 step backfill "$REPO/signal_engine/backtest/backfill_cron.sh" >> "$LOGS/backfill_cron.log" 2>&1 &
 BACKFILL_PID=$!
 
-# EOD_TELEGRAM=0: the regression digest goes into the report, not to Telegram (notify owns that).
-step eod env EOD_TELEGRAM=0 "$ANALYSIS/eod.sh" "$DAY" >> "$LOGS/eod_cron.log" 2>&1
+# The regression digest goes into the report only.
+step eod "$ANALYSIS/eod.sh" "$DAY" >> "$LOGS/eod_cron.log" 2>&1
 
 step execution_health "$UV" run python -m signal_engine.analysis.execution_health --day "$DAY" --format md \
   > "$REPORTS/execution-health-$DAY.md" 2>> "$LOGS/execution_health_cron.log"
@@ -202,17 +202,14 @@ step jobs "${OPS[@]}" jobs --day "$DAY" >> "$LOGS/ops_cron.log" 2>&1
 # review that cannot run (usage limit, expired sign-in, deadline) loses no finding.
 step track "${OPS[@]}" track --day "$DAY" >> "$LOGS/ops_cron.log" 2>&1
 
-# The ONE scheduled place for bug alerts and the log-candidate scan, after the day's findings are
-# tracked. Alerts are sent for a same-day run only (a re-run of an earlier day prints them). The
+# The ONE scheduled place for the log-candidate scan, after the day's findings are tracked. The
 # log scan is always a dry run (no --write): its candidates go to a dated, git-ignored report for
 # the owner to review; enabling `--logs --write` stays a manual decision. Deliberately not a
 # step(): a failure here is logged and never changes the close-day status, the manifest or the
-# retry. The 120 s cap keeps a slow Telegram call from holding up the review. Dedupe and the lock
-# are in ops/bugalerts.py.
-ALERT_FLAG="--bug-alerts"; [ "$DAY" = "$(date +%F)" ] || ALERT_FLAG=""
-if ! timeout --kill-after=10 120 "${OPS[@]}" track --day "$DAY" --logs $ALERT_FLAG \
+# retry. The 120 s cap keeps it from holding up the review.
+if ! timeout --kill-after=10 120 "${OPS[@]}" track --day "$DAY" --logs \
   > "$REPORTS/logscan-candidates-$DAY.txt" 2>> "$LOGS/ops_cron.log"; then
-  echo "WARNING: bug alerts / log scan failed for $DAY (close-day not affected)" >> "$LOGS/ops_cron.log"
+  echo "WARNING: log scan failed for $DAY (close-day not affected)" >> "$LOGS/ops_cron.log"
 fi
 
 REVIEW_REPORT="$REPORTS/eod-$DAY-claude-review.md"
@@ -226,15 +223,13 @@ if [ "$REVIEW" -eq 1 ]; then
   # Store what the review achieved (verdict, no verdict, limit or sign-in, failure), read from its
   # report; its exit code is kept as diagnostic evidence only.
   PYTHONPATH="$REPO" "$PY" -m signal_engine.ops.verdict record-review --day "$DAY" >> "$LOGS/ops_cron.log" 2>&1 || true
-  NOTIFY_FLAG=""; [ "$DAY" = "$(date +%F)" ] || NOTIFY_FLAG="--dry-run"  # only same-day runs send
-  step notify "${OPS[@]}" notify close-day --day "$DAY" $NOTIFY_FLAG >> "$LOGS/ops_cron.log" 2>&1
 fi
 
 # Fridays, same-day runs only: the weekly strategy performance report (paper and live, shown
-# separately) into reports/strategy-performance/. Last on purpose, after notify, and deliberately
-# not a step() (same as the bug-alert block above): a hang or failure is logged, never writes 124
-# to the status file or manifest, never changes the close-day status, and cannot delay
-# value_areas/jobs/track/review/notify. The 120 s cap bounds it. Read-only.
+# separately) into reports/strategy-performance/. Last on purpose, after the review, and
+# deliberately not a step() (same as the log-scan block above): a hang or failure is logged, never
+# writes 124 to the status file or manifest, never changes the close-day status, and cannot delay
+# value_areas/jobs/track/review. The 120 s cap bounds it. Read-only.
 if [ "$(date -d "$DAY" +%u)" -eq 5 ] && [ "$DAY" = "$(date +%F)" ]; then
   if ! timeout --kill-after=10 120 env PYTHONPATH=. "$UV" run python -m services.strategy_performance_report_service \
     --mode both >> "$LOGS/strategy_report_cron.log" 2>&1; then

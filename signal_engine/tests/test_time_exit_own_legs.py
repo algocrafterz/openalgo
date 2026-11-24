@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from signal_engine.models import Direction, OrderStatus, TradeResult
+from signal_engine.tests.log_capture import capturing
 from signal_engine.tests.tracker_fixtures import _make_engine, _make_position
 from signal_engine.tracker import PositionTracker
 
@@ -41,10 +42,10 @@ async def _close(tracker, strategy, symbols, net, send=None, book=None):
         ),
         patch("signal_engine.main._send_exit_with_retries", send),
         patch("signal_engine.api_client.close_all_positions", AsyncMock()) as close_all,
-        patch("signal_engine.tracker.notifier", AsyncMock()) as notifier,
+        capturing() as logs,
     ):
         await tracker._close_strategy(strategy, symbols)
-    return send, close_all, notifier
+    return send, close_all, logs
 
 
 def _filled_close(order_id, strategy, symbol, qty, action="SELL"):
@@ -87,17 +88,17 @@ class TestCloseOwnLegs:
     async def test_a_foreign_short_on_the_symbol_does_not_change_the_long_legs_close(self):
         # HDFCBANK shape: our long 131, an untracked short of 259 elsewhere in the account.
         tracker = _tracker(_make_position(symbol="HDFCBANK", strategy=BT, quantity=131))
-        send, _, notifier = await _close(tracker, BT, {"HDFCBANK"}, net=131 - 259)
+        send, _, logs = await _close(tracker, BT, {"HDFCBANK"}, net=131 - 259)
         # The broker shows no long left for this leg: sending a SELL would deepen the short.
         send.assert_not_awaited()
-        notifier.notify.assert_awaited()
+        assert logs.has("nothing for this leg to close", "CRITICAL")
 
     @pytest.mark.asyncio
     async def test_a_leg_whose_stop_already_filled_is_not_sold_again(self):
         tracker = _tracker(_make_position(symbol="RVNL", strategy=BT, quantity=312))
-        send, _, notifier = await _close(tracker, BT, {"RVNL"}, net=0)
+        send, _, logs = await _close(tracker, BT, {"RVNL"}, net=0)
         send.assert_not_awaited()
-        notifier.notify.assert_awaited()
+        assert logs.has("nothing for this leg to close", "CRITICAL")
 
     @pytest.mark.asyncio
     async def test_a_partly_closed_leg_sells_only_what_is_left(self):
@@ -163,13 +164,12 @@ class TestTimeExitEndToEnd:
             patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=0.0)),
             patch("signal_engine.main._send_exit_with_retries", send),
             patch("signal_engine.api_client.close_all_positions", AsyncMock()) as close_all,
-            patch("signal_engine.tracker.notifier", AsyncMock()),
             patch.object(
                 PositionTracker,
                 "_save_close_row",
                 lambda self, pos, **kw: saved.append((pos.strategy, kw)),
             ),
-            patch("asyncio.sleep", AsyncMock()),
+            patch("asyncio.sleep", AsyncMock())
         ):
             await tracker.time_exit_all()
 

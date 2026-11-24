@@ -13,6 +13,7 @@ from signal_engine.pipeline.service import STRATEGY_FACTORIES
 from signal_engine.strategy_core import breakout as core
 from signal_engine.strategy_core import strategy_spec as ss
 from signal_engine.strategy_core.breakout import BreakoutParams
+from signal_engine.tests.log_capture import capturing
 
 
 @pytest.fixture(scope="module")
@@ -139,13 +140,6 @@ class TestStartupCheck:
     async def test_start_up_refuses_on_a_difference_and_passes_on_a_match(self, monkeypatch):
         from signal_engine import startup
 
-        sent = []
-
-        async def fake_notify(**kw):
-            sent.append(kw)
-
-        monkeypatch.setattr(startup.notifier, "notify_startup_result", fake_notify)
-
         def fake_settings(entry):
             return SimpleNamespace(
                 runner=SimpleNamespace(strategies={"BREAKOUT-PY": entry}),
@@ -153,11 +147,17 @@ class TestStartupCheck:
             )
 
         monkeypatch.setattr(startup, "settings", fake_settings(GOOD))
-        assert await startup._check_runner_against_spec() is True
+        with capturing() as logs:
+            assert await startup._check_runner_against_spec() is True
+        assert logs.messages("CRITICAL") == []  # a match refuses nothing
         bad = RunnerStrategy("python", "tp1_only", "ladder", True, 5, "live", "BREAKOUT")
         monkeypatch.setattr(startup, "settings", fake_settings(bad))
-        assert await startup._check_runner_against_spec() is False
-        assert "max_entries" in sent[-1]["summary"]
+        with capturing() as logs:
+            assert await startup._check_runner_against_spec() is False
+        # No message goes out: the refusal and the differing setting are one critical log line.
+        refusals = [m for m in logs.messages("CRITICAL") if m.startswith("Refusing to start: ")]
+        assert len(refusals) == 1
+        assert "max_entries" in refusals[0]
 
     @pytest.mark.asyncio
     async def test_a_pine_only_config_needs_no_spec(self, monkeypatch):

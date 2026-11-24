@@ -2,7 +2,7 @@
 
 openposition answers 0 for a missing row and for a failed Flattrade PositionBook read. A failed
 exit order (c) or an exit the order book shows absent (d) with such a 0 must keep the position
-protected and alerted; only a position-book ROW at 0 may leave the close to the poll.
+protected and logged; only a position-book ROW at 0 may leave the close to the poll.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -46,24 +46,23 @@ async def _failed_exit(book):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("book", [[], None, [dict(_row(0), product="CNC")]])
-async def test_failed_exit_with_a_false_zero_is_alerted_and_reprotected(book):
+async def test_failed_exit_with_a_false_zero_is_logged_and_reprotected(book, logged):
     h, tracker, pos = await _failed_exit(book)
-    h.notifier.notify_exit_failed.assert_awaited_once()
+    assert logged.count("after its stop was cancelled: re-protecting", "CRITICAL") == 1
     assert tracker.find_position("RELIANCE", "ORB") is pos
     assert pos.exit_pending is False
     assert pos.sl_order_id == ""  # the dead stop id is cleared so the poll places a new stop
 
 
 @pytest.mark.asyncio
-async def test_failed_exit_with_a_book_row_at_zero_is_left_for_the_poll():
+async def test_failed_exit_with_a_book_row_at_zero_is_left_for_the_poll(logged):
     h, tracker, pos = await _failed_exit([_row(0)])
-    h.notifier.notify_exit_failed.assert_not_awaited()
+    assert not logged.has("re-protecting", "CRITICAL")
     assert tracker.find_position("RELIANCE", "ORB") is pos
     h.risk.record_close.assert_not_called()
 
 
 async def _sweep(proven):
-    notify = AsyncMock()
     tracker = MagicMock()
     pos = _tracked()
     tracker.find_position = MagicMock(return_value=pos)
@@ -79,23 +78,23 @@ async def _sweep(proven):
     with (
         patch("signal_engine.main.fetch_orderbook", AsyncMock(side_effect=[[]])),
         patch("signal_engine.main.fetch_order_status", AsyncMock(return_value="canceled")),
-        patch("signal_engine.main.notifier", MagicMock(notify=notify)),
         patch("signal_engine.main.tracker", tracker),
     ):
         await sweep_unresolved_orders()
-    return pos, notify
+    return pos
 
 
 @pytest.mark.asyncio
-async def test_absent_exit_with_a_false_zero_keeps_the_hold_and_alerts_without_a_stop():
-    pos, notify = await _sweep(proven=None)
+async def test_absent_exit_with_a_false_zero_keeps_the_hold_and_logs_without_a_stop(logged):
+    pos = await _sweep(proven=None)
     assert pos.sl_order_id == "SL-1"  # no stop placed, none cleared
     assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is not None
-    assert "Stop NOT restored" in str(notify.await_args_list)
+    assert "Stop NOT restored" in logged.text("CRITICAL")
 
 
 @pytest.mark.asyncio
-async def test_absent_exit_with_a_book_row_at_zero_releases_the_hold_as_before():
-    pos, notify = await _sweep(proven=0)
+async def test_absent_exit_with_a_book_row_at_zero_releases_the_hold_as_before(logged):
+    pos = await _sweep(proven=0)
     assert pos.sl_order_id == "SL-1"
     assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None
+    assert not logged.has("Stop NOT restored", "CRITICAL")

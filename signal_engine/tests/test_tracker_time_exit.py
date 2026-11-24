@@ -30,8 +30,7 @@ class TestTimeExitCncAwareness:
             patch.object(PositionTracker, "_close_strategy", new_callable=AsyncMock),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=0),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
-            patch("signal_engine.tracker.notifier", new_callable=AsyncMock),
-            patch("asyncio.sleep", new_callable=AsyncMock),
+            patch("asyncio.sleep", new_callable=AsyncMock)
         ):
             await tracker.time_exit_all()
 
@@ -52,8 +51,7 @@ class TestTimeExitCncAwareness:
             patch.object(PositionTracker, "_close_strategy", new_callable=AsyncMock),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=0),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
-            patch("signal_engine.tracker.notifier", new_callable=AsyncMock),
-            patch("asyncio.sleep", new_callable=AsyncMock),
+            patch("asyncio.sleep", new_callable=AsyncMock)
         ):
             await tracker.time_exit_all()
 
@@ -78,8 +76,7 @@ class TestTimeExitCncAwareness:
             patch.object(PositionTracker, "_close_strategy", new_callable=AsyncMock),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=0),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=-500.0),
-            patch("signal_engine.tracker.notifier", new_callable=AsyncMock),
-            patch("asyncio.sleep", new_callable=AsyncMock),
+            patch("asyncio.sleep", new_callable=AsyncMock)
         ):
             await tracker.time_exit_all()
 
@@ -105,8 +102,7 @@ class TestTimeExitVerification:
             patch.object(PositionTracker, "_close_strategy", mock_close),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=0),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
-            patch("signal_engine.tracker.notifier", new_callable=AsyncMock),
-            patch("asyncio.sleep", new_callable=AsyncMock),
+            patch("asyncio.sleep", new_callable=AsyncMock)
         ):
             await tracker.time_exit_all()
 
@@ -130,8 +126,7 @@ class TestTimeExitVerification:
             patch.object(PositionTracker, "_close_strategy", mock_close),
             patch("signal_engine.tracker.fetch_net_position", mock_open_pos),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
-            patch("signal_engine.tracker.notifier", new_callable=AsyncMock),
-            patch("asyncio.sleep", new_callable=AsyncMock),
+            patch("asyncio.sleep", new_callable=AsyncMock)
         ):
             await tracker.time_exit_all()
 
@@ -140,8 +135,8 @@ class TestTimeExitVerification:
         assert tracker.tracked_count == 0
 
     @pytest.mark.asyncio
-    async def test_alert_sent_when_all_retries_fail(self):
-        """Telegram alert sent when position remains open after all retry attempts."""
+    async def test_failure_logged_when_all_retries_fail(self, logged):
+        """An ERROR line names the position that remains open after all retry attempts."""
         engine = _make_engine()
         engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
@@ -149,26 +144,22 @@ class TestTimeExitVerification:
 
         # Always still open
         mock_open_pos = AsyncMock(return_value=50)
-        mock_notify = AsyncMock()
+        mock_close = AsyncMock()
         with (
             patch("signal_engine.api_client.cancel_all_orders", new_callable=AsyncMock),
-            patch.object(PositionTracker, "_close_strategy", new_callable=AsyncMock),
+            patch.object(PositionTracker, "_close_strategy", mock_close),
             patch("signal_engine.tracker.fetch_net_position", mock_open_pos),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
             # readable order book with nothing working: isolates the close-failure alert from the
             # order-cancel confirmation (covered in test_time_exit_cancel_failure.py) and from a
             # live HTTP call to a local server
             patch("signal_engine.tracker.fetch_orderbook", new_callable=AsyncMock, return_value=[]),
-            patch("signal_engine.tracker.notifier") as mock_notifier,
             patch("asyncio.sleep", new_callable=AsyncMock),
         ):
-            mock_notifier.notify = mock_notify
-            mock_notifier.notify_time_exit = AsyncMock()
-            mock_notifier.notify_day_summary = AsyncMock()
             await tracker.time_exit_all()
 
-        mock_notify.assert_called_once()
-        assert "TIME EXIT FAILED" in mock_notify.call_args[0][0]
+        assert mock_close.call_count == 3  # initial + two retries, then it gives up
+        assert logged.count("Time exit: FAILED to close RELIANCE", "ERROR") == 1
 
     @pytest.mark.asyncio
     async def test_api_error_does_not_block_cleanup(self):
@@ -183,8 +174,7 @@ class TestTimeExitVerification:
             patch.object(PositionTracker, "_close_strategy", new_callable=AsyncMock),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=None),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
-            patch("signal_engine.tracker.notifier", new_callable=AsyncMock),
-            patch("asyncio.sleep", new_callable=AsyncMock),
+            patch("asyncio.sleep", new_callable=AsyncMock)
         ):
             await tracker.time_exit_all()
 
@@ -201,54 +191,43 @@ class TestTimeExitVerificationReadings:
     """
 
     @pytest.mark.asyncio
-    async def test_a_one_share_short_still_open_is_retried_and_alerted(self):
+    async def test_a_one_share_short_still_open_is_retried_and_logged(self, logged):
         engine = _make_engine()
         engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB, product="MIS"))
 
         mock_close = AsyncMock()
-        mock_notify = AsyncMock()
         with (
             patch("signal_engine.api_client.cancel_all_orders", new_callable=AsyncMock),
             patch.object(PositionTracker, "_close_strategy", mock_close),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=-1),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
             patch("signal_engine.tracker.fetch_orderbook", new_callable=AsyncMock, return_value=[]),
-            patch("signal_engine.tracker.notifier") as mock_notifier,
             patch("asyncio.sleep", new_callable=AsyncMock),
         ):
-            mock_notifier.notify = mock_notify
-            mock_notifier.notify_time_exit = AsyncMock()
-            mock_notifier.notify_day_summary = AsyncMock()
             await tracker.time_exit_all()
 
         assert mock_close.call_count == 3  # initial + two retries
-        assert "TIME EXIT FAILED" in mock_notify.call_args[0][0]
+        assert logged.count("Time exit: FAILED to close RELIANCE", "ERROR") == 1
 
     @pytest.mark.asyncio
-    async def test_an_unreadable_position_is_reported_not_silently_counted_closed(self):
+    async def test_an_unreadable_position_is_reported_not_silently_counted_closed(self, logged):
         engine = _make_engine()
         engine._state(ORB).open_positions = 1
         tracker = PositionTracker(engine)
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB, product="MIS"))
 
-        mock_notify = AsyncMock()
         with (
             patch("signal_engine.api_client.cancel_all_orders", new_callable=AsyncMock),
             patch.object(PositionTracker, "_close_strategy", new_callable=AsyncMock),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=None),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
             patch("signal_engine.tracker.fetch_orderbook", new_callable=AsyncMock, return_value=[]),
-            patch("signal_engine.tracker.notifier") as mock_notifier,
             patch("asyncio.sleep", new_callable=AsyncMock),
         ):
-            mock_notifier.notify = mock_notify
-            mock_notifier.notify_time_exit = AsyncMock()
-            mock_notifier.notify_day_summary = AsyncMock()
             await tracker.time_exit_all()
 
-        # Existing policy kept: cleanup proceeds. But the operator is told the close is unverified.
+        # Existing policy kept: cleanup proceeds. But the log says the close is unverified.
         assert tracker.tracked_count == 0
-        assert any("TIME EXIT UNVERIFIED" in c.args[0] and "RELIANCE" in c.args[0]
-                   for c in mock_notify.call_args_list)
+        assert logged.count("could not read the broker position for RELIANCE", "ERROR") == 1

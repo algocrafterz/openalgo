@@ -1,12 +1,13 @@
 """The 16:01 afternoon retry and the 08:36 morning recovery (signal_engine/ops/recovery.py).
 
 Everything runs on tmp_path folders with a simulated command runner and a fake clock. No real
-phase, backfill, eod, review, broker, OpenAlgo call or Telegram message is made: the runner never
-starts a process, and alerts.deliver is replaced by a list.
+phase, backfill, eod, review, broker or OpenAlgo call is made: the runner never starts a
+process. The recovery notice is a printed line, read back from the `say` callback.
 """
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 from datetime import datetime, timedelta
@@ -14,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from signal_engine.ops import actions, alerts, automation, jobs, model, recovery, verdict
+from signal_engine.ops import actions, automation, jobs, model, recovery, verdict
 from signal_engine.ops.model import IST, OK, Check, write_phase
 
 DAY = "2026-11-12"  # Thursday
@@ -117,7 +118,6 @@ class Sim:
             ("ops jobs", "jobs"),
             ("ops track", "track"),
             ("eod_claude_review.sh", "review"),
-            ("ops notify", "notify"),
         ):
             if key in text.replace("signal_engine.", ""):
                 return step
@@ -193,7 +193,6 @@ def run_recover(
     sim.clock = clock
     if seed:
         world.seed(rows, **kw)
-    sent = []
     lines = []
     rc = recovery.recover_main(
         today,
@@ -204,10 +203,19 @@ def run_recover(
         folder=world.folder,
         logs_dir=world.logs,
         snapshot_dir=str(world.snaps),
-        deliver=lambda text, **k: sent.append((text, k)) or True,
         say=lines.append,
     )
-    return rc, sim, clock, sent, lines
+    return rc, sim, clock, notices_in(lines), lines
+
+
+def notices_in(lines):
+    """(outcome, text) of every recovery notice line the run printed."""
+    found = []
+    for line in lines:
+        m = re.match(r"recovery (recovered|partly|unresolved): (.*)$", line)
+        if m:
+            found.append((m.group(1), m.group(2)))
+    return found
 
 
 def steps_run(sim):
@@ -221,13 +229,13 @@ RETRY_START = at(DAY, "16:01")
 
 
 def test_retry_runs_only_open_steps_in_dependency_order_and_leaves_good_ones_alone(world):
-    rows = {"backfill": 1, "value_areas": 1, "review": 1, "logs": 1, "notify": 0}
+    rows = {"backfill": 1, "value_areas": 1, "review": 1, "logs": 1}
     world.seed(rows, review=False)  # logs and value_areas exit 1 with a RED-less report: failures
     before = world.status_text()
     rc, sim, _, _ = run_retry(world, RETRY_START, seed=False)
-    # eod, execution_health, jobs, track and notify were good; logs and value_areas wrote a
+    # eod, execution_health, jobs and track were good; logs and value_areas wrote a
     # non-RED report with exit 1 (a failure), the review has no verdict.
-    assert steps_run(sim) == ["backfill", "logs", "value_areas", "review", "notify"]
+    assert steps_run(sim) == ["backfill", "logs", "value_areas", "review"]
     assert rc == 0
     after = world.status_text()
     assert after.startswith(before)  # the first attempt is never rewritten
@@ -237,7 +245,6 @@ def test_retry_runs_only_open_steps_in_dependency_order_and_leaves_good_ones_alo
         "logs",
         "value_areas",
         "review",
-        "notify",
     ]
     assert all(r.endswith("\t0") for r in appended)
 
@@ -304,7 +311,7 @@ def test_the_retry_manifest_and_the_first_manifest_get_new_rows_with_result_and_
     after = world.manifest("close-day")
     assert after["steps"][: len(first["steps"])] == first["steps"]
     new = after["steps"][len(first["steps"]) :]
-    assert [r["step"] for r in new] == ["track", "notify"]
+    assert [r["step"] for r in new] == ["track"]
     assert all(
         r["result"] == "recovered" and r["attempt"].startswith("close-day-retry-") for r in new
     )
@@ -336,7 +343,6 @@ def test_unresolved_steps_at_the_deadline_are_recorded_in_manifest_and_status(wo
     rows = {r["step"]: r for r in world.manifest("close-day-retry")["steps"]}
     assert rows["backfill"]["result"] == "timed_out" and rows["backfill"]["exit"] == 124
     assert rows["track"]["result"] == "incomplete" and rows["review"]["result"] == "incomplete"
-    assert rows["notify"]["result"] == "incomplete"
     final = world.manifest("close-day-retry")
     assert final["state"] == "timed_out" and "unresolved" in final["note"]
     latest = verdict.latest_steps("close-day", DAY, world.folder)
@@ -346,14 +352,14 @@ def test_unresolved_steps_at_the_deadline_are_recorded_in_manifest_and_status(wo
     assert clock() == at(DAY, "16:25", 30)  # the fake clock only moved inside the backfill
 
 
-def test_the_last_notification_may_use_the_two_minutes_before_the_deadline(world):
+def test_no_step_starts_after_the_step_cutoff_even_before_the_deadline(world):
     world.seed({"backfill": 1, "track": 1}, state="failed")
     sim = Sim(world, Clock(at(DAY, "16:15", 30)))
-    sim.takes = {"backfill": 470}  # ends 16:23:20: past the step cutoff, before the deadline
+    sim.takes = {"backfill": 470}  # ends 16:23:20: past the 16:23 step cutoff, before the deadline
     run_retry(world, at(DAY, "16:15", 30), sim=sim, seed=False)
     rows = {r["step"]: r for r in world.manifest("close-day-retry")["steps"]}
     assert rows["backfill"]["result"] == "timed_out" and rows["track"]["result"] == "incomplete"
-    assert rows["notify"]["result"] == "recovered"  # the summary still goes out
+    assert steps_run(sim) == ["backfill"]  # track was not started after the cutoff
 
 
 def test_a_host_sleep_cannot_extend_the_run_the_real_runner_checks_the_wall_clock(tmp_path):
@@ -460,11 +466,12 @@ def test_a_usage_limit_that_ends_before_1620_makes_the_review_wait(world):
     assert rc == 0
 
 
-def test_retry_sends_the_summary_through_the_notify_command_not_its_own_telegram_call(world):
+def test_retry_runs_no_notify_command_and_sends_nothing(world):
     world.seed({"track": 1})
-    rc, sim, _, _ = run_retry(world, RETRY_START, seed=False)
-    notify = [argv for step, argv in sim.calls if step == "notify"]
-    assert notify and notify[0][-4:] == ["notify", "close-day", "--day", DAY]
+    rc, sim, _, lines = run_retry(world, RETRY_START, seed=False)
+    assert steps_run(sim) == ["track"]
+    assert not any("notify" in " ".join(argv) for _step, argv in sim.calls)
+    assert "notify" not in {r["step"] for r in world.manifest("close-day-retry")["steps"]}
 
 
 # ---- (B) the final dead-man judges the day after the retry ------------------------------------
@@ -631,8 +638,8 @@ def test_the_token_wait_stops_at_the_hard_stop_0855(world):
     assert results["track"] == "recovered"  # the local steps were not held back
     assert manifest["state"] == "timed_out"
     assert rc == 1
-    assert len(sent) == 1 and "partly recovered" in sent[0][0]
-    assert "08:55" not in sent[0][0]  # a trader reads words, not clock internals
+    assert len(sent) == 1 and sent[0][0] == "partly" and "partly recovered" in sent[0][1]
+    assert "08:55" not in sent[0][1]  # a trader reads words, not clock internals
 
 
 def test_recover_skips_the_funds_reconciliation_and_says_so_in_the_manifest(world):
@@ -654,32 +661,23 @@ def test_eod_for_a_past_day_with_a_snapshot_calls_no_broker_and_without_one_is_n
     assert rows["eod"]["result"] == "not_recoverable"
     assert rows["review"]["result"] == "blocked"
     assert "was not saved" in world.manifest("close-day-recover")["note"]
-    assert "cannot be rebuilt" in sent[0][0] and "trade report" in sent[0][0]
+    assert "cannot be rebuilt" in sent[0][1] and "trade report" in sent[0][1]
     assert not list(world.snaps.glob(f"tradebook_{RECOVER_TODAY}*"))  # nothing fetched for today
 
 
-def test_the_recovery_notice_has_three_outcomes_and_one_message(world):
+def test_the_recovery_notice_has_three_outcomes_and_one_line(world):
     _, _, _, sent, _ = run_recover(world, at(RECOVER_TODAY, "08:36"), {"track": 1})
-    assert [k["condition"] for _, k in sent] == ["recovered"] and "Nothing is outstanding" in sent[
-        0
-    ][0]
+    assert [k for k, _ in sent] == ["recovered"] and "Nothing is outstanding" in sent[0][1]
     w2 = World(Path(world.folder).parent / "w2")
     _, _, _, sent, _ = run_recover(
         w2, at(RECOVER_TODAY, "08:36"), {"track": 1, "backfill": 1}, sim=None, login=lambda: False
     )
-    assert [k["condition"] for _, k in sent] == ["partly"]
+    assert [k for k, _ in sent] == ["partly"]
     w3 = World(Path(world.folder).parent / "w3")
     sim = Sim(w3, Clock(at(RECOVER_TODAY, "08:36")))
     sim.mode = {"track": "fail"}
     _, _, _, sent, _ = run_recover(w3, at(RECOVER_TODAY, "08:36"), {"track": 1}, sim=sim)
-    assert [k["condition"] for _, k in sent] == ["unresolved"]
-    assert all(k["severity"] == "INFO" and k["kind"] == "recovery" for _, k in sent)
-
-
-def test_a_notify_step_left_open_is_folded_into_the_recovery_notice(world):
-    rc, sim, _, sent, _ = run_recover(world, at(RECOVER_TODAY, "08:36"), {"notify": 1})
-    assert sim.calls == [] and len(sent) == 1  # the old day's Telegram line is not sent again
-    assert verdict.latest_steps("close-day", DAY, world.folder)["notify"] == 0
+    assert [k for k, _ in sent] == ["unresolved"]
 
 
 def test_recovery_preserves_every_attempt_and_the_original_failure(world):
@@ -727,7 +725,7 @@ def test_the_morning_line_reports_nothing_outstanding_recovered_partly_and_unres
     assert (line["level"], line["outcome"]) == ("WARN", "unresolved")
 
 
-def test_the_morning_deadman_prints_the_line_and_sends_it_at_warn_level_not_red(
+def test_the_morning_deadman_prints_the_previous_day_line_and_exits_zero(
     world, monkeypatch, capsys
 ):
     from signal_engine.ops import __main__ as cli
@@ -745,16 +743,11 @@ def test_the_morning_deadman_prints_the_line_and_sends_it_at_warn_level_not_red(
     for mod in (automation, model, verdict, actions):
         monkeypatch.setattr(mod, "REPORTS", world.folder)
     monkeypatch.setattr(actions, "now_ist", lambda: at(RECOVER_TODAY, "09:41"))
-    sent = []
-    monkeypatch.setattr(alerts, "deliver", lambda text, **kw: sent.append((text, kw)) or True)
-    monkeypatch.setattr(alerts, "recover", lambda **kw: True)
     rc = cli.main(["deadman", "morning", "--day", RECOVER_TODAY])
     out = capsys.readouterr().out
     assert rc == 0  # the previous-day line never changes the dead-man's own result
     assert "previous day [WARN] not_run" in out
-    assert len(sent) == 1 and sent[0][1]["severity"] == "WARN"
-    assert sent[0][1]["phase"] == "morning-previous-day"
-    assert sent[0][1]["severity"] != "RED"
+    assert "sent" not in out  # the line is printed, nothing is delivered
 
 
 # ---- safety: nothing here places an order -----------------------------------------------------
@@ -788,7 +781,7 @@ def test_retry_and_recover_only_ever_run_the_allowed_read_and_report_commands(wo
         w2, at(RECOVER_TODAY, "08:36"), dict.fromkeys(ALL_STEPS, 1), review=False
     )
     calls = sim.calls + sim2.calls
-    assert {s for s, _ in calls} >= {"backfill", "eod", "review", "notify"}
+    assert {s for s, _ in calls} >= {"backfill", "eod", "review"}
     for _step, argv in calls:
         text = " ".join(argv)
         assert any(a in text for a in ALLOWED), text
@@ -1161,13 +1154,12 @@ def test_the_login_wait_ends_when_a_download_could_no_longer_start(world):
 def test_recovery_skips_itself_and_says_so_when_the_holiday_table_is_unreadable(world, tmp_path):
     world.seed({"track": 1})
     lines = []
-    sent = []
+    sim = Sim(world, Clock(at(RECOVER_TODAY, "08:36")))
     rc = recovery.recover_main(
         RECOVER_TODAY, clock=Clock(at(RECOVER_TODAY, "08:36")), db_path=str(tmp_path / "missing.db"),
-        folder=world.folder, logs_dir=world.logs, run_command=Sim(world, Clock(at(RECOVER_TODAY, "08:36"))),
-        deliver=lambda text, **k: sent.append(text) or True, say=lines.append,
+        folder=world.folder, logs_dir=world.logs, run_command=sim, say=lines.append,
     )  # fmt: skip
-    assert rc == 1 and sent == []
+    assert rc == 1 and sim.calls == []
     assert lines and lines[0].startswith("recovery skipped: holiday table unreadable")
 
 

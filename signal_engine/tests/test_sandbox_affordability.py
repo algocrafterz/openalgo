@@ -62,7 +62,6 @@ class TestAnalyzeAffordabilityGate:
         with patch.object(main, "fetch_trading_mode", AsyncMock(return_value=("analyze", True))), \
              patch.object(main, "fetch_funds_available", AsyncMock(return_value=3073.24)), \
              patch.object(main, "_decline", AsyncMock()) as decline, \
-             patch.object(main.notifier, "notify_order_rejected", AsyncMock()), \
              patch.object(main.risk_engine, "calculate_quantity", return_value=198):
             result = await main._resolve_entry_quantity(self._signal(), 100_000.0, 100_000.0)
         assert result is None
@@ -73,7 +72,6 @@ class TestAnalyzeAffordabilityGate:
         with patch.object(main, "fetch_trading_mode", AsyncMock(return_value=("analyze", True))), \
              patch.object(main, "fetch_funds_available", AsyncMock(return_value=3073.24)), \
              patch.object(main, "_decline", AsyncMock()) as decline, \
-             patch.object(main.notifier, "notify_order_rejected", AsyncMock()), \
              patch.object(main.risk_engine, "calculate_quantity", return_value=198):
             await main._resolve_entry_quantity(self._signal(), 100_000.0, 100_000.0)
         reason = decline.await_args.kwargs["reason"]

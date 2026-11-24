@@ -1,9 +1,10 @@
 """Read-only summaries for the Daily Workflow page: run states, recurring failures, last alert.
 
 Nothing here writes a file, sends a message or touches trading code. It only reads the run
-manifests (model.read_run), the day reports (`<check>-<day>.json`) and the Telegram state file
-(alerts.load_state, called only after the file is checked to be readable, because load_state
-renames a damaged file aside).
+manifests (model.read_run), the day reports (`<check>-<day>.json`) and the former Telegram
+alert state file (reports/telegram-state.json). Nothing writes that file since outgoing Telegram
+notifications were removed in November 2026; an older one is shown as it is, and a missing one
+as "no alert recorded".
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import os
 import re
 from datetime import datetime, timedelta
 
-from signal_engine.ops import alerts, model
+from signal_engine.ops import model
 
 PHASES = ("open-day", "liveness", "close-day")
 CHECKED = ("open-day", "liveness", "logs", "value-areas", "jobs")
@@ -163,16 +164,22 @@ def recurrence(day: str, folder: str, n: int = WINDOW) -> dict:
     return {"window": len(days), "items": items}
 
 
-# ---- last notification and recovery --------------------------------------------------------
+# ---- last notification and recovery (historical record, read only) --------------------------
+
+#: The alert state file the removed Telegram sender wrote. Read only; never written or renamed.
+STATE_FILE = "telegram-state.json"
 
 
-def _readable_state(folder: str) -> bool:
+def _read_state(folder: str) -> dict | None:
+    """The state as a dict, or None when it is unreadable. A damaged file is left in place."""
     try:
-        with open(os.path.join(folder, alerts.STATE_FILE), encoding="utf-8") as handle:
+        with open(os.path.join(folder, STATE_FILE), encoding="utf-8") as handle:
             data = json.load(handle)
-        return isinstance(data, dict) and isinstance(data.get("keys"), dict)
     except (OSError, ValueError):
-        return False
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("keys"), dict):
+        return None
+    return data
 
 
 def notifications(folder: str) -> dict:
@@ -180,12 +187,12 @@ def notifications(folder: str) -> dict:
 
     `key` fields are the alert key (kind|phase|condition), clipped. Keys are never message bodies.
     """
-    path = os.path.join(folder, alerts.STATE_FILE)
+    path = os.path.join(folder, STATE_FILE)
     if not os.path.exists(path):
         return {"available": False, "reason": "No alert has been recorded yet."}
-    if not _readable_state(folder):
+    state = _read_state(folder)
+    if state is None:
         return {"available": False, "reason": "The alert record could not be read."}
-    state = alerts.load_state(folder)
     log = [e for e in state.get("log", []) if isinstance(e, dict)]
     keys = {k: v for k, v in state.get("keys", {}).items() if isinstance(v, dict)}
     last = log[-1] if log else None

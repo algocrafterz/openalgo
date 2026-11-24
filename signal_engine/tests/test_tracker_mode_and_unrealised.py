@@ -101,15 +101,23 @@ class TestModeFlipIsNoticedByThePollLoop:
         chk.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_a_flip_raises_a_critical_alert(self):
+    async def test_a_flip_is_logged_critical_by_the_poll_loop(self, logged):
+        """A flip that arrives while another halt is already set: halt() stays silent (the first
+        reason is kept), so this tracker line is the only record that a flip was noticed."""
         risk = MagicMock()
         tracker = PositionTracker(risk)
-        mode_guard.halt("mode changed from ANALYZE to LIVE")
-        with patch("signal_engine.mode_guard.check_for_flip", AsyncMock(return_value="live")), \
-             patch("signal_engine.notifier.notify_event", AsyncMock()) as notify:
+        mode_guard.halt("signal feed is down")
+        logged.clear()  # halt() logs its own line; only what the poll loop writes counts here
+        with patch("signal_engine.mode_guard.check_for_flip", AsyncMock(return_value="live")):
             await tracker._check_mode_flip()
-        notify.assert_awaited_once()
-        assert notify.await_args.args[0] == "mode_flip_halt"
+        assert logged.messages("CRITICAL") == ["ENTRIES HALTED: signal feed is down"]
+
+    @pytest.mark.asyncio
+    async def test_no_flip_logs_nothing(self, logged):
+        tracker = PositionTracker(MagicMock())
+        with patch("signal_engine.mode_guard.check_for_flip", AsyncMock(return_value=None)):
+            await tracker._check_mode_flip()
+        assert logged.messages("WARNING") == []
 
 
 class TestUnrealisedIsSummedPerRiskBucket:

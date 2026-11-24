@@ -161,7 +161,6 @@ class _Pipeline:
             patch.object(main, "_establish_position", self._establish),
             patch.object(main, "save", MagicMock()),
             patch.object(main, "_decline", decline),
-            patch.object(main.notifier, "notify_risk_limit_hit", AsyncMock()),
         ):
             return await asyncio.gather(
                 *(main._handle_entry(s) for s in signals), return_exceptions=True

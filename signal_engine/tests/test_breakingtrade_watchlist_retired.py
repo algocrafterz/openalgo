@@ -38,7 +38,7 @@ def _settings(watchlist_enabled):
                 enabled=watchlist_enabled,
             )
         )
-    return SimpleNamespace(telegram_channels=channels, breakingtrade_btst_channels={})
+    return SimpleNamespace(telegram_channels=channels)
 
 
 class TestWatchlistEnabled:

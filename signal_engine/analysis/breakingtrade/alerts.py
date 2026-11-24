@@ -1,5 +1,18 @@
 """Telegram alerts for the scanner, persisted so they can be scored later.
 
+ONLY TRADE SIGNALS ARE POSTED. send() delivers a message only for the kinds in _SIGNAL_KINDS:
+the entry signals (alert_trade_signal) and the staged TP exits (tp_watch._send_tp_hit) that the
+engine's listener reads back from the strategy channel and trades. Every other kind (watchlist
+transitions, BTST list, structure flips, EOD scorecards, poller health, start/stop) is recorded
+in the database only. Outgoing Telegram notifications were removed in November 2026; critical
+data problems are logged and recorded only (see critical.py).
+
+INBOUND SIGNAL TRANSPORT, NOT A NOTIFICATION: send() is the one outgoing Telegram HTTP call left
+in signal_engine. It posts a trade signal into its strategy channel so that the engine's own
+Telethon listener reads it back and trades it, exactly like a TradingView alert. Inside signal_engine
+the bot token (BREAKINGTRADE_BOT_TOKEN) is used by this transport only; the example strategy
+strategies/examples/momentum_rank_strategy.py reads the same token for its own posts.
+
 TWO DESIGN DECISIONS WORTH KNOWING
 
 **Every alert is written to the database whether or not sending succeeds.** The alert log is not
@@ -8,10 +21,10 @@ answer "was the alert right?" afterwards. If Telegram is down, or was never conf
 analysis must still be possible. A missed send is an inconvenience; a missing record is a lost
 experiment.
 
-**Delivery uses the Telegram Bot HTTP API, not signal_engine's Telethon client.** The notifier in
-signal_engine/notifier.py needs a live TelegramClient owned by the trading engine's event loop,
-and this poller is a separate long-running process. Two processes sharing one Telethon session
-file is a good way to corrupt it. A bot token is independent, stateless, and safe to call from
+**Delivery uses the Telegram Bot HTTP API, not signal_engine's Telethon client.** The engine's
+TelegramClient is owned by the trading engine's event loop, and this poller is a separate
+long-running process. Two processes sharing one Telethon session file is a good way to corrupt
+it. A bot token is independent, stateless, and safe to call from
 anywhere.
 
 Setup (one time): create a bot with @BotFather, create one Telegram channel per (strategy,
@@ -31,14 +44,9 @@ each as an administrator, then:
         SAME channel, since this bot posts and the engine's Telethon listener reads back from
         it) - see chat_id_for() below.
 
-        telegram.breakingtrade_btst_channels.analyze / .live: BTST has no engine counterpart
-        (it is a manual daily decision, never auto-traded - see alert_btst()'s docstring), so
-        it gets its own small config.yaml mapping instead of a telegram.channels entry.
-
 Which one a message goes to is decided HERE, automatically, from OpenAlgo's live analyze/live
 state (see `_current_phase()`) - never configured per call. Leave a strategy's `-live` channel
-out of config.yaml (or its `breakingtrade_btst_channels.live` key unset) until that strategy is
-actually promoted: alerts still record to the database, just aren't delivered (see `send()`),
+out of config.yaml until that strategy is actually promoted: alerts still record to the database, just aren't delivered (see `send()`),
 exactly like an unconfigured channel always has.
 
 Without a configured channel, alerts are still recorded, just not delivered - and the module
@@ -184,23 +192,16 @@ def _clean_token(token: str) -> str:
     return token
 
 
-# Each strategy gets its OWN channel. Not for tidiness - for attention. The BTST message is a
-# single actionable alert per day with a hard 15:15 deadline; the intraday stream is exploratory
-# research with no established edge. Mixed together, the one message that needs acting on within
-# 25 minutes competes with a scroll of "here is something interesting", which is precisely how a
-# deadline gets missed. Analysis separation is already handled by the `kind` column, so channels
-# exist purely to keep the urgent thing visible.
+# Each strategy gets its OWN channel, so one strategy's signals never mix with another's.
+# Analysis separation is already handled by the `kind` column.
 #
 # Each of these is further split ANALYZE/LIVE by _current_phase() below - a strategy's
 # paper-phase chatter must never sit in the same channel as its live fills, or a performance
 # review can no longer tell which trades were real. See the module docstring.
 #
-# "intraday"/"watchlist" name config.yaml's telegram.channels entries (same physical channel
-# the engine's own listener subscribes to); "btst" names config.yaml's
-# telegram.breakingtrade_btst_channels mapping instead, since BTST has no engine counterpart.
+# "intraday"/"watchlist"/"ri" name config.yaml's telegram.channels entries (same physical
+# channel the engine's own listener subscribes to). Only the _SIGNAL_KINDS below are ever sent.
 _CHANNEL_GROUP_BY_KIND = {
-    "btst": "btst",
-    "btst_empty": "btst",
     "intraday_transition": "intraday",
     "trade_signal": "intraday",
     "structure_flip": "intraday",
@@ -216,9 +217,13 @@ _CHANNEL_GROUP_BY_KIND = {
 }
 _DEFAULT_CHANNEL_GROUP = "intraday"
 
-# config.yaml telegram.channels NAME for each (group, phase) pair - not the BTST group, which
-# has no engine-subscribed channel and is looked up via settings.breakingtrade_btst_channels
-# instead (see chat_id_for()).
+#: The only kinds send() delivers: trade signals the engine's listener reads back from the
+#: strategy channel and trades (alert_trade_signal for entries, tp_watch._send_tp_hit for the
+#: staged TP exits, which it sends on the entry's kind). Every other kind is a notification and
+#: is recorded only, never posted into a strategy channel.
+_SIGNAL_KINDS = frozenset({"trade_signal", "trade_signal_watchlist", "trade_signal_ri"})
+
+# config.yaml telegram.channels NAME for each (group, phase) pair.
 _CHANNEL_NAME_BY_GROUP = {
     "intraday": "intraday-breakingtrade",
     "watchlist": "intraday-breakingtrade-watchlist",
@@ -232,10 +237,9 @@ _CHANNEL_NAME_BY_GROUP = {
 _MODE_CACHE_TTL_SECONDS = 60
 _mode_cache = {"is_analyze": True, "checked_at": 0.0}
 
-#: Prepended to every outgoing message in send() below - see notifier.py's identical
-#: _PHASE_TAG for the full rationale. Kept as its own copy rather than imported: this module
-#: is a peer of notifier.py, not a dependent of it, and the two-entry dict is cheaper to
-#: duplicate than to couple.
+#: Prepended to every outgoing message in send() below, so a message never depends on which
+#: physical channel it landed in to say whether it describes real money. The engine's
+#: normalizer strips it again before parsing (normalizer.py).
 _PHASE_TAG = {"live": "[LIVE] ", "analyze": "[PAPER] "}
 
 
@@ -308,10 +312,6 @@ def chat_id_for(kind: str) -> str | None:
     group = _CHANNEL_GROUP_BY_KIND.get(kind, _DEFAULT_CHANNEL_GROUP)
     phase = _current_phase()
 
-    if group == "btst":
-        ch = settings.breakingtrade_btst_channels.get(phase)
-        return str(ch.id) if ch else None
-
     name = f"{_CHANNEL_NAME_BY_GROUP[group]}-{phase}"
     return next((str(ch.id) for ch in settings.telegram_channels if ch.name == name), None)
 
@@ -365,25 +365,25 @@ def send(text: str, kind: str = None, monospace: bool = False) -> tuple[bool, in
     "aligned" table was actually ragged on the phone. Safe to always escape-free here: inside a
     Markdown code block only a literal backtick or backslash needs escaping, and none of this
     module's generated text (numbers, symbols, arrows) ever contains either.
+
+    Only a kind in _SIGNAL_KINDS is posted. Any other kind returns (False, None) without a
+    network call: strategy channels carry trade signals, not notifications.
     """
+    if kind not in _SIGNAL_KINDS:
+        return False, None
     token, chat_id = _credentials(kind)
     phase = _current_phase()
-    # Same convention as notifier.py's _PHASE_TAG: a message must never depend on which
-    # physical channel it landed in to say whether it describes real money - see that
-    # module's docstring for the incident this defends against.
+    # A message must never depend on which physical channel it landed in to say whether it
+    # describes real money (see _PHASE_TAG).
     text = f"{_PHASE_TAG.get(phase, '')}{text}"
     if not token or not chat_id:
         group = _CHANNEL_GROUP_BY_KIND.get(kind, _DEFAULT_CHANNEL_GROUP)
-        # Keyed by (group, phase), not one flag for everything: a missing BTST channel used
-        # to suppress the warning for a later missing WATCHLIST one, so the second gap was
+        # Keyed by (group, phase), not one flag for everything: a missing channel for one group
+        # used to suppress the warning for a later missing one, so the second gap was
         # invisible and its alerts silently went undelivered with nothing said about it.
         warn_key = (group, phase)
         if warn_key not in _warned_missing_config:
-            where = (
-                f"telegram.breakingtrade_btst_channels.{phase}"
-                if group == "btst"
-                else f"telegram.channels ({_CHANNEL_NAME_BY_GROUP[group]}-{phase})"
-            )
+            where = f"telegram.channels ({_CHANNEL_NAME_BY_GROUP[group]}-{phase})"
             print(
                 f"  [alerts] BREAKINGTRADE_BOT_TOKEN not set, or no {where} channel in "
                 "config.yaml - alerts are being recorded but not delivered"
@@ -586,8 +586,7 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
     ]
     message = "\n".join(lines)
 
-    # one message covering every new name
-    delivered, message_id = send(message, "intraday_transition", monospace=True)
+    # Recorded only, one row per name: a watchlist notice is not posted (see _SIGNAL_KINDS).
     for scan_name, symbols in new_by_scan.items():
         for symbol in symbols:
             record(
@@ -596,8 +595,6 @@ def alert_transitions(new_by_scan: dict, captured_at: datetime, snapshot=None) -
                 symbol=symbol,
                 scan=scan_name,
                 deliver=False,
-                delivered=delivered,
-                message_id=message_id,
             )
     return count
 
@@ -625,7 +622,12 @@ def alert_btst(watchlist, captured_at: datetime) -> int:
     seeing, and is marked REVISED so it is not mistaken for the original call.
     """
     if watchlist is None or watchlist.empty:
-        record("btst_empty", f"BTST {captured_at:%d-%b} | no candidates today", when=captured_at)
+        record(
+            "btst_empty",
+            f"BTST {captured_at:%d-%b} | no candidates today",
+            deliver=False,
+            when=captured_at,
+        )
         return 0
 
     names = {str(r.symbol) for r in watchlist.itertuples()}
@@ -654,8 +656,7 @@ def alert_btst(watchlist, captured_at: datetime) -> int:
     lines.append("Size for a gap, not a stop. No edge established - paper first.")
     message = "\n".join(lines)
 
-    # one message listing the whole watchlist
-    delivered, message_id = send(message, "btst", monospace=True)
+    # Recorded only, one row per name: the BTST list is not posted (see _SIGNAL_KINDS).
     for row in watchlist.itertuples():
         record(
             "btst",
@@ -664,8 +665,6 @@ def alert_btst(watchlist, captured_at: datetime) -> int:
             direction="up",
             scan="BTST",
             deliver=False,
-            delivered=delivered,
-            message_id=message_id,
             when=captured_at,
         )
     return len(watchlist)
@@ -764,11 +763,12 @@ def build_trade_signal_message(plan, strategy: str = "BREAKINGTRADE", scan_name:
 
 
 def alert_health(text: str) -> None:
-    record("health", f"BT poller: {text}")
+    """Recorded only, never posted (see _SIGNAL_KINDS). The poller log carries it too."""
+    record("health", f"BT poller: {text}", deliver=False)
 
 
 def alert_started(mode: str, is_analyze: bool, windows: str, already: int) -> None:
-    """One message on start, led by the trading mode.
+    """One record on start, led by the trading mode (recorded only, never posted).
 
     Silence is ambiguous - a poller that never speaks looks identical to one that died, which
     is exactly what happened on 2026-09-04. So it says hello, and the FIRST thing it says is
@@ -787,13 +787,17 @@ def alert_started(mode: str, is_analyze: bool, windows: str, already: int) -> No
     lines = [f"BT poller STARTED | {banner}", windows]
     if already:
         lines.append(f"resuming - {already} polls already stored today")
-    record("health", "\n".join(lines))
+    record("health", "\n".join(lines), deliver=False)
 
 
 def alert_stopped(polls: int, signals: int, reason: str = "stopped") -> None:
-    """One message on exit, with the day's tally so an empty day is distinguishable from a
+    """One record on exit (recorded only, never posted), with the day's tally so an empty day is distinguishable from a
     dead poller."""
-    record("health", f"BT poller {reason} | {polls} polls stored today, {signals} signals sent")
+    record(
+        "health",
+        f"BT poller {reason} | {polls} polls stored today, {signals} signals sent",
+        deliver=False,
+    )
 
 
 def history(since: datetime = None):

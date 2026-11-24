@@ -1,10 +1,8 @@
-"""M10: one registry for a strategy, instead of six hand-maintained maps.
+"""M10: one registry for a strategy, instead of several hand-maintained maps.
 
-Adding a strategy meant touching config.yaml `telegram.channels`, `strategy_profiles` and
-`blacklist`, plus notifier._STRATEGY_CHANNEL_BASE, strategy_cards.CARDS and (for a Python
-strategy) alerts._CHANNEL_NAME_BY_GROUP. EMA9 and EMA9VWAP had the first three and none of
-the last three, so nothing in the running system knew they existed — and nothing said whether
-that was deliberate.
+Adding a strategy meant touching config.yaml `strategy_profiles` and `blacklist` and the other
+per-strategy maps. EMA9 and EMA9VWAP had some of them and not the rest, so nothing in the running
+system knew they existed - and nothing said whether that was deliberate.
 """
 
 import pytest
@@ -44,23 +42,3 @@ class TestChannelBaseLookup:
 
     def test_none_for_an_unknown_tag(self):
         assert strategies.channel_base("NOPE") is None
-
-
-class TestNotifierUsesTheRegistry:
-    def test_per_strategy_summary_routing_matches_the_registry(self):
-        from signal_engine import notifier
-
-        for tag, meta in strategies.REGISTRY.items():
-            if meta.channel_base:
-                assert notifier._STRATEGY_CHANNEL_BASE.get(tag) == meta.channel_base
-
-
-class TestCardsCoverEveryChannelledStrategy:
-    def test_every_channel_base_has_a_reference_card(self):
-        """A channelled strategy with no card pins nothing to its own channel — the gap the
-        card mechanism exists to close."""
-        from signal_engine import strategy_cards
-
-        for meta in strategies.REGISTRY.values():
-            if meta.channel_base:
-                assert meta.channel_base in strategy_cards.CARDS, meta.tag

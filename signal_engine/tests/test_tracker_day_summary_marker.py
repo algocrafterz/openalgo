@@ -1,10 +1,12 @@
-"""send_day_summary() must only mark itself done when the summary actually reached Telegram.
+"""send_day_summary() marks the trading day done, exactly as it did before the Telegram removal.
 
-Regression guard for 2026-09-09: the 14:45 time-exit fired send_day_summary(), the Telegram
-client was not ready yet (a transient startup-timing state, not a real failure), notify()
-silently no-op'd, and send_day_summary() STILL wrote the "already sent today" marker - so the
-day summary was permanently lost for the rest of the day with no way to retry, and nothing in
-the logs said so (the skip was logged at DEBUG, invisible at the file's INFO level).
+History: on 2026-09-09 the marker was written even though the Telegram summary never left, so
+the day was lost with nothing to retry. The send then gated the marker. Since 2026-10-31 the
+configured notify level suppressed the summary, and the send path treated that as delivered, so
+production always wrote the marker. Outgoing Telegram notifications were removed in November
+2026 and that production behaviour was kept: the marker is written whenever send_day_summary()
+runs and nothing newer is already marked. These tests pin that behaviour. No Telegram send can
+happen (the autouse conftest fixture refuses any real one).
 """
 
 from datetime import datetime
@@ -17,70 +19,55 @@ from signal_engine.tracker import PositionTracker
 
 
 @pytest.fixture(autouse=True)
-def _outcome_level(monkeypatch):
-    """These tests cover the day summary and the send queue, not notify_level; the config runs
-    `alerts` since 2026-10-31, which drops both. Pin a level that keeps them."""
-    import dataclasses
-
-    from signal_engine import notifier
-
-    monkeypatch.setattr(notifier, "settings", dataclasses.replace(notifier.settings, notify_level="quiet"))
-
-
-@pytest.fixture(autouse=True)
 def isolated_marker(tmp_path, monkeypatch):
     monkeypatch.setattr(tracker_module, "_DAY_SUMMARY_MARKER", str(tmp_path / "day_summary"))
+
+
+@pytest.fixture
+def canary(monkeypatch):
+    """Count the reconciliation canary runs; the summary path must keep calling it."""
+    from signal_engine import reconcile
+
+    calls: list[int] = []
+
+    async def _canary():
+        calls.append(1)
+
+    monkeypatch.setattr(reconcile, "check_and_alert", _canary)
+    return calls
 
 
 def _tracker() -> PositionTracker:
     return PositionTracker(_make_engine())
 
 
-def _async(return_value):
-    async def _fn(**kwargs):
-        return return_value
-    return _fn
-
-
 class TestSendDaySummaryMarker:
     @pytest.mark.asyncio
-    async def test_successful_send_marks_the_day_done(self, monkeypatch):
-        monkeypatch.setattr(tracker_module.notifier, "notify_day_summary", _async(True))
+    async def test_the_summary_step_marks_the_day_done(self, canary):
         t = _tracker()
 
         await t.send_day_summary()
 
         assert t._day_summary_date == datetime.now(tracker_module.IST).date()
         assert tracker_module._summary_already_sent_today() is True
+        assert canary == [1]
 
     @pytest.mark.asyncio
-    async def test_failed_send_does_not_mark_the_day_done(self, monkeypatch):
-        """The 2026-09-09 bug: notify() returning False (client not ready) must not be
-        treated as "delivered"."""
-        monkeypatch.setattr(tracker_module.notifier, "notify_day_summary", _async(False))
+    async def test_a_second_call_with_nothing_new_is_a_no_op(self, canary):
         t = _tracker()
 
         await t.send_day_summary()
-
-        assert t._day_summary_date is None
-        assert tracker_module._summary_already_sent_today() is False
-
-    @pytest.mark.asyncio
-    async def test_a_failed_send_can_be_retried(self, monkeypatch):
-        """Because nothing was marked, a second call (e.g. the next poll cycle, or a restart)
-        must attempt delivery again rather than silently no-op forever."""
-        calls = []
-
-        async def _notify(**kwargs):
-            calls.append(1)
-            return len(calls) > 1  # fails first time, succeeds second
-
-        monkeypatch.setattr(tracker_module.notifier, "notify_day_summary", _notify)
-        t = _tracker()
-
         await t.send_day_summary()
-        assert tracker_module._summary_already_sent_today() is False
 
-        await t.send_day_summary()
         assert tracker_module._summary_already_sent_today() is True
-        assert len(calls) == 2
+        assert canary == [1]  # the canary does not run again for the same day
+
+    @pytest.mark.asyncio
+    async def test_a_restart_reads_the_marker_and_does_not_mark_again(self, canary):
+        await _tracker().send_day_summary()
+
+        restarted = _tracker()  # a new process: in-memory state is empty, the file is not
+        await restarted.send_day_summary()
+
+        assert restarted._day_summary_date is None
+        assert canary == [1]

@@ -302,11 +302,11 @@ def _tpo_pos_watch(market_profile, captured_at) -> None:
     if captured_at.time() < TPO_POS_EXPECTED_BY:
         return
     if tpo_pos_available(market_profile):
-        critical.notifier.clear(
+        critical.issues.clear(
             "tpo_pos", "BreakingTrade: the scans that need the value area are back on."
         )
         return
-    critical.notifier.raise_issue(
+    critical.issues.raise_issue(
         "tpo_pos",
         "value area not showing",
         "BreakingTrade: the site is still not showing where price sits against today's value "
@@ -868,7 +868,7 @@ def _watch(args) -> int:
                     )
                     last_keepalive = _ist_now()
                     for key in ("login", "format", "stale"):
-                        critical.notifier.clear(key, "polls are collecting fresh data again")
+                        critical.issues.clear(key, "polls are collecting fresh data again")
                     for scanner, note in session.api_notes.items():
                         if session.sources.get(scanner) != "browser" or not note:
                             continue
@@ -902,7 +902,7 @@ def _watch(args) -> int:
                     # the browser: nothing is wrong with it.
                     logger.error(f"poll {pending:%H:%M} needs sign-in: {exc}")
                     done_marks.add(pending)
-                    critical.notifier.raise_issue(
+                    critical.issues.raise_issue(
                         "login",
                         "no fresh data: breakingtrade.com sign-in is not available",
                         f"Poll {pending:%H:%M} could not run. {exc} No scans or entries "
@@ -919,7 +919,7 @@ def _watch(args) -> int:
                     if isinstance(exc, SnapshotFormatError):
                         # The vendor changed the page. Say so at once instead of waiting for the
                         # heartbeat: no scan or trigger is valid until it is mapped.
-                        critical.notifier.raise_issue(
+                        critical.issues.raise_issue(
                             "format",
                             "no fresh data: breakingtrade.com changed its table",
                             f"Poll {pending:%H:%M} could not be read, so nothing was stored. {exc}"[
@@ -984,7 +984,7 @@ def _watch(args) -> int:
                     or (_ist_now() - last_heartbeat_alert).total_seconds() > 3600
                 ):
                     logger.error(f"no successful poll for {stale:.0f} minutes")
-                    critical.notifier.raise_issue(
+                    critical.issues.raise_issue(
                         "stale",
                         f"no successful poll for {stale:.0f} minutes",
                         "The poller is running but has stored nothing fresh. Entries and exit "
@@ -1000,7 +1000,7 @@ def _watch(args) -> int:
             polls = len(_stored_polls(_ist_now().date()))
             alerts.alert_stopped(polls, _signals_sent_today())
         except Exception:
-            logger.warning("could not send the shutdown notification")
+            logger.warning("could not record the poller stop")
         return 0
     finally:
         if session is not None:

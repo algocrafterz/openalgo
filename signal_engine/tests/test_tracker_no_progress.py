@@ -38,7 +38,6 @@ class TestNoProgressProfitLock:
         with (
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.tracker.place_sl_order") as mock_place,
-            patch("signal_engine.tracker.notifier.notify_be_stop_applied", new_callable=AsyncMock),
         ):
             from signal_engine.models import OrderStatus, TradeResult
             mock_place.return_value = TradeResult(
@@ -88,7 +87,6 @@ class TestNoProgressProfitLock:
         with (
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.tracker.place_sl_order") as mock_place,
-            patch("signal_engine.tracker.notifier.notify_be_stop_applied", new_callable=AsyncMock),
         ):
             from signal_engine.models import OrderStatus, TradeResult
             mock_place.return_value = TradeResult(
@@ -147,7 +145,6 @@ class TestNoProgressProfitLock:
             patch("signal_engine.main.send_order", new_callable=AsyncMock,
                   return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="MKT_EXIT", message="")) as mock_send,
             patch("signal_engine.tracker.place_sl_order") as mock_sl,
-            patch("signal_engine.tracker.notifier.notify_no_progress_exit", new_callable=AsyncMock),
         ):
             with patch("signal_engine.config.settings") as mock_settings:
                 mock_settings.no_progress_enabled = True
@@ -222,7 +219,6 @@ class TestChopTightener:
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.tracker.place_sl_order",
                   return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="BE", message="")),
-            patch("signal_engine.tracker.notifier.notify_be_stop_applied", new_callable=AsyncMock),
         ):
             with patch("signal_engine.config.settings") as mock_settings:
                 self._apply_settings(mock_settings, enabled=True)
@@ -287,7 +283,6 @@ class TestChopTightener:
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.tracker.place_sl_order",
                   return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="BE", message="")) as mock_sl,
-            patch("signal_engine.tracker.notifier.notify_be_stop_applied", new_callable=AsyncMock),
         ):
             with patch("signal_engine.config.settings") as mock_settings:
                 self._apply_settings(mock_settings, enabled=True)
@@ -437,8 +432,6 @@ class TestLossCutGate:
         with (
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.main.send_order", new_callable=AsyncMock) as mock_exit,
-            patch("signal_engine.tracker.notifier.notify_no_progress_exit", new_callable=AsyncMock),
-            patch("signal_engine.tracker.notifier.notify_position_closed", new_callable=AsyncMock),
         ):
             from signal_engine.models import OrderStatus, TradeResult
             mock_exit.return_value = TradeResult(status=OrderStatus.SUCCESS, order_id="EXIT", message="")
@@ -525,8 +518,6 @@ class TestLossCutGate:
         with (
             patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.main.send_order", new_callable=AsyncMock) as mock_exit,
-            patch("signal_engine.tracker.notifier.notify_no_progress_exit", new_callable=AsyncMock),
-            patch("signal_engine.tracker.notifier.notify_position_closed", new_callable=AsyncMock),
         ):
             from signal_engine.models import OrderStatus, TradeResult
             mock_exit.return_value = TradeResult(status=OrderStatus.SUCCESS, order_id="EXIT", message="")

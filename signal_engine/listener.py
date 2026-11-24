@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from loguru import logger
 
-from signal_engine import freshness, ingest, mode_guard, notifier
+from signal_engine import freshness, ingest, mode_guard
 from signal_engine.config import settings
 
 # Check the connection every 90s so a stale one is noticed (common in WSL2, where TCP
@@ -209,7 +209,6 @@ def _make_handler(on_message, channel_names: dict):
         if reason is not None:
             logger.critical(f"[{source}] SIGNAL REFUSED: {reason}")
             _record_phase_decline(msg.text, source, reason)
-            await _notify_phase_mismatch(source, reason)
             return
 
         clean_text = " | ".join(line.strip() for line in msg.text.strip().splitlines() if line.strip())
@@ -290,25 +289,6 @@ async def drain_inflight(timeout: float) -> int:
     return len(still_running)
 
 
-#: Channels already alerted about a phase mismatch this session. A mode mismatch affects
-#: every message from that channel for as long as it lasts; one alert per channel says what
-#: the operator needs to know without turning a config mistake into a message storm.
-_phase_alerted: set = set()
-
-
-async def _notify_phase_mismatch(source: str, reason: str) -> None:
-    if source in _phase_alerted:
-        return
-    _phase_alerted.add(source)
-    try:
-        await notifier.notify_event(
-            "channel_phase_mismatch",
-            f"SIGNALS REFUSED from {source}\n{reason}",
-        )
-    except Exception as e:
-        logger.warning(f"Could not send phase-mismatch alert for [{source}]: {e}")
-
-
 async def _keepalive(client) -> None:
     """Periodically check the connection is still up, WITHOUT making an API call.
 
@@ -331,11 +311,8 @@ async def _keepalive(client) -> None:
 
 
 async def _connect(client) -> None:
-    """Authenticate and register the client as the notification transport."""
+    """Authenticate and log the channels that are watched and the ones that are disabled."""
     await client.start(phone=settings.telegram_phone)
-    notifier.set_client(client)
-    # Startup reconciliation ran before this point; deliver whatever it raised.
-    await notifier.flush_pending()
     watching, skipped = _split_by_enabled(settings.telegram_channels)
     for ch in watching:
         logger.info(f"Watching channel: {ch.name} ({ch.id})")
@@ -344,21 +321,6 @@ async def _connect(client) -> None:
             f"Channel DISABLED, no trades will be taken from it: {ch.name} ({ch.id}) "
             "— set enabled: true in config.yaml to go live on it"
         )
-
-    # Checked on every startup, but only actually (re)pins a channel whose card content is new
-    # or changed since the last successful pin - see strategy_cards.py's module docstring.
-    # Includes BTST's channels even though they're outside `channels:` above (never subscribed
-    # to - BTST is a manual daily call, not auto-traded) because they still need the same
-    # ANALYZE/LIVE reference card as everything else.
-    try:
-        from signal_engine import strategy_cards
-
-        card_channels = list(watching) + list(settings.breakingtrade_btst_channels.values())
-        pinned = await strategy_cards.send_and_pin_cards(client, card_channels)
-        if pinned:
-            logger.info(f"Strategy reference cards (re)pinned: {pinned}")
-    except Exception as e:
-        logger.warning(f"Strategy card refresh failed (non-fatal): {e}")
 
 
 async def _serve(client) -> None:
@@ -484,8 +446,7 @@ async def _retry_until_exhausted(client, flood_error) -> tuple:
 
 
 async def _announce_feed_down(error: Exception, retries: int) -> None:
-    """Block entries and alert once. The alert itself may not get out: Telegram is the
-    transport and it is the thing that is down, so the log line is the reliable record."""
+    """Block entries. mode_guard.halt_feed logs the reason at CRITICAL."""
     reason = (
         f"Telegram unreachable after {retries} reconnect attempts ({error}). NO NEW SIGNALS "
         "are being received. New entries are blocked until the feed returns; the listener "
@@ -493,24 +454,9 @@ async def _announce_feed_down(error: Exception, retries: int) -> None:
         "no-progress gates and time exit."
     )
     mode_guard.halt_feed(reason)
-    try:
-        await asyncio.wait_for(notifier.notify_event("listener_down", f"FEED DOWN\n{reason}"), 5.0)
-    except Exception as e:  # noqa: BLE001 - the alert is best effort
-        logger.warning(f"Could not send feed-down alert: {e}")
 
 
 async def _announce_feed_restored() -> None:
-    """Lift the feed halt (never a mode-flip halt) and tell the operator."""
-    if not mode_guard.clear_feed_halt():
-        return
-    try:
-        await asyncio.wait_for(
-            notifier.notify_event(
-                "listener_restored",
-                "FEED RESTORED\nTelegram reconnected. New entries are enabled again. Signals "
-                "sent while the feed was down are not replayed.",
-            ),
-            5.0,
-        )
-    except Exception as e:  # noqa: BLE001 - the alert is best effort
-        logger.warning(f"Could not send feed-restored alert: {e}")
+    """Lift the feed halt (never a mode-flip halt). mode_guard.clear_feed_halt logs it."""
+    if mode_guard.clear_feed_halt():
+        logger.warning("Signals sent while the feed was down are not replayed.")

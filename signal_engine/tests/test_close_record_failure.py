@@ -21,7 +21,7 @@ _FLAT_BOOK = [{"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "quant
 
 
 @pytest.mark.asyncio
-async def test_record_failure_after_record_close_counts_the_close_once():
+async def test_record_failure_after_record_close_counts_the_close_once(logged):
     engine = _make_engine()
     engine._state(ORB).open_positions = 1
     t = PositionTracker(engine)
@@ -30,7 +30,6 @@ async def test_record_failure_after_record_close_counts_the_close_once():
     real_record_close = engine.record_close
     engine.record_close = MagicMock(side_effect=real_record_close)
     t._record_closed_trade = AsyncMock(side_effect=[RuntimeError("disk full"), None])
-    t._send_poll_alert = AsyncMock()
 
     with (
         patch.object(
@@ -50,9 +49,10 @@ async def test_record_failure_after_record_close_counts_the_close_once():
     assert t.tracked_count == 0
     assert engine._state(ORB).open_positions == 0
     assert engine._state(ORB).daily_realised_loss == 500.0  # counted once, not twice
-    events = [c.args[0] for c in t._send_poll_alert.await_args_list]
-    assert events == ["close_record_failed"]
-    text = t._send_poll_alert.await_args_list[0].args[1]
+    # The former Telegram alert is now this ERROR line, logged once.
+    lines = [m for m in logged.messages("ERROR") if "Tracker poll alert (close_record_failed)" in m]
+    assert len(lines) == 1
+    text = lines[0]
     assert "RELIANCE" in text and "disk full" not in text and "RuntimeError" not in text
 
 
@@ -126,12 +126,11 @@ def _one_position_tracker(**pos_kw):
     t._last_realised_pnl = 0.0
     pos = _make_position(fill_price=2500.0, **pos_kw)
     t.register(pos)
-    t._send_poll_alert = AsyncMock()
     return engine, t, pos
 
 
 @pytest.mark.asyncio
-async def test_no_progress_close_whose_record_fails_is_counted_once_and_unregistered():
+async def test_no_progress_close_whose_record_fails_is_counted_once_and_unregistered(logged):
     from datetime import timedelta
 
     from signal_engine.models import OrderStatus, TradeResult
@@ -144,34 +143,29 @@ async def test_no_progress_close_whose_record_fails_is_counted_once_and_unregist
     with (
         patch("signal_engine.main._send_exit_with_retries", AsyncMock(return_value=ok)),
         patch.object(tracker_module, "fetch_order_fill_price", AsyncMock(return_value=2490.0)),
-        patch.object(tracker_module, "fetch_realised_pnl", AsyncMock(return_value=-100.0)),
-        patch.object(tracker_module, "notifier") as notifier,
+        patch.object(tracker_module, "fetch_realised_pnl", AsyncMock(return_value=-100.0))
     ):
-        notifier.notify_no_progress_exit = AsyncMock()
         await t._no_progress_market_exit(pos, timedelta(minutes=40), 2490.0, 2500.0, 0.1)
     assert engine.record_close.call_count == 1
     assert t.tracked_count == 0  # not left registered to be booked again
-    events = [c.args[0] for c in t._send_poll_alert.await_args_list]
-    assert events == ["close_record_failed"]
-    text = t._send_poll_alert.await_args_list[0].args[1]
+    # The former Telegram alert is now this ERROR line, logged once.
+    lines = [m for m in logged.messages("ERROR") if "Tracker poll alert (close_record_failed)" in m]
+    assert len(lines) == 1
+    text = lines[0]
     assert "RELIANCE" in text and "disk full" not in text and "RuntimeError" not in text
 
 
 @pytest.mark.asyncio
-async def test_time_exit_whose_notification_fails_is_counted_once_and_removed():
+async def test_a_confirmed_time_exit_is_counted_once_and_removed(logged):
     from types import SimpleNamespace
 
     engine, t, pos = _one_position_tracker()
     t._save_close_row = MagicMock()
     key = t._key(pos.symbol, pos.strategy)
-    with patch.object(tracker_module, "notifier") as notifier:
-        notifier.notify_time_exit = AsyncMock(side_effect=RuntimeError("telegram down"))
-        await t._book_one_time_exit(
-            key, pos, 0.0, SimpleNamespace(max_trades_per_day=5), confirmed_closed=True
-        )
+    await t._book_one_time_exit(
+        key, pos, 0.0, SimpleNamespace(max_trades_per_day=5), confirmed_closed=True
+    )
     assert engine.record_close.call_count == 1
     assert t.tracked_count == 0
-    events = [c.args[0] for c in t._send_poll_alert.await_args_list]
-    assert events == ["close_record_failed"]
-    text = t._send_poll_alert.await_args_list[0].args[1]
-    assert "telegram down" not in text and "RuntimeError" not in text
+    # A confirmed close that books cleanly logs no record-failure line.
+    assert logged.count("close_record_failed", "ERROR") == 0

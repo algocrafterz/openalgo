@@ -37,7 +37,6 @@ def isolated_dbs(tmp_path, monkeypatch):
             telegram_channels=(
                 TelegramChannel(name="intraday-breakingtrade-analyze", id=-1004379472313),
             ),
-            breakingtrade_btst_channels={},
         ),
     )
 

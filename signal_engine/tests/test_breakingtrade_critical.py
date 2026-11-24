@@ -1,11 +1,13 @@
-"""Critical data problems are loud, sent once per day, and announce recovery once."""
+"""Critical data problems are loud, recorded once per day, and record recovery once.
+
+Nothing is sent to Telegram: a banner is logged and recorded (the `record` callable)."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 
 from signal_engine.analysis.breakingtrade.critical import (
-    CriticalNotifier,
+    CriticalIssues,
     format_critical,
 )
 
@@ -21,10 +23,10 @@ class _Clock:
         self.now += timedelta(minutes=minutes)
 
 
-def _notifier():
+def _issues():
     sent = []
     clock = _Clock()
-    return CriticalNotifier(deliver=sent.append, clock=clock), sent, clock
+    return CriticalIssues(record=sent.append, clock=clock), sent, clock
 
 
 def test_banner_is_unmissable_and_plain_text():
@@ -34,48 +36,50 @@ def test_banner_is_unmissable_and_plain_text():
     assert text.isascii()
 
 
-def test_issue_sends_once_per_day_then_again_next_day():
-    notifier, sent, clock = _notifier()
-    assert notifier.raise_issue("login", "t", "d", "a") is True
+def test_issue_is_recorded_once_per_day_then_again_next_day():
+    issues, sent, clock = _issues()
+    assert issues.raise_issue("login", "t", "d", "a") is True
     clock.advance(60)
-    assert notifier.raise_issue("login", "t", "d", "a") is False
+    assert issues.raise_issue("login", "t", "d", "a") is False
     clock.advance(5 * 60)  # still 2026-11-11
-    assert notifier.raise_issue("login", "t", "d", "a") is False
+    assert issues.raise_issue("login", "t", "d", "a") is False
     assert len(sent) == 1
     clock.advance(24 * 60)  # next day
-    assert notifier.raise_issue("login", "t", "d", "a") is True
+    assert issues.raise_issue("login", "t", "d", "a") is True
     assert len(sent) == 2
 
 
-def test_flapping_issue_stays_quiet_after_first_alert_of_the_day():
-    notifier, sent, clock = _notifier()
-    notifier.raise_issue("login", "t", "d", "a")
-    assert notifier.clear("login", "back") is True
+def test_flapping_issue_stays_quiet_after_first_banner_of_the_day():
+    issues, sent, clock = _issues()
+    issues.raise_issue("login", "t", "d", "a")
+    assert issues.clear("login", "back") is True
     clock.advance(30)
-    assert notifier.raise_issue("login", "t", "d", "a") is False
-    assert notifier.clear("login", "back") is False  # no alert was sent, so no recovery
+    assert issues.raise_issue("login", "t", "d", "a") is False
+    assert issues.clear("login", "back") is False  # no banner was recorded, so no recovery
     assert len(sent) == 2  # banner + one RECOVERED
 
 
 def test_different_issues_do_not_suppress_each_other():
-    notifier, sent, _ = _notifier()
-    notifier.raise_issue("login", "t", "d", "a")
-    notifier.raise_issue("format", "t", "d", "a")
-    assert len(sent) == 2 and notifier.active() == ["format", "login"]
+    issues, sent, _ = _issues()
+    issues.raise_issue("login", "t", "d", "a")
+    issues.raise_issue("format", "t", "d", "a")
+    assert len(sent) == 2 and issues.active() == ["format", "login"]
 
 
 def test_clear_announces_recovery_once():
-    notifier, sent, _ = _notifier()
-    assert notifier.clear("login", "ok") is False  # nothing was reported
-    notifier.raise_issue("login", "t", "d", "a")
-    assert notifier.clear("login", "polls are back") is True
-    assert notifier.clear("login", "polls are back") is False
+    issues, sent, _ = _issues()
+    assert issues.clear("login", "ok") is False  # nothing was reported
+    issues.raise_issue("login", "t", "d", "a")
+    assert issues.clear("login", "polls are back") is True
+    assert issues.clear("login", "polls are back") is False
     assert sent[-1].startswith("RECOVERED")
 
 
-def test_delivery_failure_never_raises():
+def test_a_failed_record_never_raises_and_is_logged(logged):
     def boom(_text):
-        raise RuntimeError("telegram down")
+        raise RuntimeError("alerts table unavailable")
 
-    notifier = CriticalNotifier(deliver=boom, clock=_Clock())
-    assert notifier.raise_issue("x", "t", "d", "a") is True
+    issues = CriticalIssues(record=boom, clock=_Clock())
+    assert issues.raise_issue("x", "t", "d", "a") is True
+    assert logged.has("CRITICAL t: d", "ERROR")  # the banner is logged whether or not it is stored
+    assert logged.has("could not record the critical issue", "ERROR")

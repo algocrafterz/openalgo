@@ -269,10 +269,9 @@ def _never_touch_operational_state_files(tmp_path, monkeypatch):
 
     risk.db is repointed at import above. The runner state database cannot be repointed through
     its module constant, because RunnerStateStore binds the path as a default argument when the
-    class is built, so the default itself is replaced. The card state, day-summary pin state,
-    bug tracker and shadow tick directory are read at call time and are patched by name.
+    class is built, so the default itself is replaced. The bug tracker and shadow tick directory
+    are read at call time and are patched by name.
     """
-    from signal_engine import notifier, strategy_cards
     from signal_engine.bugs import store as bug_store
     from signal_engine.pipeline.state import RunnerStateStore
     from signal_engine.shadow import store as shadow_store
@@ -282,10 +281,6 @@ def _never_touch_operational_state_files(tmp_path, monkeypatch):
         RunnerStateStore.__init__,
         "__defaults__",
         (str(tmp_path / "runner_state.db"),) + tuple(defaults[1:]),
-    )
-    monkeypatch.setattr(strategy_cards, "_STATE_PATH", str(tmp_path / "strategy_card_state.json"))
-    monkeypatch.setattr(
-        notifier, "_DAY_SUMMARY_PIN_STATE_PATH", str(tmp_path / "day_summary_pin_state.json")
     )
     monkeypatch.setattr(bug_store, "TRACKER_PATH", str(tmp_path / "bugs.json"))
     monkeypatch.setattr(shadow_store, "DATA_DIR", tmp_path / "shadow")
@@ -306,8 +301,8 @@ def _is_telegram_url(url) -> bool:
 def _telegram_refused(url) -> RuntimeError:
     return RuntimeError(
         f"A test tried to reach {_TELEGRAM_HOST} ({str(url)!r}), which would send a REAL Telegram "
-        "message. Patch the sender at its call site (alerts.send, critical.notifier or the "
-        "module's own alert function). 2026-11-11 to 2026-11-13: unmocked BreakingTrade critical "
+        "message. Patch the sender at its call site (alerts.send for the inbound signal "
+        "transport). 2026-11-11 to 2026-11-13: unmocked BreakingTrade critical "
         "alerts from test_breakingtrade_login_guard.py reached the live channel about 56 times."
     )
 
@@ -381,15 +376,24 @@ def _isolate_breakingtrade_alert_state(tmp_path, monkeypatch):
     poller-loop tests) wrote its alert rows into the real signal_engine/data/breakingtrade.db.
     Tests that redirect it themselves override this later in the same test.
 
-    critical.notifier is a module-level object that other modules reach as critical.notifier, so
+    critical.issues is a module-level object that other modules reach as critical.issues, so
     its dicts are cleared in place (not replaced): the once-per-day latch otherwise leaks from
     one test into the next and decides whether a later test's banner is raised.
     """
     from signal_engine.analysis.breakingtrade import critical, store
 
     monkeypatch.setattr(store, "_DB_PATH", str(tmp_path / "breakingtrade.db"))
-    critical.notifier._last_sent.clear()
-    critical.notifier._open.clear()
+    critical.issues._last_sent.clear()
+    critical.issues._open.clear()
     yield
-    critical.notifier._last_sent.clear()
-    critical.notifier._open.clear()
+    critical.issues._last_sent.clear()
+    critical.issues._open.clear()
+
+
+@pytest.fixture
+def logged():
+    """Every loguru line written during the test: see signal_engine/tests/log_capture.py."""
+    from signal_engine.tests.log_capture import capturing
+
+    with capturing() as found:
+        yield found

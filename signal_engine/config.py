@@ -163,23 +163,9 @@ class Settings:
 
     # Telegram channels (from yaml)
     telegram_channels: tuple[TelegramChannel, ...]
-    #: Admin/system channel (startup, shutdown, risk halts, order lifecycle, day summary) -
-    #: keyed "analyze"/"live", same split and same reasoning as breakingtrade_btst_channels
-    #: below: system chatter from the paper phase must never sit in the same channel as a
-    #: real-money alert. notifier.py picks the entry matching OpenAlgo's current mode.
-    notify_channel: dict[str, TelegramChannel]
-    #: BTST destinations for signal_engine/analysis/breakingtrade/alerts.py - keyed "analyze"/
-    #: "live". Not part of telegram_channels because BTST is a manual daily decision with no
-    #: engine-listener counterpart (see alerts.py's chat_id_for()). A phase missing from
-    #: config.yaml is simply absent from this dict, not an error - alerts.py treats that as
-    #: "record, don't deliver", same as any other unconfigured channel.
-    breakingtrade_btst_channels: dict[str, TelegramChannel]
     #: Capital the BTST strategy is allocated, split equally across the day's names.
     #: Reporting only - see config.yaml's `btst:` block.
     btst_capital: float
-    #: quiet | normal | verbose — how much routine traffic reaches notify_channel.
-    #: Failure events ignore it entirely; see notifier.EVENT_LEVELS.
-    notify_level: str
 
     # Position sizing (from yaml)
     sizing_mode: str
@@ -235,7 +221,7 @@ class Settings:
     mis_margin_pct: float  # NSE/BSE equity MIS margin % for live capital floor check
 
     # Broker pre-reject list (from yaml) — symbols the broker is known to reject for MIS.
-    # Skipped before order placement to avoid wasted slot + Telegram rejection notice.
+    # Skipped before order placement to avoid a wasted slot and a broker rejection.
     # See docs/FLATTRADE-RESTRICTIONS.md for source / maintenance procedure.
     broker_mis_rejected: frozenset
 
@@ -494,7 +480,7 @@ def validate_channels(channels) -> list:
 
     None of these used to be checked at all, and every one of them fails SILENTLY:
 
-    - A duplicate NAME makes notifier._channel_for_strategy() and alerts.chat_id_for()
+    - A duplicate NAME makes alerts.chat_id_for()
       resolve to whichever entry comes first in the file.
     - A duplicate ID double-subscribes the listener to one chat.
     - An `-analyze` channel with no `-live` twin (or the reverse) is a promotion waiting to
@@ -628,18 +614,6 @@ def _secret_fields(env: dict) -> dict:
     }
 
 
-def _parse_phase_channels(raw: dict) -> dict[str, TelegramChannel]:
-    """{"analyze": {...}, "live": {...}} -> {"analyze": TelegramChannel, "live": TelegramChannel},
-    keeping only whichever phase is actually present - a phase not yet configured (a strategy
-    not yet promoted to live) is simply absent from the result, not an error."""
-    raw = raw or {}
-    return {
-        phase: _parse_channel(raw[phase])
-        for phase in ("analyze", "live")
-        if isinstance(raw.get(phase), dict)
-    }
-
-
 def _btst_fields(yml: dict) -> dict:
     """Optional `btst:` block. Absent means the documented default, not an error - this is a
     reporting knob, and a missing one must not stop the engine starting."""
@@ -648,16 +622,16 @@ def _btst_fields(yml: dict) -> dict:
 
 
 def _telegram_fields(telegram: dict) -> dict:
-    """Signal channels to listen on, plus the admin/system and BTST channel pairs."""
+    """Signal channels to listen on, and the channels that are only recorded.
+
+    Retired keys are ignored, so an older config.yaml still loads: `notify_channel`,
+    `notify_level` and `breakingtrade_btst_channels` (outgoing Telegram notifications were
+    removed in November 2026).
+    """
     return {
         "telegram_channels": tuple(_parse_channel(ch) for ch in telegram.get("channels", [])),
-        "notify_channel": _parse_phase_channels(telegram.get("notify_channel")),
-        "notify_level": str(telegram.get("notify_level", "normal")).strip().lower(),
         "ingest_sources": tuple(
             _parse_channel(ch) for ch in (telegram.get("ingest_sources") or [])
-        ),
-        "breakingtrade_btst_channels": _parse_phase_channels(
-            telegram.get("breakingtrade_btst_channels")
         ),
     }
 

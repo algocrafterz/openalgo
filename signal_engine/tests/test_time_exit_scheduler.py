@@ -1,7 +1,7 @@
 """TimeExitScheduler: fires once a day at the configured IST time, and survives a failure.
 
 startup starts the scheduler with asyncio.create_task and never awaits it, so an exception out
-of time_exit_all used to end the task silently: no log line from the scheduler, no alert, and
+of time_exit_all used to end the task silently: no log line from the scheduler, no error, and
 no time exit for the rest of the session.
 """
 
@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from signal_engine import tracker as tracker_mod
+from signal_engine.tests.log_capture import capturing
 from signal_engine.timeutils import IST
 from signal_engine.tracker import TimeExitScheduler
 
@@ -50,13 +51,12 @@ async def test_does_not_fire_before_the_configured_time():
 
 
 @pytest.mark.asyncio
-async def test_a_failing_time_exit_is_logged_and_alerted_and_the_loop_survives():
+async def test_a_failing_time_exit_is_logged_and_the_loop_survives():
     tracker = MagicMock()
     tracker.time_exit_all = AsyncMock(side_effect=RuntimeError("boom"))
-    with _clock(14, 45), patch.object(tracker_mod, "notifier") as notifier:
-        notifier.notify = AsyncMock()
+    with _clock(14, 45), capturing() as logs:
         scheduler = TimeExitScheduler(tracker, 14, 45)
         await _run_one_cycle(scheduler)  # must not raise
 
     tracker.time_exit_all.assert_awaited_once()  # fired once, not retried
-    assert "TIME EXIT ERROR" in notifier.notify.call_args[0][0]
+    assert logs.has("TIME EXIT ERROR", "ERROR")

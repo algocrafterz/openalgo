@@ -20,7 +20,8 @@ from signal_engine.tests.test_main_characterization import (
 
 
 def _alerts(h):
-    return [c for c in h.notifier.notify_event.await_args_list if c.args[0] == "sl_hit_unproven"]
+    """The unproven-SL-hit warning lines logged: no message goes out, the log line is the record."""
+    return [m for m in h.logged.messages("WARNING") if m.startswith("SL HIT UNPROVEN")]
 
 
 @pytest.fixture(autouse=True)
@@ -68,7 +69,7 @@ async def test_sl_hit_while_the_broker_holds_keeps_the_stop_and_the_position():
     assert len(tracker._completed_trades) == 0
     alerts = _alerts(h)
     assert len(alerts) == 1
-    text = alerts[0].args[1]
+    text = alerts[0]
     assert "RELIANCE [ORB]" in text
     assert "broker still shows the position open" in text
     assert "Nothing was cancelled or closed" in text
@@ -153,7 +154,7 @@ async def test_an_unreadable_stop_and_an_unreadable_book_is_kept():
 
 
 @pytest.mark.asyncio
-async def test_the_unproven_alert_is_sent_once_per_ten_minutes():
+async def test_the_unproven_warning_is_logged_once_per_ten_minutes():
     tracker = _real_tracker()
     tracker.register(_position())
     tracker.fetch_own_position = AsyncMock(return_value=50)

@@ -64,8 +64,7 @@ async def test_time_exit_books_only_the_closing_leg_when_earlier_legs_exist():
         patch.object(PositionTracker, "_close_strategy", new_callable=AsyncMock),
         patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=0),
         patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=-300.0),
-        patch("signal_engine.tracker.notifier", new_callable=AsyncMock),
-        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch("asyncio.sleep", new_callable=AsyncMock)
     ):
         await tracker.time_exit_all()
     state = engine._state(ORB)

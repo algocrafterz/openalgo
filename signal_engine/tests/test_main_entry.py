@@ -166,8 +166,7 @@ class TestPipelineFlow:
             patch("signal_engine.main.fetch_available_capital", new_callable=AsyncMock, return_value=800.0),
             patch("signal_engine.main.fetch_funds_available", new_callable=AsyncMock, return_value=1_000_000.0),
             patch("signal_engine.main.send_order") as mock_send,
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             # the entry policy reads the runner strategy table; none listed = no policy here
             # (the policy has its own tests in test_entry_trade_policy.py)
@@ -201,8 +200,7 @@ class TestPipelineFlow:
             patch("signal_engine.main.send_bracket_legs", new_callable=AsyncMock, return_value=(None, None)),
             patch("signal_engine.main.save"),
             patch("signal_engine.main.tracker", new_callable=tracker_mock),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             # the entry policy reads the runner strategy table; none listed = no policy here
             # (the policy has its own tests in test_entry_trade_policy.py)
@@ -595,8 +593,7 @@ class TestFillOvershotTP:
                   return_value=533.95),  # fill above TP 532.75
             patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.settings") as mock_settings,
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_risk.check_exposure.return_value = True
             mock_risk.get_sizing_capital.return_value = 15_000.0
@@ -651,8 +648,7 @@ class TestFillOvershotTP:
                   return_value=407.0),  # fill below TP 408.75 for SHORT
             patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.settings") as mock_settings,
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_risk.check_exposure.return_value = True
             mock_risk.get_sizing_capital.return_value = 15_000.0
@@ -700,8 +696,7 @@ class TestFillOvershotTP:
                   return_value=529.5),  # fill within TP 532.75 — normal
             patch("signal_engine.main.tracker", new_callable=tracker_mock) as mock_tracker,
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.settings") as mock_settings,
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_risk.check_exposure.return_value = True
             mock_risk.get_sizing_capital.return_value = 15_000.0

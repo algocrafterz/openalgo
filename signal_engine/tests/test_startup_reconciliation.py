@@ -74,7 +74,6 @@ class TestClosedWhileDown:
                 new=AsyncMock(return_value=[closed_row]),
             ),
             patch("signal_engine.db.save_reconciled_exit") as mock_save,
-            patch("signal_engine.notifier.notify_position_closed", new=AsyncMock()) as mock_notify,
         ):
             await reconcile_open_positions(risk_engine, tracker)
 
@@ -85,8 +84,6 @@ class TestClosedWhileDown:
         assert args[6] == pytest.approx(1019.4)  # fill_price positional arg
         assert args[7] == pytest.approx(-363.8)  # pnl positional arg
 
-        mock_notify.assert_called_once()
-        assert mock_notify.call_args.kwargs["strategy"] == "BREAKOUT"
 
     @pytest.mark.asyncio
     async def test_updates_the_realised_loss_counter(self):
@@ -108,7 +105,6 @@ class TestClosedWhileDown:
                 new=AsyncMock(return_value=[closed_row]),
             ),
             patch("signal_engine.db.save_reconciled_exit"),
-            patch("signal_engine.notifier.notify_position_closed", new=AsyncMock()),
         ):
             await reconcile_open_positions(risk_engine, tracker)
 
@@ -137,7 +133,6 @@ class TestClosedWhileDown:
                 new=AsyncMock(return_value=[closed_row]),
             ),
             patch("signal_engine.db.save_reconciled_exit") as mock_save,
-            patch("signal_engine.notifier.notify_position_closed", new=AsyncMock()),
         ):
             await reconcile_open_positions(risk_engine, tracker)
 

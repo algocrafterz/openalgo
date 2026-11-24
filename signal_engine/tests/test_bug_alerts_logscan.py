@@ -1,4 +1,6 @@
-"""Phase 3: bug alerts, the conservative log detector, and the automation safety rule (R3.4)."""
+"""Phase 3: the conservative log detector and the automation safety rule (R3.4).
+
+The bug alerts that once sat here were removed with outgoing Telegram notifications."""
 
 import ast
 import json
@@ -8,7 +10,7 @@ from collections import Counter
 import pytest
 
 from signal_engine.bugs import store
-from signal_engine.ops import alerts, autotrack, bugalerts, logscan
+from signal_engine.ops import autotrack, logscan
 from signal_engine.ops.model import FAIL, Check, write_phase
 
 pytestmark = pytest.mark.filterwarnings("ignore")
@@ -19,112 +21,6 @@ def _bug(path, title, severity="HIGH", seen="2026-11-16"):
     return store.add(
         title=title, kind="BUG", severity=severity, area="x", seen=seen, impact="i", path=path
     )
-
-
-@pytest.fixture
-def sent(monkeypatch):
-    calls = []
-
-    def fake(text, **kw):
-        calls.append((text, kw))
-        return True
-
-    monkeypatch.setattr(alerts, "deliver", fake)
-    return calls
-
-
-def test_new_high_alerts_once_and_not_medium(tmp_path, sent):
-    path, folder = str(tmp_path / "b.json"), str(tmp_path)
-    _bug(path, "Orders stuck")
-    _bug(path, "Minor thing", severity="MEDIUM")
-    bugalerts.run(DAY, dry_run=False, path=path, folder=folder)
-    assert len(sent) == 1
-    assert sent[0][1]["condition"] == "BUG-001" and sent[0][1]["phase"] == "bugs"
-    assert sent[0][1]["severity"] == "RED"
-    bugalerts.run(DAY, dry_run=False, path=path, folder=folder)
-    assert len(sent) == 1  # state remembers it
-
-
-def test_dry_run_sends_nothing_and_writes_no_state(tmp_path, sent):
-    path, folder = str(tmp_path / "b.json"), str(tmp_path)
-    _bug(path, "Orders stuck")
-    lines = bugalerts.run(DAY, dry_run=True, path=path, folder=folder)
-    assert sent == [] and lines[0].startswith("[dry-run] would send")
-    assert not (tmp_path / "bug-alert-state.json").exists()
-
-
-def _restamp(path, bug_id, stamps):
-    data = store.load(path)
-    bug = next(b for b in data["bugs"] if b["id"] == bug_id)
-    for h in bug["history"]:
-        if h["status"] == "fixed":
-            h["at"] = f"{stamps['fixed']}T10:00:00+05:30"
-    store._save(data, path)
-
-
-def _restamp_last(path, bug_id, day):
-    data = store.load(path)
-    bug = next(b for b in data["bugs"] if b["id"] == bug_id)
-    bug["history"][-1]["at"] = f"{day}T10:00:00+05:30"
-    store._save(data, path)
-
-
-def test_overdue_and_unverified_are_weekly_and_reopen_counts(tmp_path, sent):
-    path = str(tmp_path / "b.json")
-    _bug(path, "Old high", seen="2026-11-01")
-    fixed = _bug(path, "Fixed long ago", seen="2026-11-01")["id"]
-    store.update(fixed, status="in_progress", path=path)
-    store.update(fixed, status="fixed", fix="x", path=path)
-    # history stamps are "now", so place the fix on D=2026-11-02, then daily review notes after it
-    _restamp(path, fixed, {"fixed": "2026-11-02"})
-    for stamp in ("2026-11-05", "2026-11-08"):
-        store.note(fixed, "review: not yet verified", path=path)
-        _restamp_last(path, fixed, stamp)
-    kinds = {e[0]: e[1] for e in bugalerts.events(DAY, path)}
-    assert kinds["bug-overdue"] == "BUG-001:2026-W47"
-    assert kinds["bug-unverified"] == "BUG-002:2026-W47"
-    # D+7 fires, D+6 does not, despite notes on D+3 and D+6
-    unver = lambda day: [e for e in bugalerts.events(day, path) if e[0] == "bug-unverified"]  # noqa: E731
-    assert unver("2026-11-09") and not unver("2026-11-08")
-    # a later week is a new bucket
-    assert {e[1] for e in bugalerts.events("2026-11-23", path) if e[0] == "bug-overdue"} == {
-        "BUG-001:2026-W48"
-    }
-
-
-def test_reopened_high_condition_has_count(tmp_path, sent):
-    path = str(tmp_path / "b.json")
-    bug = _bug(path, "Flaky", seen="2026-11-10")
-    store.update(bug["id"], status="in_progress", path=path)
-    store.update(bug["id"], status="fixed", fix="x", path=path)
-    data = store.load(path)
-    data["bugs"][0]["history"][-1]["at"] = "2026-11-11T10:00:00+05:30"
-    store._save(data, path)
-    store.seen(bug["id"], DAY, path=path)
-    data = store.load(path)
-    data["bugs"][0]["history"][-1]["at"] = f"{DAY}T09:00:00+05:30"
-    store._save(data, path)
-    cond = [e[1] for e in bugalerts.events(DAY, path) if e[0] == "bug-reopened"]
-    assert cond == ["BUG-001:reopen1"]
-
-
-def test_cap_of_five_with_overflow_line(tmp_path, sent):
-    path, folder = str(tmp_path / "b.json"), str(tmp_path)
-    for i in range(8):
-        _bug(path, f"High bug number {i}")
-    lines = bugalerts.run(DAY, dry_run=False, path=path, folder=folder)
-    assert len(sent) == 5 and "and 3 more" in sent[-1][0] and lines[-1] == "and 3 more"
-    bugalerts.run(DAY, dry_run=False, path=path, folder=folder)
-    assert len(sent) == 8  # the rest go out next run, never repeated
-
-
-def test_failed_send_is_retried_next_run(tmp_path, monkeypatch):
-    path, folder = str(tmp_path / "b.json"), str(tmp_path)
-    _bug(path, "Orders stuck")
-    monkeypatch.setattr(alerts, "deliver", lambda *a, **k: False)
-    bugalerts.run(DAY, dry_run=False, path=path, folder=folder)
-    assert len(bugalerts.events(DAY, path)) == 1
-    assert not (tmp_path / "bug-alert-state.json").exists()
 
 
 # R3.1 ---------------------------------------------------------------------------------------
@@ -205,7 +101,7 @@ def test_evidence_is_one_masked_short_line():
 # R3.4 ---------------------------------------------------------------------------------------
 
 
-def test_automation_cannot_verify_close_or_change_status(tmp_path, sent):
+def test_automation_cannot_verify_close_or_change_status(tmp_path):
     """Run every automation path on a fixed HIGH bug: only open/seen/note may result."""
     path, folder = str(tmp_path / "b.json"), str(tmp_path / "r")
     bug = _bug(path, "High one", seen="2026-11-01")
@@ -216,7 +112,6 @@ def test_automation_cannot_verify_close_or_change_status(tmp_path, sent):
     store.update(done["id"], status="fixed", fix="x", path=path)
     store.update(done["id"], status="verified", verification="clean session", path=path)
     before = {b["id"]: b for b in store.load(path)["bugs"]}
-    bugalerts.run(DAY, dry_run=False, path=path, folder=folder)
     logscan.detect(DAY, dry_run=False, counter=_counter({"a: boom": 9}), path=path)
     chk = [Check("first runner cycle", FAIL, "e")]
     write_phase("liveness", DAY, chk, "s", folder=folder)
@@ -231,7 +126,7 @@ def test_automation_cannot_verify_close_or_change_status(tmp_path, sent):
 def test_automation_modules_call_no_status_changing_store_function():
     root = pathlib.Path(__file__).resolve().parents[1] / "ops"
     banned = {"update", "apply_actions"}
-    for name in ("autotrack.py", "logscan.py", "bugalerts.py"):
+    for name in ("autotrack.py", "logscan.py"):
         tree = ast.parse((root / name).read_text())
         for node in ast.walk(tree):
             if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
@@ -306,20 +201,3 @@ def test_damaged_tracker_does_not_abort_detect(tmp_path):
     path.write_text("{not json")
     out = logscan.detect(DAY, dry_run=False, counter=_counter({"a: boom": 6}), path=str(path))
     assert out and out[0].startswith("skipped")
-
-
-def test_old_reopen_wording_counts(tmp_path, sent):
-    path = str(tmp_path / "b.json")
-    bug = _bug(path, "Flaky", seen="2026-11-10")
-    data = store.load(path)
-    data["bugs"][0]["history"].append(
-        {
-            "at": f"{DAY}T09:00:00+05:30",
-            "status": "open",
-            "note": "seen: recurred after being fixed, reopened",
-        }
-    )
-    store._save(data, path)
-    assert [e[1] for e in bugalerts.events(DAY, path) if e[0] == "bug-reopened"] == [
-        f"{bug['id']}:reopen1"
-    ]

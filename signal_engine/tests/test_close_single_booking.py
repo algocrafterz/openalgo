@@ -11,7 +11,9 @@ The reverse race was worse: a signal exit arriving while the poll was booking wo
 on a flat position.
 
 These tests make the other path fire exactly inside the booking window, which is where the
-real race happened. The invariant is I2 in docs/ACCOUNTING-INVARIANTS.md.
+real race happened. That window is the end of book_close(), before the caller unregisters the
+position. Until November 2026 the close notification was the await there; it was removed with
+the routine notifications, so the hook now fires as book_close() returns, the same moment. The invariant is I2 in docs/ACCOUNTING-INVARIANTS.md.
 """
 
 import json
@@ -78,7 +80,7 @@ class _Harness:
         self.send_order = AsyncMock(
             return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="EXIT-1")
         )
-        self.tracker_notifier = AsyncMock()
+        self._hook = None
 
     def patches(self):
         return [
@@ -88,8 +90,6 @@ class _Harness:
             patch("signal_engine.main.cancel_order", AsyncMock(return_value=True)),
             patch("signal_engine.main.fetch_order_fill_price", AsyncMock(return_value=CLOSE_FILL)),
             patch("signal_engine.main._book_realised_pnl_delta", AsyncMock(return_value=(0.0, 0.0))),
-            patch("signal_engine.main.notifier", AsyncMock()),
-            patch("signal_engine.tracker.notifier", self.tracker_notifier),
             patch("signal_engine.tracker.cancel_order", AsyncMock(return_value=False)),
             patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=CLOSE_FILL)),
             patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=_closed_book())),
@@ -101,18 +101,26 @@ class _Harness:
             # BREAKOUT-PY's exits belong to the Ladder, which makes _check_no_progress skip it
             # before any guard is reached. Turn that off so the guards are what is tested.
             patch("signal_engine.tracker._ladder_owns_exits", return_value=False),
+            patch.object(self.tracker, "book_close", self._book_close_then_hook),
         ]
 
-    def run_inside_close_notification(self, coro_factory):
-        """Run `coro_factory()` once, from inside the close notification: the booking window."""
+    async def _book_close_then_hook(self, *args, **kwargs):
+        record = await PositionTracker.book_close(self.tracker, *args, **kwargs)
+        if self._hook is not None:
+            await self._hook()
+        return record
+
+    def run_inside_booking_window(self, coro_factory):
+        """Run `coro_factory()` once, as the first book_close() returns: the booking window."""
         fired = []
 
-        async def hook(*_a, **_k):
+        async def hook():
             if not fired:
                 fired.append(True)
                 await coro_factory()
 
-        self.tracker_notifier.notify_position_closed.side_effect = hook
+        self._hook = hook
+        self.hook_fired = fired
 
 
 async def _run(harness, scenario):
@@ -130,12 +138,13 @@ async def _run(harness, scenario):
 class TestSignalExitAndPollBookTheSameCloseOnce:
     async def test_the_poll_firing_during_a_signal_exits_booking_does_not_book_again(self):
         h = _Harness()
-        h.run_inside_close_notification(h.tracker.check_positions)
+        h.run_inside_booking_window(h.tracker.check_positions)
 
         async def scenario():
             await main._handle_exit_locked(_exit_signal())
 
         record_close = await _run(h, scenario)
+        assert h.hook_fired == [True]  # the other path really ran inside the window
 
         rows = _rows()
         assert len(rows) == 1, [r[3] for r in rows]  # one ledger close
@@ -153,12 +162,13 @@ class TestSignalExitAndPollBookTheSameCloseOnce:
     async def test_a_signal_exit_arriving_during_the_polls_booking_places_no_order(self):
         """The reverse race: without the guard this would SELL a position that is already flat."""
         h = _Harness()
-        h.run_inside_close_notification(lambda: main._handle_exit_locked(_exit_signal()))
+        h.run_inside_booking_window(lambda: main._handle_exit_locked(_exit_signal()))
 
         async def scenario():
             await h.tracker.check_positions()
 
         record_close = await _run(h, scenario)
+        assert h.hook_fired == [True]  # the other path really ran inside the window
 
         assert h.send_order.await_count == 0  # no exit order on a flat position
         assert len(_rows()) == 1
@@ -168,7 +178,7 @@ class TestSignalExitAndPollBookTheSameCloseOnce:
 
     async def test_an_sl_hit_reconcile_alert_racing_the_poll_books_once(self):
         h = _Harness()
-        h.run_inside_close_notification(h.tracker.check_positions)
+        h.run_inside_booking_window(h.tracker.check_positions)
         signal = _exit_signal()
         signal.tp_level = "SL"
 
@@ -180,6 +190,7 @@ class TestSignalExitAndPollBookTheSameCloseOnce:
                 await main._handle_exit_locked(signal)
 
         record_close = await _run(h, scenario)
+        assert h.hook_fired == [True]  # the other path really ran inside the window
 
         assert len(_rows()) == 1
         assert record_close.call_count == 1
@@ -502,21 +513,6 @@ class TestThePollClaimsBeforeItVerifies:
         await _run(h, scenario)
         assert seen["pending"] is True  # a signal exit cannot slip in during the verification
         assert h.pos.exit_pending is False  # released: nothing was booked
-
-
-@pytest.mark.asyncio
-class TestANotificationFailureCannotUnwindABookedClose:
-    async def test_the_close_stays_booked_when_telegram_is_down(self):
-        h = _Harness()
-        h.tracker_notifier.notify_position_closed.side_effect = RuntimeError("telegram down")
-
-        async def scenario():
-            await main._handle_exit_locked(_exit_signal())  # must not raise
-
-        record_close = await _run(h, scenario)
-        assert len(_rows()) == 1
-        assert record_close.call_count == 1
-        assert h.tracker.find_position(SYMBOL, STRATEGY) is None
 
 
 @pytest.mark.asyncio

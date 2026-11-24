@@ -119,7 +119,8 @@ def _alert_flip(
         lines.append(ref_line)
     message = "\n".join(lines)
 
-    delivered, message_id = alerts.send(message, "structure_flip")
+    # Recorded only: a flip warning is a notification and is not posted into the strategy
+    # channel (see alerts._SIGNAL_KINDS). The record keeps the one-warning-per-position dedup.
     alerts.record(
         "structure_flip",
         message,
@@ -127,8 +128,6 @@ def _alert_flip(
         direction=pos["direction"],
         scan="FLIP",
         deliver=False,
-        delivered=delivered,
-        message_id=message_id,
     )
 
 

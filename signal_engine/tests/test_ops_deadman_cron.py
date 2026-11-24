@@ -102,9 +102,21 @@ def test_missing_critical_step_is_incomplete_and_named(tmp_path):
 
 
 @pytest.mark.parametrize("phase", ["open-day", "liveness"])
-def test_morning_phase_missing_notify_is_incomplete(tmp_path, phase):
-    _phase(tmp_path, phase, skip=("notify",))
-    assert "step notify has no record" in _judge(tmp_path, phase)["reasons"]
+def test_morning_phase_needs_only_the_check_step(tmp_path, phase):
+    assert model.CRITICAL_STEPS[phase] == ("check",)
+    _phase(tmp_path, phase)
+    assert _judge(tmp_path, phase)["state"] == "healthy"
+    _phase(tmp_path, phase, skip=("check",))
+    assert "step check has no record" in _judge(tmp_path, phase)["reasons"]
+
+
+@pytest.mark.parametrize("phase", ["open-day", "liveness"])
+def test_a_notify_row_from_an_older_run_is_ignored(tmp_path, phase):
+    """The notify step is gone. A row an older run wrote must not count as a critical step."""
+    _phase(tmp_path, phase)
+    status = tmp_path / f"{phase}-{DAY}-status.tsv"
+    status.write_text(status.read_text() + "notify\t09:12:00\t09:12:09\t0\n")
+    assert _judge(tmp_path, phase)["state"] == "healthy"
 
 
 def test_red_verdict_is_failed_even_when_every_step_ran(tmp_path):
@@ -200,9 +212,9 @@ def test_a_phase_not_yet_due_is_not_judged(tmp_path):
     assert [r["phase"] for r in report] == ["open-day"]  # liveness (09:27) is not yet due
 
 
-def test_alert_text_separates_the_three_bad_states(tmp_path):
-    _phase(tmp_path, "open-day", skip=("notify",))  # incomplete
-    _phase(tmp_path, "liveness", exit_overrides={"notify": 3})  # failed
+def test_deadman_text_separates_the_three_bad_states(tmp_path):
+    _phase(tmp_path, "open-day", skip=("check",))  # incomplete
+    _phase(tmp_path, "liveness", exit_overrides={"check": 3})  # failed
     text = automation.deadman("morning", DAY, folder=str(tmp_path), now=LATE)
     assert "did not finish (incomplete)" in text
     assert "failed:" in text
@@ -406,47 +418,60 @@ def test_the_windows_start_times_accept_old_and_new_until_the_flag(monkeypatch):
 # ---- the dead-man command line: recovery only after something was checked ------------------
 
 
-def _run_deadman(monkeypatch, phase, day, now):
+def _run_deadman(monkeypatch, capsys, phase, day, now):
     from signal_engine.ops import __main__ as cli
-    from signal_engine.ops import actions, alerts
+    from signal_engine.ops import actions
 
-    calls = []
     monkeypatch.setattr(actions, "now_ist", lambda: now)
-    monkeypatch.setattr(alerts, "recover", lambda **kw: calls.append(kw) or True)
-    monkeypatch.setattr(alerts, "deliver", lambda *a, **kw: calls.append(("deliver", a)) or True)
     rc = cli.main(["deadman", phase, "--day", day])
-    return rc, calls
+    return rc, capsys.readouterr().out
 
 
-def test_deadman_on_a_weekend_sends_and_recovers_nothing(tmp_path, monkeypatch):
+def test_deadman_on_a_weekend_finds_nothing(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(model, "REPORTS", str(tmp_path))
     monkeypatch.setattr(automation, "REPORTS", str(tmp_path))
-    rc, calls = _run_deadman(
-        monkeypatch, "close", "2026-11-14", datetime(2026, 11, 14, 21, 40, tzinfo=IST)
+    rc, out = _run_deadman(
+        monkeypatch, capsys, "close", "2026-11-14", datetime(2026, 11, 14, 21, 40, tzinfo=IST)
     )
-    assert (rc, calls) == (0, [])
+    assert rc == 0
+    assert "nothing due, nothing checked" in out
 
 
-def test_deadman_on_a_holiday_sends_and_recovers_nothing(tmp_path, monkeypatch):
+def test_deadman_on_a_holiday_finds_nothing(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(automation, "is_trading_day", lambda day, **kw: False)
-    rc, calls = _run_deadman(monkeypatch, "close", DAY, LATE)
-    assert (rc, calls) == (0, [])
+    rc, out = _run_deadman(monkeypatch, capsys, "close", DAY, LATE)
+    assert rc == 0
+    assert "nothing due, nothing checked" in out
 
 
-def test_deadman_before_the_phase_is_due_sends_and_recovers_nothing(tmp_path, monkeypatch):
+def test_deadman_before_the_phase_is_due_finds_nothing(tmp_path, monkeypatch, capsys):
     early = datetime(2026, 11, 12, 9, 5, tzinfo=IST)
-    rc, calls = _run_deadman(monkeypatch, "morning", DAY, early)
-    assert (rc, calls) == (0, [])
+    rc, out = _run_deadman(monkeypatch, capsys, "morning", DAY, early)
+    assert rc == 0
+    assert "nothing due, nothing checked" in out
 
 
-def test_deadman_recovers_when_every_due_checkpoint_is_healthy(tmp_path, monkeypatch):
+def test_deadman_is_healthy_when_every_due_checkpoint_is_healthy(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(model, "REPORTS", str(tmp_path))
     monkeypatch.setattr(automation, "REPORTS", str(tmp_path))
     monkeypatch.setattr(verdict, "REPORTS", str(tmp_path))
     _phase(tmp_path, "close-day")
-    rc, calls = _run_deadman(monkeypatch, "close", DAY, LATE)
+    rc, out = _run_deadman(monkeypatch, capsys, "close", DAY, LATE)
     assert rc == 0
-    assert calls == [{"kind": "deadman", "phase": "close"}]
+    assert "healthy, every due checkpoint is complete" in out
+
+
+def test_deadman_prints_the_finding_and_exits_one_without_sending_anything(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(model, "REPORTS", str(tmp_path))
+    monkeypatch.setattr(automation, "REPORTS", str(tmp_path))
+    monkeypatch.setattr(verdict, "REPORTS", str(tmp_path))
+    _phase(tmp_path, "close-day", exit_overrides={"backfill": 1})
+    rc, out = _run_deadman(monkeypatch, capsys, "close", DAY, LATE)
+    assert rc == 1
+    assert f"deadman close {DAY} (failed):" in out
+    assert "step backfill failed" in out
 
 
 def test_a_twelve_hour_locale_task_time_is_read_not_skipped(monkeypatch):

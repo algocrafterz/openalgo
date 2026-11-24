@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from signal_engine import db, notifier
+from signal_engine import db
 from signal_engine.models import Action, Direction, Order, OrderStatus, Signal, TradeResult
 from signal_engine.tests.tracker_fixtures import _make_engine, _make_position
 from signal_engine.tracker import PositionTracker
@@ -56,7 +56,6 @@ async def _close(pos, statuses, *, pnl_delta, cancel_flips=True, square_off_orde
         patch("signal_engine.tracker.cancel_order", new=AsyncMock(side_effect=cancel)),
         patch("signal_engine.tracker.fetch_orderbook", new=book),
         patch.object(tracker, "_cancel_untracked_stops", new=AsyncMock(return_value=None)),
-        patch("signal_engine.tracker.notifier.notify_position_closed", new=AsyncMock()),
         patch("signal_engine.tracker.db.save_tracker_exit") as save,
     ):
         await tracker._record_closed_trade(key, pos, timedelta(minutes=20), pnl_delta, _Settings())
@@ -313,9 +312,7 @@ class TestSquareoffIsUndecided:
         assert (counts["wins"], counts["losses"]) == (1, 1)
         assert counts["net_pnl"] == pytest.approx(total)
         assert sum(r.total_pnl for r in records) == pytest.approx(total)
-
-        per_strategy = notifier._group_by_strategy(records)
-        stats_a = notifier._aggregate_strategy_stats(per_strategy["STRAT-A"])
-        assert (stats_a["trades"], stats_a["wins"], stats_a["losses"]) == (3, 1, 1)
-        assert sum(r.total_pnl for r in per_strategy["STRAT-A"]) == pytest.approx(35.0)
-        assert sum(r.total_pnl for r in per_strategy["STRAT-B"]) == pytest.approx(15.0)
+        # The per-strategy split of the removed Telegram day summary is gone; the records still
+        # carry it.
+        assert sum(r.total_pnl for r in records if r.strategy == "STRAT-A") == pytest.approx(35.0)
+        assert sum(r.total_pnl for r in records if r.strategy == "STRAT-B") == pytest.approx(15.0)

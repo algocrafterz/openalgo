@@ -64,7 +64,7 @@ class TestSendMonospace:
 
         monkeypatch.setattr(alerts.httpx, "post", fake_post)
 
-        _real_send("col1  col2", kind="intraday_transition", monospace=True)
+        _real_send("col1  col2", kind="trade_signal", monospace=True)
 
         # "[PAPER] " - see send()'s _PHASE_TAG; the autouse fixture fakes analyze mode.
         assert captured["text"] == "```\n[PAPER] col1  col2\n```"
@@ -84,7 +84,7 @@ class TestSendMonospace:
 
         monkeypatch.setattr(alerts.httpx, "post", fake_post)
 
-        _real_send("a short note", kind="intraday_transition")
+        _real_send("a short note", kind="trade_signal")
 
         assert captured["text"] == "[PAPER] a short note"
         assert "parse_mode" not in captured
@@ -107,7 +107,7 @@ class TestSendMonospace:
 
         monkeypatch.setattr(alerts.httpx, "post", fake_post)
 
-        _real_send("a short note", kind="intraday_transition")
+        _real_send("a short note", kind="trade_signal")
 
         assert captured["text"] == "[LIVE] a short note"
 
@@ -263,13 +263,10 @@ import signal_engine.config as _se_config
 from signal_engine.config import TelegramChannel
 
 
-def _fake_settings(channels=(), btst=None):
+def _fake_settings(channels=()):
     from types import SimpleNamespace
 
-    return SimpleNamespace(
-        telegram_channels=tuple(channels),
-        breakingtrade_btst_channels=dict(btst or {}),
-    )
+    return SimpleNamespace(telegram_channels=tuple(channels))
 
 
 def test_each_strategy_routes_to_its_own_channel(monkeypatch):
@@ -278,14 +275,14 @@ def test_each_strategy_routes_to_its_own_channel(monkeypatch):
         _se_config,
         "settings",
         _fake_settings(
-            channels=[TelegramChannel(name="intraday-breakingtrade-analyze", id=-100)],
-            btst={"analyze": TelegramChannel(name="intraday-breakingtrade-btst-analyze", id=-200)},
+            channels=[
+                TelegramChannel(name="intraday-breakingtrade-analyze", id=-100),
+                TelegramChannel(name="intraday-breakingtrade-ri-analyze", id=-300),
+            ],
         ),
     )
-    assert alerts.chat_id_for("btst") == "-200"
-    assert alerts.chat_id_for("btst_empty") == "-200"
-    assert alerts.chat_id_for("intraday_transition") == "-100"
-    assert alerts.chat_id_for("health") == "-100"
+    assert alerts.chat_id_for("trade_signal") == "-100"
+    assert alerts.chat_id_for("trade_signal_ri") == "-300"
 
 
 def test_watchlist_trade_signal_routes_to_its_own_channel(monkeypatch):
@@ -345,17 +342,6 @@ def test_chat_id_for_does_not_deliver_to_live_until_the_live_channel_is_configur
         _fake_settings(channels=[TelegramChannel(name="intraday-breakingtrade-analyze", id=-100)]),
     )
     assert alerts.chat_id_for("trade_signal") is None
-
-
-def test_btst_chat_id_for_does_not_deliver_to_live_until_configured(monkeypatch):
-    """Same rule as above, for BTST's separate breakingtrade_btst_channels mapping."""
-    monkeypatch.setattr(alerts, "_current_phase", lambda: "live")
-    monkeypatch.setattr(
-        _se_config,
-        "settings",
-        _fake_settings(btst={"analyze": TelegramChannel(name="btst-analyze", id=-100)}),
-    )
-    assert alerts.chat_id_for("btst") is None
 
 
 class TestCurrentPhase:
@@ -453,15 +439,20 @@ def test_confirmed_trade_signal_still_defaults_to_the_original_strategy_and_kind
     assert kind == "trade_signal"
 
 
-def test_missing_channel_never_falls_back_to_another(monkeypatch):
-    """An earlier single-channel setup delivered these into the channel breakout.pine uses.
-    Falling back on a missing key would silently repeat that, so it must not deliver at all."""
+def test_a_btst_notice_never_reaches_a_strategy_channel(monkeypatch):
+    """BTST once had its own channel mapping. It is now recorded only: send() refuses the kind
+    before any lookup, so it can never land in a strategy channel that does exist."""
+    monkeypatch.setattr(alerts, "_env", lambda: {"BREAKINGTRADE_BOT_TOKEN": "123:abc"})
     monkeypatch.setattr(
         _se_config,
         "settings",
         _fake_settings(channels=[TelegramChannel(name="intraday-breakingtrade-analyze", id=-100)]),
     )
-    assert alerts.chat_id_for("btst") is None
+    posted = []
+    monkeypatch.setattr(alerts.httpx, "post", lambda *a, **k: posted.append(k) or _FakeResponse())
+    assert _real_send("BTST list", kind="btst") == (False, None)
+    assert _real_send("BTST list", kind="btst_empty") == (False, None)
+    assert posted == []
 
 
 # ---------------------------------------------------------------------------

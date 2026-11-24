@@ -12,6 +12,7 @@ import pytest
 
 from signal_engine import order_reconcile as oc
 from signal_engine.main import _handle_exit
+from signal_engine.tests.log_capture import capturing
 from signal_engine.tests.test_main_characterization import (
     _exit_signal,
     _position,
@@ -53,7 +54,8 @@ async def _exit(*, status, own, tp_level="TP1", exit_qty_pct=None, fill=None, or
 
 
 def _exit_failed_alerts(h):
-    return h.notifier.notify_exit_failed.await_args_list
+    """The EXIT FAILED lines (the former exit-failed Telegram alert, now an ERROR log line)."""
+    return [m for m in h.logged.messages("ERROR") if m.startswith("EXIT FAILED ")]
 
 
 @pytest.mark.asyncio
@@ -83,7 +85,6 @@ async def test_partial_exit_rejected_after_acceptance_changes_no_quantity_and_re
     assert pos.realized_pnl == 0.0
     assert pos.exit_types == []
     h.risk.record_close.assert_not_called()
-    h.notifier.notify_partial_exit.assert_not_awaited()
     assert len(_exit_failed_alerts(h)) == 1
 
 
@@ -123,7 +124,6 @@ async def test_short_partial_exit_is_accepted_on_the_signed_remainder():
 
     h, tracker, pos = await _exit_short(book=[_row(-25)])
     assert pos.quantity == 25
-    h.notifier.notify_partial_exit.assert_awaited_once()
     assert Direction.SHORT == pos.direction
 
 
@@ -132,7 +132,6 @@ async def test_a_reversed_position_is_not_accepted_as_the_partial_remainder():
     """A long of 25 where a short of 25 was expected has the right size and the wrong side."""
     h, tracker, pos = await _exit_short(book=[_row(25)])
     assert pos.quantity == 50
-    h.notifier.notify_partial_exit.assert_not_awaited()
     assert order_reconcile_get() is not None
 
 
@@ -160,7 +159,6 @@ async def _exit_short(*, book):
 async def test_partial_exit_status_unreadable_and_broker_shows_the_remainder_is_booked():
     h, tracker, pos = await _exit(status="", own=25, exit_qty_pct=0.5)
     assert pos.quantity == 25
-    h.notifier.notify_partial_exit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -176,8 +174,8 @@ async def test_status_unreadable_and_broker_still_holds_is_held_uncertain():
     assert (pending.kind, pending.action, pending.quantity) == ("EXIT", "SELL", 50)
     h.place_sl_order.assert_not_awaited()  # no stop is placed beside an exit that may still land
     assert pos.sl_order_id != "EX1"
-    # the operator is told the order is still working and must not be doubled by hand
-    texts = [c.args[0] for c in h.notifier.notify.await_args_list]
+    # the log says the order is still working and must not be doubled by hand
+    texts = h.logged.messages("WARNING")
     assert any("Do not exit by hand" in t for t in texts)
     assert not any("exit or place a stop by hand" in t for t in texts)
     assert not any("ORDER UNCONFIRMED" in t for t in texts)
@@ -206,7 +204,7 @@ async def test_the_accepted_exit_alert_names_the_stop_only_when_it_was_cancelled
                 pos, 50, True, "EXIT", accepted, order, datetime.now(IST), "status open",
                 sl_cancelled=cancelled,
             )
-        texts.append(h.notifier.notify.await_args_list[0].args[0])
+        texts.append(next(m for m in h.logged.messages("WARNING") if "was accepted" in m))
     assert "RELIANCE [ORB]: the exit order EX1 was accepted" in texts[0]
     assert "Do not exit by hand while that order is still working" in texts[0]
     assert "stop-loss was cancelled" not in texts[0]
@@ -226,7 +224,6 @@ async def test_a_partial_exit_that_the_broker_does_not_show_is_held_not_booked()
     h, tracker, pos = await _exit(status="open", own=50, exit_qty_pct=0.5)
     assert pos.quantity == 50
     assert order_reconcile_get() is not None
-    h.notifier.notify_partial_exit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -286,30 +283,26 @@ async def _np_exit(status):
         patch("signal_engine.tracker.fetch_order_fill_price", new_callable=AsyncMock, return_value=None),
         patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value=status),
         patch("signal_engine.tracker.place_sl_order", new_callable=AsyncMock, return_value=stop) as place,
-        patch("signal_engine.tracker.notifier") as notifier,
+        capturing() as logged,
     ):
-        notifier.notify_sl_failed = AsyncMock()
-        notifier.notify_no_progress_exit = AsyncMock()
         await tracker._no_progress_market_exit(pos, timedelta(minutes=40), 2490.0, 2500.0, 0.1)
-    return tracker, pos, place, notifier
+    return tracker, pos, place, logged
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["rejected", "cancelled"])
 async def test_no_progress_exit_rejected_after_acceptance_restores_the_stop(status):
-    tracker, pos, place, notifier = await _np_exit(status)
+    tracker, pos, place, logged = await _np_exit(status)
     place.assert_awaited_once()
     assert pos.sl_order_id == "SL_NEW"  # the dead exit id is not left in place
     assert tracker.find_position("RELIANCE", "ORB") is pos
-    notifier.notify_sl_failed.assert_awaited_once()
-    assert "Stop restored" in notifier.notify_sl_failed.await_args.args[1]
-    notifier.notify_no_progress_exit.assert_not_awaited()  # nothing was exited
+    (line,) = [m for m in logged.messages("ERROR") if m.startswith("SL FAILED | RELIANCE")]
+    assert "Stop restored." in line
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["open", "", "complete"])
 async def test_no_progress_exit_with_any_other_status_is_as_today(status):
-    tracker, pos, place, notifier = await _np_exit(status)
+    tracker, pos, place, logged = await _np_exit(status)
     place.assert_not_awaited()
     assert pos.sl_order_id == "EXNP"  # left for the poll to book, as before
-    notifier.notify_no_progress_exit.assert_awaited_once()

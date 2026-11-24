@@ -121,7 +121,7 @@ def _broker_and_mode(day: str | None = None) -> list[Check]:
         capital, (mode, _is_analyze) = asyncio.run(read())
     except Exception as exc:  # noqa: BLE001
         text = f"{type(exc).__name__}: {exc}"
-        ipalert.maybe_alert(text, day or datetime.now(IST).strftime("%Y-%m-%d"))
+        ipalert.log_invalid_ip(text, day or datetime.now(IST).strftime("%Y-%m-%d"))
         return [Check("broker session (funds API)", FAIL, text[:160])]
     funds = Check(
         "broker session (funds API)",

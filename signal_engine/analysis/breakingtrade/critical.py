@@ -1,9 +1,13 @@
 """Critical BreakingTrade data problems, worded so they cannot be mistaken for routine chatter.
 
 A routine poller message is one line among many. A problem that stops the strategy getting
-data (sign-in lost, page reshaped, delivery figure gone, no fresh poll) is sent in a loud
-banner, sent once per issue per day (the first occurrence), and followed by a RECOVERED message
+data (sign-in lost, page reshaped, delivery figure gone, no fresh poll) is recorded as a loud
+banner, once per issue per day (the first occurrence), and followed by a RECOVERED record
 when it clears. Plain text only: the banner is capital letters and rules, no icons.
+
+Nothing is sent to Telegram (outgoing notifications were removed in November 2026). Each
+banner is logged at ERROR and recorded as a `health` row in the alerts table, never posted:
+strategy channels carry trade signals only (see alerts._SIGNAL_KINDS).
 """
 
 from __future__ import annotations
@@ -27,27 +31,26 @@ def format_critical(title: str, detail: str, action: str, repeats: bool = True) 
         f"ACTION NEEDED: {action.strip()}",
     ]
     if repeats:
-        lines.append("(sent once per day; later failures today are in the poller log)")
+        lines.append("(recorded once per day; later failures today are in the poller log)")
     lines.append(_RULE)
     return "\n".join(lines)
 
 
-def _deliver(text: str) -> None:
+def _record(text: str) -> None:
     from signal_engine.analysis.breakingtrade import alerts
 
-    delivered, message_id = alerts.send(text, "health", monospace=True)
-    alerts.record("health", text, deliver=False, delivered=delivered, message_id=message_id)
+    alerts.record("health", text, deliver=False)
 
 
-class CriticalNotifier:
-    def __init__(self, deliver=_deliver, clock=datetime.now):
-        self._deliver = deliver
+class CriticalIssues:
+    def __init__(self, record=_record, clock=datetime.now):
+        self._record = record
         self._clock = clock
-        self._last_sent: dict = {}  # key -> date its banner was last sent
-        self._open: set = set()  # keys whose banner went out and have not recovered
+        self._last_sent: dict = {}  # key -> date its banner was last recorded
+        self._open: set = set()  # keys whose banner was recorded and have not recovered
 
     def raise_issue(self, key: str, title: str, detail: str, action: str) -> bool:
-        """Send the banner on the first occurrence of the day only. True if sent."""
+        """Record the banner on the first occurrence of the day only. True if recorded."""
         today = self._clock().date()
         logger.error(f"CRITICAL {title}: {detail}")
         if self._last_sent.get(key) == today:
@@ -55,25 +58,25 @@ class CriticalNotifier:
         self._last_sent[key] = today
         self._open.add(key)
         try:
-            self._deliver(format_critical(title, detail, action))
+            self._record(format_critical(title, detail, action))
         except Exception:
-            logger.exception("could not send the critical alert")
+            logger.exception("could not record the critical issue")
         return True
 
     def clear(self, key: str, what: str) -> bool:
-        """Say the problem is over, once, if its banner had been sent."""
+        """Record that the problem is over, once, if its banner had been recorded."""
         if key not in self._open:
             return False
         self._open.discard(key)
         logger.info(f"critical issue cleared: {what}")
         try:
-            self._deliver(f"RECOVERED - BREAKINGTRADE DATA: {what}")
+            self._record(f"RECOVERED - BREAKINGTRADE DATA: {what}")
         except Exception:
-            logger.exception("could not send the recovery notice")
+            logger.exception("could not record the recovery")
         return True
 
     def active(self) -> list:
         return sorted(self._open)
 
 
-notifier = CriticalNotifier()
+issues = CriticalIssues()

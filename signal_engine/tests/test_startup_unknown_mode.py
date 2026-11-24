@@ -18,7 +18,7 @@ def _fast_retry(monkeypatch):
     monkeypatch.setattr(startup, "_MODE_RETRY_SPACING_S", 0, raising=False)
 
 
-def _patches(fetch, apply_mode, startup_result):
+def _patches(fetch, apply_mode):
     """Everything _run_engine touches around the mode check, with no real side effects."""
     return [
         patch.object(startup, "run_startup_health_checks", AsyncMock(return_value=object())),
@@ -30,22 +30,18 @@ def _patches(fetch, apply_mode, startup_result):
         patch.object(startup, "set_log_mode", MagicMock()),
         patch.object(startup, "reconcile_open_positions", AsyncMock()),
         patch.object(startup, "fetch_available_capital", AsyncMock(return_value=0.0)),
-        patch.object(startup.notifier, "notify_startup_summary", AsyncMock()),
-        patch.object(startup.notifier, "notify_startup_result", startup_result),
         patch.object(startup, "_start_time_exit_scheduler", MagicMock(return_value=(None, None))),
         patch.object(startup, "_start_runner_service", AsyncMock(return_value=None)),
         patch.object(startup, "_serve_until_shutdown", AsyncMock()),
         patch.object(startup, "_close_resources", AsyncMock()),
-        patch.object(startup, "_resolve_broker_name", MagicMock(return_value="test")),
     ]
 
 
 async def _run(fetch):
     apply_mode = MagicMock()
-    startup_result = AsyncMock()
     tracker = MagicMock()
     tracker.start = AsyncMock()
-    patches = _patches(fetch, apply_mode, startup_result)
+    patches = _patches(fetch, apply_mode)
     for p in patches:
         p.start()
     try:
@@ -56,38 +52,34 @@ async def _run(fetch):
     finally:
         for p in patches:
             p.stop()
-    return apply_mode, startup_result, fetch, raised
+    return apply_mode, fetch, raised
 
 
 @pytest.mark.asyncio
 async def test_unknown_then_analyze_starts_as_analyze():
     fetch = AsyncMock(side_effect=[("unknown", False), ("unknown", False), ("analyze", True)])
-    apply_mode, startup_result, _, raised = await _run(fetch)
+    apply_mode, _, raised = await _run(fetch)
     assert raised is None
     assert fetch.await_count == 3
     assert [c.args[1] for c in apply_mode.call_args_list] == ["analyze"]
-    startup_result.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_definite_live_answer_starts_as_live_without_retry():
     fetch = AsyncMock(return_value=("live", False))
-    apply_mode, _, _, raised = await _run(fetch)
+    apply_mode, _, raised = await _run(fetch)
     assert raised is None
     assert fetch.await_count == 1
     assert [c.args[1] for c in apply_mode.call_args_list] == ["live"]
 
 
 @pytest.mark.asyncio
-async def test_always_unknown_aborts_and_never_configures_live():
+async def test_always_unknown_aborts_and_never_configures_live(logged):
     fetch = AsyncMock(return_value=("unknown", False))
-    apply_mode, startup_result, _, raised = await _run(fetch)
+    apply_mode, _, raised = await _run(fetch)
     assert isinstance(raised, SystemExit) and raised.code == 1
     assert fetch.await_count == 6  # the first read and 5 retries
     live_calls = [c for c in apply_mode.call_args_list if "live" in c.args]
     assert live_calls == []
     apply_mode.assert_not_called()
-    startup_result.assert_awaited_once()
-    summary = startup_result.await_args.kwargs.get("summary") or startup_result.await_args.args[1]
-    assert "could not confirm whether OpenAlgo is in live or sandbox mode" in summary
-    assert startup_result.await_args.kwargs.get("all_passed") is False
+    assert logged.has("could not confirm whether OpenAlgo is in live or sandbox mode", "CRITICAL")

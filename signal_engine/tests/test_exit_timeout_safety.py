@@ -15,6 +15,7 @@ import pytest
 from signal_engine import order_reconcile as oc
 from signal_engine.main import _recover_ambiguous_entry_timeout, _send_exit_with_retries
 from signal_engine.models import Action, Direction, Order, OrderStatus, Signal, TradeResult
+from signal_engine.tests.log_capture import capturing
 from signal_engine.timeutils import IST
 
 SETTINGS = SimpleNamespace(
@@ -66,17 +67,16 @@ async def _run_exit(send_results, books, *, order=None, pos=None, own_qty=EXIT_S
         own_qty = sign * (pos.quantity - order.quantity)
     send = AsyncMock(side_effect=send_results)
     fetch = AsyncMock(side_effect=books)
-    notify = AsyncMock()
     tracker = MagicMock(fetch_own_position=AsyncMock(return_value=own_qty))
     with (
+        capturing() as notify,
         patch("signal_engine.main.settings", SETTINGS),
         patch("signal_engine.main.send_order", send),
         patch("signal_engine.main.fetch_orderbook", fetch),
-        patch("signal_engine.main.notifier", MagicMock(notify=notify)),
         patch("signal_engine.main.tracker", tracker),
         patch("signal_engine.main._LATE_FILL_WATCH_SECONDS", WATCH_SECONDS),
         patch("signal_engine.main._EXIT_WATCH_POLL_SECONDS", WATCH_POLL_SECONDS),
-        patch("signal_engine.order_reconcile.asyncio", SimpleNamespace(sleep=AsyncMock())),
+        patch("signal_engine.order_reconcile.asyncio", SimpleNamespace(sleep=AsyncMock()))
     ):
         result = await _send_exit_with_retries(order, pos)
     return result, send, notify
@@ -98,7 +98,7 @@ class TestExitTimeouts:
         assert result.status == OrderStatus.TIMEOUT
         assert "UNCERTAIN" in result.message
         assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is not None
-        notify.assert_awaited()  # CRITICAL alert
+        assert notify.messages("CRITICAL")  # the former CRITICAL alert is a CRITICAL log line
 
     async def test_timeout_that_actually_filled_is_adopted_without_a_resend(self):
         result, send, _ = await _run_exit([TIMEOUT], [[_filled_row("F1")]])
@@ -116,7 +116,7 @@ class TestExitTimeouts:
         book = [_filled_row("F1"), _filled_row("F2"), _filled_row("F3")]
         result, send, notify = await _run_exit([TIMEOUT], [book, book], own_qty=None)
         assert send.await_count == 1 and result.status == OrderStatus.TIMEOUT
-        alerts = str(notify.await_args_list)
+        alerts = notify.text()
         assert all(oid in alerts for oid in ("F1", "F2", "F3")) and "UNPROTECTED" in alerts
 
     async def test_partial_fill_in_flight_is_not_resent(self):
@@ -222,7 +222,7 @@ class TestDuplicateExitIsClosed:
         assert result.order_id == "F1" and send.await_count == 2
         sent = send.await_args_list[1].args[0]
         assert (sent.action, sent.quantity, sent.strategy_tag) == (Action.BUY, 174, "BREAKOUT-PY")
-        assert "DUPLICATE CLOSED" in str(notify.await_args_list)
+        assert "closed the duplicate 174 with BUY id=C1" in notify.text()
 
     async def test_two_extra_copies_after_a_partial_exit_close_their_total(self):
         close = TradeResult(status=OrderStatus.SUCCESS, order_id="C1")
@@ -240,7 +240,7 @@ class TestDuplicateExitIsClosed:
         untagged = [dict(r, strategy="") for r in book]
         result, send, notify = await _run_exit([TIMEOUT], [book, untagged], own_qty=-74)
         assert send.await_count == 1
-        assert "DUPLICATE FILLS" in str(notify.await_args_list)
+        assert "DUPLICATE FILLS" in notify.text()
 
     async def test_another_strategys_same_size_order_is_neither_adopted_nor_a_duplicate(self):
         theirs = _filled_row("W1")
@@ -249,7 +249,7 @@ class TestDuplicateExitIsClosed:
         # one correct exit of this strategy's 74 leaves its share at 0 (W1 is the other strategy's)
         result, send, notify = await _run_exit([TIMEOUT], [[theirs, mine]])
         assert (result.status, result.order_id) == (OrderStatus.SUCCESS, "F1")
-        assert send.await_count == 1 and "DUPLICATE" not in str(notify.await_args_list)
+        assert send.await_count == 1 and "DUPLICATE" not in notify.text()
 
     async def test_another_strategys_order_alone_is_not_adopted(self):
         theirs = _filled_row("W1")
@@ -264,13 +264,13 @@ class TestDuplicateExitIsClosed:
         book = [_filled_row("F1"), _filled_row("F2")]
         result, send, notify = await _run_exit([TIMEOUT], [book, book], own_qty=own_qty)
         assert send.await_count == 1 and result.status == OrderStatus.TIMEOUT
-        assert "F2" in str(notify.await_args_list)
+        assert "F2" in notify.text()
 
     async def test_a_close_that_times_out_is_never_resent(self):
         book = [_filled_row("F1"), _filled_row("F2")]
         result, send, notify = await _run_exit([TIMEOUT, TIMEOUT], [book, book], own_qty=-74)
         assert send.await_count == 2
-        assert "DUPLICATE NOT CLOSED" in str(notify.await_args_list)
+        assert "closing the duplicate 74 failed" in notify.text()
 
     async def test_sweeper_closes_the_excess_of_an_exit_it_finds_filled_twice(self):
         from signal_engine.main import sweep_unresolved_orders
@@ -284,8 +284,7 @@ class TestDuplicateExitIsClosed:
             patch("signal_engine.main.fetch_orderbook",
                   AsyncMock(return_value=[_filled_row("F1"), _filled_row("F2")])),  # read twice
             patch("signal_engine.main.send_order", send),
-            patch("signal_engine.main.notifier", MagicMock(notify=AsyncMock())),
-            patch("signal_engine.main.tracker", tracker),
+            patch("signal_engine.main.tracker", tracker)
         ):
             await sweep_unresolved_orders()
         sent = send.await_args.args[0]
@@ -303,14 +302,13 @@ def _entry_order():
 
 
 async def _run_entry_recovery(books):
-    notify = AsyncMock()
     tracker = MagicMock(_positions={})
     with (
+        capturing() as notify,
         patch("signal_engine.main.settings", SETTINGS),
         patch("signal_engine.main.fetch_orderbook", AsyncMock(side_effect=books)),
         patch("signal_engine.main.fetch_order_ids_today", MagicMock(return_value=set())),
-        patch("signal_engine.main.notifier", MagicMock(notify=notify)),
-        patch("signal_engine.main.tracker", tracker),
+        patch("signal_engine.main.tracker", tracker)
     ):
         return await _recover_ambiguous_entry_timeout(_entry_signal(), _entry_order()), notify
 
@@ -321,7 +319,7 @@ class TestEntryTimeouts:
         result, notify = await _run_entry_recovery([None] * 3)
         assert result is not None and "UNCERTAIN" in result.message
         assert oc.get_uncertain("BREAKOUT-PY", "KALYANKJIL") is not None
-        notify.assert_awaited()
+        assert notify.messages("ERROR")
 
     async def test_clean_book_without_the_order_is_watched_not_written_off(self):
         """Policy updated 2026-10-17 (was: a clean empty book is "a genuine failure", nothing kept).
@@ -357,11 +355,10 @@ class TestUnresolvedEntryBlocksNewOrders:
     async def _held(self, books):
         from signal_engine.main import _entry_held_by_unresolved_order
 
-        notify = AsyncMock()
         with (
+            capturing() as notify,
             patch("signal_engine.main.settings", SETTINGS),
-            patch("signal_engine.main.fetch_orderbook", AsyncMock(side_effect=books)),
-            patch("signal_engine.main.notifier", MagicMock(notify=notify)),
+            patch("signal_engine.main.fetch_orderbook", AsyncMock(side_effect=books))
         ):
             return await _entry_held_by_unresolved_order(_entry_signal()), notify
 
@@ -379,7 +376,7 @@ class TestUnresolvedEntryBlocksNewOrders:
         row = _filled_row("E1", "KALYANKJIL", 188, action="BUY")
         held, notify = await self._held([[row]])
         assert held is True and oc.get_uncertain("BREAKOUT-PY", "KALYANKJIL") is None
-        assert "UNTRACKED FILL" in str(notify.await_args_list)
+        assert "UNTRACKED FILL" in notify.text()
 
     async def test_order_confirmed_absent_releases_the_hold_and_allows_entry(self):
         self._mark()
@@ -408,7 +405,6 @@ _TRACKED = object()  # default broker position: exactly the tracked one
 async def _sweep(books, *, position=None, sl_status="canceled", own_qty=_TRACKED):
     from signal_engine.main import sweep_unresolved_orders
 
-    notify = AsyncMock()
     tracker = MagicMock()
     tracker.find_position = MagicMock(return_value=position)
     if own_qty is _TRACKED:
@@ -419,10 +415,10 @@ async def _sweep(books, *, position=None, sl_status="canceled", own_qty=_TRACKED
     tracker.book_close = AsyncMock()
     _sweep.tracker = tracker
     with (
+        capturing() as notify,
         patch("signal_engine.main.fetch_orderbook", AsyncMock(side_effect=books)),
         patch("signal_engine.main.fetch_order_status", AsyncMock(return_value=sl_status)),
-        patch("signal_engine.main.notifier", MagicMock(notify=notify)),
-        patch("signal_engine.main.tracker", tracker),
+        patch("signal_engine.main.tracker", tracker)
     ):
         await sweep_unresolved_orders()
     return notify
@@ -436,7 +432,7 @@ class TestSweeper:
         notify = await _sweep([[]], position=pos)
         assert pos.sl_order_id == "" and pos.sl_retry_count == 0
         assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None
-        assert "STOP RESTORING" in str(notify.await_args_list)
+        assert "restoring its stop" in notify.text()
 
     async def test_a_stop_still_working_is_never_stacked(self):
         pos = _tracked()
@@ -480,10 +476,10 @@ class TestSweeper:
         _mark_exit()
         notify = await _sweep([None], position=pos)
         assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is not None
-        assert notify.await_count == 1
+        assert len(notify.messages("ERROR")) == 1
         # an immediate second sweep is throttled: no second look, no second alert
         notify2 = await _sweep([None], position=pos)
-        assert notify2.await_count == 0
+        assert notify2.messages("ERROR") == []
 
     async def test_entry_found_filled_is_adopted_with_its_stop(self):
         from signal_engine.main import sweep_unresolved_orders
@@ -496,8 +492,7 @@ class TestSweeper:
         with (
             patch("signal_engine.main.fetch_orderbook", AsyncMock(return_value=[row])),
             patch("signal_engine.main._establish_position", establish),
-            patch("signal_engine.main.save", save),
-            patch("signal_engine.main.notifier", MagicMock(notify=AsyncMock())),
+            patch("signal_engine.main.save", save)
         ):
             await sweep_unresolved_orders()
         establish.assert_awaited_once()
@@ -515,8 +510,7 @@ class TestSweeper:
         establish = AsyncMock()
         with (
             patch("signal_engine.main.fetch_orderbook", AsyncMock(return_value=[])),
-            patch("signal_engine.main._establish_position", establish),
-            patch("signal_engine.main.notifier", MagicMock(notify=AsyncMock())),
+            patch("signal_engine.main._establish_position", establish)
         ):
             from signal_engine.main import sweep_unresolved_orders
 
@@ -540,8 +534,7 @@ class TestFailedExitReprotects:
             _mark_exit()
         tracker = MagicMock(fetch_own_position=AsyncMock(return_value=74))
         with (
-            patch("signal_engine.main.tracker", tracker),
-            patch("signal_engine.main.notifier", MagicMock(notify_exit_failed=AsyncMock())),
+            patch("signal_engine.main.tracker", tracker)
         ):
             await _handle_exit_order_failure(
                 pos, TradeResult(status=OrderStatus.ERROR, message=message), stop_cancelled=stop_cancelled)
@@ -574,8 +567,7 @@ class TestPollDoesNotPlaceAStopWhileAnOrderIsUnresolved:
         place = AsyncMock(return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="SL-NEW"))
         book = {"LAURUSLABS": SimpleNamespace(quantity=74)}
         with (
-            patch("signal_engine.tracker.place_sl_order", place),
-            patch("signal_engine.tracker.notifier", MagicMock(notify_sl_placed=AsyncMock())),
+            patch("signal_engine.tracker.place_sl_order", place)
         ):
             await t._retry_missing_sl(book, settings)
         return place
@@ -674,7 +666,7 @@ class TestAdoptionNeedsThePositionToShowTheExit:
         result, send, notify = await _run_exit([TIMEOUT], [[_filled_row("F1")]], own_qty=74)
         assert send.await_count == 1 and result.status == OrderStatus.TIMEOUT
         assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is not None
-        alerts = str(notify.await_args_list)
+        alerts = notify.text()
         assert "F1" in alerts and "UNPROTECTED" in alerts
 
     async def test_an_unreachable_broker_position_is_held(self):
@@ -691,7 +683,7 @@ class TestAdoptionNeedsThePositionToShowTheExit:
         odd = {**_filled_row("ODD"), "timestamp": "garbage"}
         result, send, notify = await _run_exit([TIMEOUT], [[odd]] * 3, own_qty=74)
         assert send.await_count == 1 and result.status == OrderStatus.TIMEOUT
-        alerts = str(notify.await_args_list)
+        alerts = notify.text()
         assert "ODD" in alerts and "UNPROTECTED" in alerts
 
     async def test_two_ambiguous_fills_are_never_adopted(self):
@@ -711,16 +703,15 @@ async def _sweep_late(book, *, own_qty, position=None, booked=frozenset(), send_
     from signal_engine.main import sweep_unresolved_orders
 
     send = AsyncMock(return_value=send_result or TradeResult(status=OrderStatus.SUCCESS, order_id="C1"))
-    notify = AsyncMock()
     tracker = MagicMock(find_position=MagicMock(return_value=position),
                         fetch_own_position=AsyncMock(return_value=own_qty),
                         fetch_own_position_proven=AsyncMock(return_value=own_qty))
     with (
+        capturing() as notify,
         patch("signal_engine.main.fetch_orderbook", AsyncMock(return_value=book)),
         patch("signal_engine.main.fetch_order_ids_today", MagicMock(return_value=set(booked))),
         patch("signal_engine.main.send_order", send),
-        patch("signal_engine.main.notifier", MagicMock(notify=notify)),
-        patch("signal_engine.main.tracker", tracker),
+        patch("signal_engine.main.tracker", tracker)
     ):
         await sweep_unresolved_orders()
     return send, notify
@@ -754,7 +745,7 @@ class TestLateDuplicateAfterAResend:
         sent = send.await_args.args[0]
         assert (sent.action, sent.quantity, sent.strategy_tag) == (Action.BUY, 74, "BREAKOUT-PY")
         assert oc.get_late_duplicate_watch("BREAKOUT-PY", "LAURUSLABS") is None
-        assert "LATE" in str(notify.await_args_list)
+        assert "LATE" in notify.text()
 
     async def test_only_the_resent_order_on_the_book_sends_nothing_and_keeps_watching(self):
         await self._resend()
@@ -767,14 +758,14 @@ class TestLateDuplicateAfterAResend:
         late = {**_filled_row("LATE"), "strategy": ""}
         send, notify = await _sweep_late([_filled_row("RESENT"), late], own_qty=-74)
         send.assert_not_awaited()
-        assert "LATE" in str(notify.await_args_list)
+        assert "LATE" in notify.text()
 
     async def test_an_ambiguous_late_copy_is_alerted_and_still_watched(self):
         await self._resend()
         odd = {**_filled_row("ODD"), "timestamp": "garbage"}
         send, notify = await _sweep_late([_filled_row("RESENT"), odd], own_qty=-74)
         send.assert_not_awaited()
-        assert "ODD" in str(notify.await_args_list)
+        assert "ODD" in notify.text()
         assert oc.get_late_duplicate_watch("BREAKOUT-PY", "LAURUSLABS") is not None
 
     async def test_an_expired_watch_is_dropped_without_a_book_read(self):
@@ -800,13 +791,12 @@ def _entry_fill(oid, stamp, strategy="BREAKOUT-PY"):
 
 
 async def _run_entry_recovery_booked(books, booked):
-    notify = AsyncMock()
     with (
+        capturing() as notify,
         patch("signal_engine.main.settings", SETTINGS),
         patch("signal_engine.main.fetch_orderbook", AsyncMock(side_effect=books)),
         patch("signal_engine.main.fetch_order_ids_today", MagicMock(return_value=set(booked))),
-        patch("signal_engine.main.notifier", MagicMock(notify=notify)),
-        patch("signal_engine.main.tracker", MagicMock(_positions={})),
+        patch("signal_engine.main.tracker", MagicMock(_positions={}))
     ):
         return await _recover_ambiguous_entry_timeout(_entry_signal(), _entry_order()), notify
 
@@ -821,7 +811,7 @@ class TestEntryRecoveryFailSafeMatching:
         result, notify = await _run_entry_recovery([[_entry_fill("E1", "garbage")]] * 3)
         assert result is not None and result.status == OrderStatus.TIMEOUT
         assert oc.get_uncertain("BREAKOUT-PY", "KALYANKJIL") is not None
-        notify.assert_awaited()
+        assert notify.messages("ERROR")
 
     async def test_a_previously_booked_fill_is_not_adopted(self):
         stamp = datetime.now(IST).strftime("%H:%M:%S %d-%m-%Y")
@@ -859,7 +849,7 @@ class TestAbsentExitRestoresOnlyOnPositionProof:
         self._expired_exit()
         notify = await _sweep([[]], position=pos, own_qty=74)
         assert pos.sl_order_id == "" and oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is None
-        assert "STOP RESTORING" in str(notify.await_args_list)
+        assert "restoring its stop" in notify.text()
 
     async def test_reversed_position_keeps_the_hold_and_places_no_stop(self):
         pos = _tracked()
@@ -867,7 +857,7 @@ class TestAbsentExitRestoresOnlyOnPositionProof:
         notify = await _sweep([[]], position=pos, own_qty=-74)
         assert pos.sl_order_id == "SL-1"  # untouched: no stop of the wrong side
         assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is not None
-        alert = str(notify.await_args_list)
+        alert = notify.text()
         assert "Stop NOT restored" in alert and "UNPROTECTED" in alert and "-74" in alert
 
     async def test_partial_position_keeps_the_hold_and_places_no_stop(self):
@@ -876,7 +866,7 @@ class TestAbsentExitRestoresOnlyOnPositionProof:
         notify = await _sweep([[]], position=pos, own_qty=30)
         assert pos.sl_order_id == "SL-1"
         assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is not None
-        assert "Stop NOT restored" in str(notify.await_args_list)
+        assert "Stop NOT restored" in notify.text()
 
     async def test_unreadable_position_keeps_the_hold(self):
         pos = _tracked()
@@ -884,7 +874,7 @@ class TestAbsentExitRestoresOnlyOnPositionProof:
         notify = await _sweep([[]], position=pos, own_qty=None)
         assert pos.sl_order_id == "SL-1"
         assert oc.get_uncertain("BREAKOUT-PY", "LAURUSLABS") is not None
-        assert "cannot be read" in str(notify.await_args_list)
+        assert "cannot be read" in notify.text()
 
     async def test_flat_position_releases_the_hold_with_no_stop_and_no_booking(self):
         pos = _tracked()

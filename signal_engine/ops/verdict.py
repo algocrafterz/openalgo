@@ -1,8 +1,7 @@
-"""Step `notify`: the one Telegram message a phase may send.
+"""The close-day review outcome: what the review achieved, read from its report.
 
-open-day and liveness send only when their verdict is RED (AMBER is on the /logs workflow page).
-close-day sends one line every trading day: the review's verdict, so silence means the
-automation did not run. This is the only scheduled Telegram traffic besides failure alerts.
+review_outcome() is what the /logs workflow page and the close-day manifest show. Nothing here
+sends to Telegram (outgoing notifications were removed in November 2026).
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ import json
 import os
 import re
 
-from signal_engine.ops.model import CRITICAL_STEPS, RED_EXIT_OK_STEPS, REPORTS, read_phase
+from signal_engine.ops.model import CRITICAL_STEPS, RED_EXIT_OK_STEPS, REPORTS
 
 _BLOCK = re.compile(r"```close-day-verdict\s*\n(.*?)```", re.S)
 _TRACKER = re.compile(r"^```bug-tracker\s*$", re.M)
@@ -248,69 +247,6 @@ def close_day_verdict(day: str, folder: str = REPORTS) -> dict:
     """The review's verdict and line. Never GREEN without a complete verdict (AMBER and the reason)."""
     found = review_outcome(day, folder)
     return {"verdict": found["verdict"], "line": found["line"]}
-
-
-def _failed_steps(phase: str, day: str, folder: str = REPORTS) -> list[str]:
-    """Steps whose newest row is non-zero. The review is judged by review_outcome, not by its exit."""
-    return [
-        name
-        for name, code in latest_steps(phase, day, folder).items()
-        if code != 0 and not (phase == "close-day" and name == "review")
-    ]
-
-
-def message(phase: str, day: str, folder: str = REPORTS) -> str | None:
-    """The text to send for this phase and day, or None when nothing should be sent."""
-    if phase == "close-day":
-        found = review_outcome(day, folder)
-        failed = _failed_steps("close-day", day, folder)
-        steps = f" Steps failed: {', '.join(failed)}." if failed else ""
-        return (
-            f"Close-day {day}: {found['verdict']}. {found['line']}{steps} Details: /logs/workflow"
-        )
-    data = read_phase(phase, day, folder=folder)
-    if data is None:
-        return f"{phase} {day}: RED. The check did not produce a result. Details: /logs/workflow"
-    if data["verdict"] != "RED":
-        return None
-    failed = [c["name"] for c in data["checks"] if c["status"] == "FAIL"]
-    return f"{phase} {day}: RED. Failed: {', '.join(failed)}. Details: /logs/workflow"
-
-
-def send(phase: str, day: str) -> bool:
-    """Send the phase's line through the retry, dedupe and channel rules (signal_engine/ops/alerts.py).
-
-    A RED line is sent once until it changes or clears; a close-day line always goes out, because
-    it is the day's one confirmation and the catch-up deliberately sends the corrected one.
-    """
-    text = message(phase, day)
-    if text is None:
-        return False
-    from signal_engine.ops import alerts
-
-    level = review_outcome(day)["verdict"] if phase == "close-day" else "RED"
-    # The close-day line is a daily confirmation, so it never counts as a repeated alarm.
-    return alerts.deliver(
-        text,
-        kind="phase",
-        phase=phase,
-        condition="verdict",
-        severity="RED" if level == "RED" else "INFO",
-    )
-
-
-def recover(phase: str, day: str) -> bool:
-    """Called when a phase has nothing to send: tell the maintainer once if its RED has cleared."""
-    from signal_engine.ops import alerts
-
-    return alerts.recover(kind="phase", phase=phase, condition="verdict")
-
-
-def _phase() -> str:
-    """Compatibility wrapper: the channel name only. Use alerts.deliver for the full rule."""
-    from signal_engine.ops.alerts import resolve_channel
-
-    return resolve_channel()[0]
 
 
 def _main(argv: list[str] | None = None) -> int:

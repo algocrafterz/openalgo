@@ -50,7 +50,6 @@ async def _run(owner: str) -> AsyncMock:
     with (
         patch("signal_engine.tracker.cancel_order", new_callable=AsyncMock, return_value=True),
         patch("signal_engine.tracker.place_sl_order") as place,
-        patch("signal_engine.tracker.notifier.notify_be_stop_applied", new_callable=AsyncMock),
         patch("signal_engine.config.settings", _settings(owner)),
     ):
         from signal_engine.models import OrderStatus, TradeResult

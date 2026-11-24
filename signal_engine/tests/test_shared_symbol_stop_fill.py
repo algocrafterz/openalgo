@@ -34,7 +34,6 @@ async def _check(tracker, pos, stop_fill):
         patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=stop_fill)),
         patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=0.0)),
         patch("signal_engine.tracker.cancel_order", AsyncMock(return_value=True)),
-        patch("signal_engine.tracker.notifier", AsyncMock()),
     ):
         return await tracker._check_one_position(key, pos, book, _Cfg())
 

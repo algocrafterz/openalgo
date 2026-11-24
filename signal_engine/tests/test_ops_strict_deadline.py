@@ -169,37 +169,38 @@ def test_the_shell_holds_no_copy_of_the_retry_times():
 
 def test_a_retry_at_1601_runs_its_open_steps_and_ends_before_the_soft_deadline(world):
     rc, sim, clock, _ = run_retry(world, at(DAY, "16:01"), {"track": 1})
-    assert steps_run(sim) == ["track", "notify"] and rc == 0
+    assert steps_run(sim) == ["track"] and rc == 0
     assert clock() < at(DAY, "16:25")
 
 
-def test_a_retry_at_1624_runs_only_the_last_notification(world):
+def test_a_retry_at_1624_starts_no_step_because_none_may_start_after_1623(world):
     rc, sim, clock, _ = run_retry(world, at(DAY, "16:24"), {"track": 1})
     rows = {r["step"]: r for r in world.manifest("close-day-retry")["steps"]}
-    assert steps_run(sim) == ["notify"]  # no step may start after 16:23
-    assert rows["track"]["result"] == "incomplete" and rows["notify"]["result"] == "recovered"
+    assert steps_run(sim) == []  # no step may start after 16:23
+    assert rows["track"]["result"] == "incomplete" and "notify" not in rows
     assert clock() <= at(DAY, "16:25") and rc == 1
 
 
 def test_a_retry_with_less_than_30_seconds_left_does_not_start_and_says_so(world):
     rc, sim, _, lines = run_retry(world, at(DAY, "16:24", 40), {"backfill": 1, "track": 1})
     manifest = world.manifest("close-day-retry")
-    assert sim.calls == []  # not even the notification
+    assert sim.calls == []
     assert manifest["state"] == "timed_out" and "started too late" in manifest["note"]
     assert {r["step"]: r["result"] for r in manifest["steps"]} == {
         "backfill": "incomplete",
         "track": "incomplete",
-        "notify": "incomplete",
     }
     status = world.status_text()
-    assert status.count("\t124\n") == 3  # backfill, track, notify, in the close-day status file
+    assert status.count("\t124\n") == 2  # backfill and track, in the close-day status file
     assert any("started too late" in ln and "16:25" in ln for ln in lines)
     assert rc == 1
 
 
 def test_a_retry_with_exactly_30_seconds_left_starts(world):
     rc, sim, _, _ = run_retry(world, at(DAY, "16:24", 30), {"track": 1})
-    assert steps_run(sim) == ["notify"]
+    manifest = world.manifest("close-day-retry")
+    assert "started too late" not in manifest["note"]  # it started; the 16:23 cutoff held the step
+    assert steps_run(sim) == []
 
 
 def test_a_retry_at_162650_is_not_started_and_the_record_is_complete(world):
@@ -227,7 +228,7 @@ def test_a_host_sleep_over_the_deadline_stops_all_later_steps(world):
     assert steps_run(sim) == ["eod"]  # nothing starts after the jump to 16:40
     assert rows["eod"]["result"] == "timed_out"
     assert rows["logs"]["result"] == rows["track"]["result"] == "incomplete"
-    assert rows["notify"]["result"] == "incomplete"
+    assert "notify" not in rows
     assert world.manifest("close-day-retry")["state"] == "timed_out" and rc == 1
 
 

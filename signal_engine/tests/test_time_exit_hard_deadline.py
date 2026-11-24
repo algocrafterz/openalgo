@@ -25,8 +25,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from loguru import logger
 
-from signal_engine import db, notifier
+from signal_engine import db
 from signal_engine import tracker as tracker_mod
 from signal_engine.models import Direction, OrderStatus, TradeResult
 from signal_engine.tests.tracker_fixtures import _make_engine, _make_position
@@ -157,7 +158,10 @@ class Harness:
     def __init__(self, world, broker, tracker, *, send_cost=1.0, close=None, budget=None,
                  place_result=None):
         self.w, self.b, self.tracker = world, broker, tracker
-        self.notifier = AsyncMock()
+        # The trader-facing lines (once Telegram alerts, now ERROR log lines since outgoing
+        # notifications were removed in November 2026) are captured from the tracker and main.
+        self._records: list[tuple[int, str]] = []
+        self._sink_id = None
         self.place = AsyncMock(return_value=place_result or TradeResult(
             status=OrderStatus.SUCCESS, order_id="NEWSTOP", message="ok"))
         self.sleeps: list[float] = []
@@ -194,18 +198,40 @@ class Harness:
         s.enter_context(patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=0.0)))
         s.enter_context(patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=100.0)))
         s.enter_context(patch("signal_engine.tracker.place_sl_order", self.place))
-        s.enter_context(patch("signal_engine.tracker.notifier", self.notifier))
         s.enter_context(patch("signal_engine.main._send_exit_with_retries", AsyncMock(side_effect=self._send)))
         if self.close is not None:
             s.enter_context(patch.object(PositionTracker, "_close_strategy", self.close))
+        self._sink_id = logger.add(
+            lambda m: self._records.append((m.record["level"].no, m.record["message"])),
+            level="WARNING",
+            filter=lambda r: r["name"] in ("signal_engine.tracker", "signal_engine.main"),
+        )
         return self
 
     def __exit__(self, *exc):
+        if self._sink_id is not None:
+            logger.remove(self._sink_id)
         return self.stack.__exit__(*exc)
 
     @property
     def alerts(self):
-        return [str(c.args[0]) for c in self.notifier.notify.await_args_list if c.args]
+        """The time exit's trader-facing lines, now logged at ERROR (no Telegram send).
+
+        The per-strategy CRITICAL companion of a skip ("Time exit SKIPPED for ...") and the
+        CRITICAL bookkeeping line of an uncertain exit ("EXIT UNCERTAIN: ...") existed before
+        the removal alongside the alert and are left out, so each count means what it meant.
+        """
+        return [
+            m for (level, m) in self._records
+            if level >= 40
+            and not m.startswith("Time exit SKIPPED for ")
+            and not m.startswith("EXIT UNCERTAIN: ")
+        ]
+
+    @property
+    def logged(self):
+        """Every WARNING-or-above line from the tracker and main, in order."""
+        return [m for _, m in self._records]
 
     def skip_alerts(self, strategy=None):
         return [a for a in self.alerts if a.startswith("TIME EXIT SKIPPED")
@@ -438,8 +464,7 @@ class TestEverySiteIsBounded:
         tracker._time_exit_hard_deadline = real() + 0.2
         tracker._time_exit_deadline = real() + 0.2
         try:
-            with patch("signal_engine.tracker.notifier", AsyncMock()):
-                await asyncio.wait_for(tracker._close_strategy(STRAT, {"PFC"}), timeout=3)
+            await asyncio.wait_for(tracker._close_strategy(STRAT, {"PFC"}), timeout=3)
         finally:
             lock.release()
         assert tracker._deadline_unclosed == {STRAT}
@@ -642,34 +667,12 @@ class TestSquareoffCounting:
         assert counts["trades"] == counts["wins"] + counts["losses"] + counts["time_exits"]
         assert counts["net_pnl"] == pytest.approx(100.0 - 40.0 + 25.5 - 12.25)
 
-    def test_the_summary_header_and_win_rate(self):
-        self._file()
-        records, counts = PositionTracker(_make_engine())._day_from_db()
-        header = notifier._day_summary_header(
-            "24-Nov-2026", counts["trades"], counts["wins"], counts["losses"], counts["net_pnl"],
-            100000.0, counts["time_exits"], records)
-        assert "Trades: 4 | W: 1  L: 1  T: 2 | Win Rate: 50%" in header[1]
-        assert f"Net: {notifier._pnl(73.25)}" in header[2]
-
-    def test_per_strategy_stats_count_time_and_squareoff_together(self):
-        self._file()
-        records, _ = PositionTracker(_make_engine())._day_from_db()
-        stats = notifier._aggregate_strategy_stats(records)
-        assert stats == {"trades": 4, "wins": 1, "losses": 1, "time_exits": 2}
-
-    def test_a_close_carrying_both_types_counts_one_time_exit(self):
-        rec = SimpleNamespace(exit_types=["TIME", "SQUAREOFF"], total_pnl=5.0)
-        stats = notifier._aggregate_strategy_stats([rec])
-        assert (stats["trades"], stats["wins"], stats["losses"], stats["time_exits"]) == (1, 0, 0, 1)
-
     @pytest.mark.asyncio
     async def test_in_memory_fallback_counters_leave_undecided_closes_out_of_wins_and_losses(self):
         tracker = PositionTracker(_make_engine())
         for sym, types, pnl in _four_rows():
             pos = _make_position(symbol=sym, strategy="ORB", product="MIS")
-            with patch("signal_engine.tracker.notifier", AsyncMock()), patch.object(
-                PositionTracker, "_save_close_row", lambda *a, **k: None
-            ):
+            with patch.object(PositionTracker, "_save_close_row", lambda *a, **k: None):
                 await tracker.book_close(pos, pnl_delta=pnl, exit_price=100.0, exit_types=types,
                                          hold_minutes=5)
         assert tracker._day_trades == 4

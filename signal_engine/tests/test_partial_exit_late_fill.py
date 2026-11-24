@@ -51,11 +51,13 @@ async def test_a_late_filled_partial_exit_reduces_the_quantity_and_clears_the_st
     assert pos.sl_retry_count == 0 and pos.last_sl_retry_at is None
     assert tracker.find_position("RELIANCE", "ORB") is pos
     h2.risk.record_close.assert_not_called()  # no P&L booked here
-    texts = [c.args[0] for c in h2.notifier.notify.await_args_list]
-    assert len([t for t in texts if "partial exit of 25 shares" in t]) == 1
-    text = next(t for t in texts if "partial exit of 25 shares" in t)
-    assert "RELIANCE [ORB]" in text and "tracks 25 remaining shares" in text
-    assert "now in today's totals" in text
+    # The late fill is logged once (no message goes out): leg, size, what is now tracked, P&L.
+    lines = [
+        m for m in h2.logged.messages("CRITICAL") if "a partial exit of 25 completed late" in m
+    ]
+    assert len(lines) == 1
+    assert "RELIANCE [ORB]" in lines[0] and "tracking 25 remaining" in lines[0]
+    assert "leg P&L 0.00 booked" in lines[0]  # filled at the entry price: booked, not skipped
 
 
 @pytest.mark.asyncio
@@ -116,5 +118,4 @@ async def test_a_late_filled_partial_exit_with_no_readable_price_books_nothing()
     h2, tracker, pos = await _held_partial(sweep_fill=None)
     assert pos.realized_pnl == 0.0
     h2.risk.record_partial_close.assert_not_called()
-    texts = [c.args[0] for c in h2.notifier.notify.await_args_list]
-    assert any("check it in the trade book" in t for t in texts)
+    assert h2.logged.has("leg P&L not booked (no fill price)", "CRITICAL")

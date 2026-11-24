@@ -36,10 +36,6 @@ ALLOWED_NAIVE: dict[tuple[str, str], str] = {
         "build_shutdown_summary",
     ): "Telegram shutdown message text only; the time is shown to the user, not compared.",
     (
-        "signal_engine/scripts/openalgoscheduler.py",
-        "notify_failure",
-    ): "Telegram failure message text only; the time is shown to the user, not compared.",
-    (
         "signal_engine/analysis/breakingtrade/fetcher.py",
         "_dump_debug",
     ): "Builds a debug-dump file name; never compared or stored as a trading time.",

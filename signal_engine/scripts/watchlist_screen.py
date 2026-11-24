@@ -49,9 +49,8 @@ COMPUTE VS DECIDE - why this is not simply "weekly" or simply "daily"
     only appends to a rolling history - it does not notify anyone and does not fetch
     beta. `run_weekly_screen()` runs on top of that history once a week: it fetches
     beta (the one genuinely slow-changing, genuinely expensive part), builds the final
-    Top-N, and is the only thing that sends a Telegram message and rewrites the
-    watchlist file. The result: fresher, denser data feeding the decision, without a
-    daily beta refetch or a daily message asking for a manual TradingView update.
+    Top-N, and is the only thing that rewrites the watchlist file. The result: fresher,
+    denser data feeding the decision, without a daily beta refetch.
 
 CONVICTION TRACKING
     Every daily scan's qualifying pool (factors 1-3 + not under surveillance) is kept
@@ -61,24 +60,19 @@ CONVICTION TRACKING
     up today and has no track record yet. This is reported, not filtered on: a first
     appearance is still useful information, just weaker than a repeated one.
 
-WHY IT ONLY UPDATES A FILE AND SENDS A MESSAGE - IT NEVER TOUCHES TRADINGVIEW
+WHY IT ONLY UPDATES A FILE - IT NEVER TOUCHES TRADINGVIEW
     TradingView's watchlist is edited by a human, by design (no public API for it). The
-    weekly step's job ends at making the new candidate list visible: it overwrites the
-    repo's watchlist file (so the repo stays the source of truth) and posts to the
-    signal-engine Telegram channel (notify_channel) so the update is seen without
-    opening a terminal. Updating TradingView itself stays a manual, deliberate step.
+    weekly step's job ends at overwriting the repo's watchlist file (so the repo stays the
+    source of truth). It sends no Telegram message: the weekly digest was routine traffic
+    and was removed in November 2026. Updating TradingView itself stays a manual step.
 
 WHY THIS RUNS FROM STARTUP, NOT A FIXED CRON TIME
     A fixed cron hour assumes the machine is on then, which a laptop is not guaranteed
     to be. `maybe_run_weekly_screen()` is called from `openalgoscheduler._run_startup()`
     as its LAST step, on EVERY startup: the daily scan inside it runs unconditionally
-    (cheap, idempotent per calendar day), and the weekly finalize/notify runs only when
+    (cheap, idempotent per calendar day), and the weekly finalize runs only when
     due. Being last means neither part can delay the broker-auth/trading-readiness
-    steps ahead of it. The Telegram send is sequential with the earlier startup
-    notification (same process, one after another), not concurrent, so it does not
-    race the live listener for their shared Telethon session
-    (signal_engine/data/telegram) the way two independent processes touching it at
-    once would (see analysis/breakingtrade/alerts.py's module docstring for that risk).
+    steps ahead of it.
 
 USAGE
     Normal operation: nothing to run by hand - openalgoscheduler.py's startup flow
@@ -90,14 +84,13 @@ USAGE
         uv run --group analysis python -m signal_engine.scripts.watchlist_screen --force
 
     --force bypasses the "already finalized this week" gate (the daily scan always
-    runs regardless). --dry-run additionally skips writing the file, sending Telegram,
+    runs regardless). --dry-run additionally skips writing the file
     and updating the weekly gate (the daily history is still recorded for real).
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -382,7 +375,7 @@ def run_weekly_screen(daily: DailyScan) -> ScreenResult:
 
 
 def format_digest(result: ScreenResult) -> str:
-    """Plain-text Telegram message. No LONG/SHORT/EXIT token in the header - see
+    """Plain-text digest, printed by main(). No LONG/SHORT/EXIT token in the header - see
     test_watchlist_screen.py for why that matters even on an unparsed admin channel."""
     week_label = result.computed_at.strftime("week of %d %b %Y")
     sc = result.stage_counts
@@ -437,18 +430,12 @@ def update_watchlist_file(result: ScreenResult) -> None:
     WATCHLIST_FILE.write_text(header + "\n".join(lines) + "\n")
 
 
-async def send_digest(message: str) -> bool:
-    from signal_engine.scripts.openalgoscheduler import send_telegram_notification
-
-    return await send_telegram_notification(message)
-
-
 def maybe_run_weekly_screen(force: bool = False) -> bool:
     """Called from openalgoscheduler._run_startup() as its last step, on EVERY
     startup. The daily scan always runs (cheap, idempotent per day); the expensive
-    beta fetch and the Telegram/file write only happen when the weekly gate is due.
+    beta fetch and the file write only happen when the weekly gate is due.
 
-    Returns True if the weekly finalize ran (regardless of delivery success), False if
+    Returns True if the weekly finalize ran, False if
     it was gated off (the daily scan still ran either way). Never raises - a screen
     failure must not be allowed to look like a startup failure; the caller logs but
     does not fail on a False/exception from this, matching every other non-fatal step
@@ -460,9 +447,8 @@ def maybe_run_weekly_screen(force: bool = False) -> bool:
         return False
 
     result = run_weekly_screen(daily)
-    message = format_digest(result)
     update_watchlist_file(result)
-    asyncio.run(send_digest(message))
+    # The digest is routine and is not sent to Telegram; the watchlist file is the record.
 
     state = _load_state()
     state["last_run_week"] = _current_week_key()
@@ -475,7 +461,7 @@ def main() -> int:
     parser.add_argument(
         "--dry-run", action="store_true",
         help="Run the daily scan and (if due) the weekly finalize, print the digest, "
-             "but do not write the watchlist file, send Telegram, or mark the gate.",
+             "but do not write the watchlist file or mark the gate.",
     )
     parser.add_argument(
         "--force", action="store_true",
@@ -498,20 +484,17 @@ def main() -> int:
     print(message)
 
     if args.dry_run:
-        print("\n(--dry-run: file not written, message not sent, gate not marked - "
+        print("\n(--dry-run: file not written, gate not marked - "
               "daily history above was still recorded for real)")
         return 0
 
     update_watchlist_file(result)
     print(f"\nwatchlist file updated -> {WATCHLIST_FILE}")
 
-    sent = asyncio.run(send_digest(message))
-    print(f"telegram notify_channel send: {'ok' if sent else 'FAILED or not configured'}")
-
     state = _load_state()
     state["last_run_week"] = _current_week_key()
     _save_state(state)
-    return 0 if sent else 1
+    return 0
 
 
 if __name__ == "__main__":

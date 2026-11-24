@@ -68,8 +68,7 @@ async def _run_time_exit(
         patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)),
         patch("signal_engine.tracker.fetch_orderbook", AsyncMock(return_value=orderbook)),
         patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=fill)),
-        patch("signal_engine.tracker.notifier", new_callable=AsyncMock),
-        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch("asyncio.sleep", new_callable=AsyncMock)
     ):
         await tracker.time_exit_all()
 
@@ -245,8 +244,7 @@ class TestTimeExitAndThePollDoNotBookTheSameClose:
         tracker, _ = _tracker_with(_position())
         tracker._time_exit_active = True
         with (
-            patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=_closed_book())),
-            patch("signal_engine.tracker.notifier", new_callable=AsyncMock),
+            patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=_closed_book()))
         ):
             await tracker.check_positions()
         assert tracker.tracked_count == 1
@@ -259,8 +257,7 @@ class TestTimeExitAndThePollDoNotBookTheSameClose:
         snapshot = dict(tracker._positions)  # what time_exit_all took before the poll ran
         (key, pos), = snapshot.items()
         with (
-            patch("signal_engine.tracker.notifier", new_callable=AsyncMock),
-            patch.object(tracker, "_maybe_send_day_summary", AsyncMock()),
+            patch.object(tracker, "_maybe_send_day_summary", AsyncMock())
         ):
             await tracker.book_close(
                 pos, pnl_delta=-500.0, exit_price=2490.0, exit_types=["SL"], hold_minutes=5,
@@ -273,8 +270,7 @@ class TestTimeExitAndThePollDoNotBookTheSameClose:
             patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=-500.0)),
             patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=_closed_book())),
             patch("signal_engine.tracker.fetch_orderbook", AsyncMock(return_value=[_sell_order()])),
-            patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=2490.0)),
-            patch("signal_engine.tracker.notifier", new_callable=AsyncMock),
+            patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=2490.0))
         ):
             await tracker._book_time_exit_trades(
                 snapshot, settings, datetime.now(IST).replace(microsecond=0)

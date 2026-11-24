@@ -13,12 +13,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from signal_engine import startup
+from signal_engine import mode_guard, startup
 
 
 class TestListenerDeathDoesNotEndTheSession:
     @pytest.mark.asyncio
-    async def test_engine_keeps_serving_after_the_listener_gives_up(self):
+    async def test_engine_keeps_serving_after_the_listener_gives_up(self, logged):
         shutdown = asyncio.Event()
 
         async def _dead_listener(_on_message):
@@ -28,19 +28,17 @@ class TestListenerDeathDoesNotEndTheSession:
             await asyncio.sleep(0.05)
             shutdown.set()
 
-        with patch.object(startup, "start_listener", _dead_listener), \
-             patch.object(startup.notifier, "notify_engine_stopped", AsyncMock()), \
-             patch.object(startup.notifier, "notify_event", AsyncMock()) as notify:
+        with patch.object(startup, "start_listener", _dead_listener):
             asyncio.create_task(_shutdown_soon())
             await asyncio.wait_for(
                 startup._serve_until_shutdown(AsyncMock(), shutdown), timeout=2.0
             )
 
         assert shutdown.is_set()
-        # The operator has to be told the feed is gone — silence here is the failure mode.
-        assert notify.await_count >= 1
-        event_names = [c.args[0] for c in notify.await_args_list]
-        assert "listener_degraded" in event_names
+        # The feed is gone: it is logged at CRITICAL and new entries are blocked. Silence here
+        # is the failure mode.
+        assert logged.has("DEGRADED MODE", "CRITICAL")
+        assert mode_guard.is_halted()
 
     @pytest.mark.asyncio
     async def test_shutdown_signal_still_ends_the_session_promptly(self):
@@ -50,9 +48,7 @@ class TestListenerDeathDoesNotEndTheSession:
             await asyncio.sleep(30)  # would outlive the test
 
         shutdown.set()
-        with patch.object(startup, "start_listener", _live_listener), \
-             patch.object(startup.notifier, "notify_engine_stopped", AsyncMock()), \
-             patch.object(startup.notifier, "notify_event", AsyncMock()):
+        with patch.object(startup, "start_listener", _live_listener):
             await asyncio.wait_for(
                 startup._serve_until_shutdown(AsyncMock(), shutdown), timeout=2.0
             )

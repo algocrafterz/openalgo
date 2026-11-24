@@ -142,10 +142,9 @@ async def test_exit_that_gets_500_is_not_resent_while_the_book_cannot_prove_it_a
             patch("httpx.AsyncClient", return_value=client),
             patch("signal_engine.main.settings", settings),
             patch("signal_engine.main.fetch_orderbook", AsyncMock(return_value=None)),
-            patch("signal_engine.main.notifier", MagicMock(notify=AsyncMock())),
             patch("signal_engine.main.tracker",
                   MagicMock(fetch_own_position=AsyncMock(return_value=None))),
-            patch("signal_engine.order_reconcile.asyncio", SimpleNamespace(sleep=AsyncMock())),
+            patch("signal_engine.order_reconcile.asyncio", SimpleNamespace(sleep=AsyncMock()))
         ):
             result = await _send_exit_with_retries(ORDER, pos)
         assert post.await_count == 1

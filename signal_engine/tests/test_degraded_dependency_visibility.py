@@ -79,67 +79,55 @@ class TestFillPriceFailureIsReported:
 
 
 class TestPositionbookOutageIsEscalated:
+    """A sustained positionbook outage is logged once at CRITICAL ("POSITION TRACKING BLIND"),
+    and its recovery once at INFO. These were Telegram alerts until outgoing notifications were
+    removed in November 2026; the escalation, and the once-per-outage latch with its reset on recovery are
+    unchanged."""
+
+    BLIND = "POSITION TRACKING BLIND"
+    RECOVERED = "Positionbook recovered after"
+
     def _tracker(self):
         return PositionTracker(MagicMock())
 
     @pytest.mark.asyncio
-    async def test_a_single_failure_does_not_alert(self):
+    async def test_a_single_failure_does_not_alert(self, logged):
         """One failed poll is noise - the next cycle is 5 seconds away."""
         tracker = self._tracker()
-        with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=None)), \
-             patch("signal_engine.notifier.notify_event", AsyncMock()) as notify:
+        with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=None)):
             await tracker.check_positions()
-        notify.assert_not_awaited()
+        assert logged.count(self.BLIND, level="CRITICAL") == 0
 
     @pytest.mark.asyncio
-    async def test_a_sustained_outage_alerts_once(self):
+    async def test_a_sustained_outage_alerts_once(self, logged):
         tracker = self._tracker()
-        with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=None)), \
-             patch("signal_engine.notifier.notify_event", AsyncMock()) as notify:
+        with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=None)):
             for _ in range(tracker._POSITIONBOOK_OUTAGE_POLLS + 3):
                 await tracker.check_positions()
-        assert notify.await_count == 1
-        assert notify.await_args.args[0] == "positionbook_outage"
+        assert logged.count(self.BLIND, level="CRITICAL") == 1
+        assert tracker._positionbook_outage_alerted is True
 
     @pytest.mark.asyncio
-    async def test_recovery_is_announced_and_rearms_the_alert(self):
+    async def test_recovery_is_logged_and_the_next_outage_logs_again(self, logged):
         tracker = self._tracker()
         fetch = AsyncMock(return_value=None)
-        with patch("signal_engine.tracker.fetch_positionbook", fetch), \
-             patch("signal_engine.notifier.notify_event", AsyncMock()) as notify:
+        with patch("signal_engine.tracker.fetch_positionbook", fetch):
             for _ in range(tracker._POSITIONBOOK_OUTAGE_POLLS):
                 await tracker.check_positions()
-            assert notify.await_count == 1
+            assert logged.count(self.BLIND, level="CRITICAL") == 1
             fetch.return_value = []
             await tracker.check_positions()
-            assert notify.await_count == 2
-            assert notify.await_args.args[0] == "positionbook_recovered"
+            assert logged.count(self.RECOVERED, level="INFO") == 1
             fetch.return_value = None
             for _ in range(tracker._POSITIONBOOK_OUTAGE_POLLS):
                 await tracker.check_positions()
-            assert notify.await_count == 3
+            assert logged.count(self.BLIND, level="CRITICAL") == 2
 
     @pytest.mark.asyncio
-    async def test_a_silently_undelivered_outage_alert_is_retried(self):
-        """2026-09-09's day-summary bug, recurred: notify_event() can return False (no
-        Telegram client yet, no channel configured) without raising. Marking the alert as
-        "sent" on that silent no-op would permanently suppress the one message that exists
-        to say tracking is blind. The next failed poll must retry it instead."""
-        tracker = self._tracker()
-        with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=None)), \
-             patch("signal_engine.notifier.notify_event", AsyncMock(return_value=False)) as notify:
-            for _ in range(tracker._POSITIONBOOK_OUTAGE_POLLS + 3):
-                await tracker.check_positions()
-        assert notify.await_count == 4
-        assert all(call.args[0] == "positionbook_outage" for call in notify.await_args_list)
-        assert tracker._positionbook_outage_alerted is False
-
-    @pytest.mark.asyncio
-    async def test_the_counter_resets_on_every_good_poll(self):
+    async def test_the_counter_resets_on_every_good_poll(self, logged):
         tracker = self._tracker()
         fetch = AsyncMock(return_value=None)
-        with patch("signal_engine.tracker.fetch_positionbook", fetch), \
-             patch("signal_engine.notifier.notify_event", AsyncMock()) as notify:
+        with patch("signal_engine.tracker.fetch_positionbook", fetch):
             for _ in range(tracker._POSITIONBOOK_OUTAGE_POLLS - 1):
                 await tracker.check_positions()
             fetch.return_value = []
@@ -147,4 +135,4 @@ class TestPositionbookOutageIsEscalated:
             fetch.return_value = None
             for _ in range(tracker._POSITIONBOOK_OUTAGE_POLLS - 1):
                 await tracker.check_positions()
-        notify.assert_not_awaited()
+        assert logged.count(self.BLIND, level="CRITICAL") == 0

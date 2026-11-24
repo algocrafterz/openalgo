@@ -130,8 +130,7 @@ class TestAPositionTheBrokerStillHoldsStaysTracked:
         tracker = _two_legs()
         key = tracker._key("CGPOWER", BREAKINGTRADE)
         pos = tracker.find_position("CGPOWER", BREAKINGTRADE)
-        with patch("signal_engine.tracker.notifier", new_callable=AsyncMock):
-            await tracker._book_one_time_exit(key, pos, 0.0, None, confirmed_closed=False)
+        await tracker._book_one_time_exit(key, pos, 0.0, None, confirmed_closed=False)
         assert tracker.find_position("CGPOWER", BREAKINGTRADE) is pos
         assert tracker.tracked_count == 2
 
@@ -142,22 +141,19 @@ class TestAPositionTheBrokerStillHoldsStaysTracked:
         tracker.register(pos)
         key = tracker._key("CGPOWER", BREAKINGTRADE)
         with (
-            patch("signal_engine.tracker.notifier", new_callable=AsyncMock) as notifier,
-            patch.object(engine, "record_close") as record_close,
+            patch.object(engine, "record_close") as record_close
         ):
             await tracker._book_one_time_exit(key, pos, 0.0, None, confirmed_closed=False)
         record_close.assert_not_called()
-        notifier.notify_time_exit.assert_not_called()
         assert tracker._day_trades == 0 and tracker._completed_trades == []
 
     async def test_a_confirmed_close_is_still_booked_and_removed(self):
         tracker = _two_legs()
         key = tracker._key("CGPOWER", BREAKINGTRADE)
         pos = tracker.find_position("CGPOWER", BREAKINGTRADE)
-        with patch("signal_engine.tracker.notifier", new_callable=AsyncMock):
-            await tracker._book_one_time_exit(
-                key, pos, 0.0, SimpleNamespace(max_trades_per_day=5), confirmed_closed=True
-            )
+        await tracker._book_one_time_exit(
+            key, pos, 0.0, SimpleNamespace(max_trades_per_day=5), confirmed_closed=True
+        )
         assert tracker.find_position("CGPOWER", BREAKINGTRADE) is None
 
 
@@ -167,8 +163,7 @@ class TestALegLeftOpenIsNotExitedAgainOnItsOwn:
         tracker = _two_legs()
         key = tracker._key("CGPOWER", BREAKINGTRADE)
         pos = tracker.find_position("CGPOWER", BREAKINGTRADE)
-        with patch("signal_engine.tracker.notifier", new_callable=AsyncMock):
-            await tracker._book_one_time_exit(key, pos, 0.0, None, confirmed_closed=False)
+        await tracker._book_one_time_exit(key, pos, 0.0, None, confirmed_closed=False)
         return tracker, pos
 
     async def test_the_leg_is_flagged(self):

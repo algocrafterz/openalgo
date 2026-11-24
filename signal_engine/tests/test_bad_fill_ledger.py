@@ -25,6 +25,7 @@ from signal_engine.models import (
     Signal,
     TradeResult,
 )
+from signal_engine.tests.log_capture import capturing
 
 SLIPPAGE = "ENTRY_REJECTED_SLIPPAGE"  # the cause, kept in context["reason"]
 TP_OVERSHOT = "ENTRY_REJECTED_TP_OVERSHOT"
@@ -68,12 +69,9 @@ async def _establish(
         send_order=AsyncMock(return_value=close_result),
         cancel_order=AsyncMock(return_value=cancel_ok),
         place_bracket=AsyncMock(side_effect=["SL-1", "SL-2"]),
-        notifier=MagicMock(),
         risk=risk if risk is not None else MagicMock(),
         tracker=MagicMock(),
     )
-    for name in ("notify_order_rejected", "notify_exit_failed", "notify_entry_filled"):
-        setattr(mocks.notifier, name, AsyncMock())
     mocks.tracker.fetch_own_position = AsyncMock(return_value=broker_qty)
     entry_result = TradeResult(status=OrderStatus.SUCCESS, order_id="ENTRY-1")
     with (
@@ -91,12 +89,14 @@ async def _establish(
             "signal_engine.main._book_realised_pnl_delta",
             AsyncMock(return_value=(realised_delta, 0.0)),
         ),
-        patch("signal_engine.main.notifier", mocks.notifier),
         patch("signal_engine.main.risk_engine", mocks.risk),
         patch("signal_engine.main.tracker", mocks.tracker),
+        capturing() as logged,
     ):
         established = await _establish_position(signal, _order(), 930, entry_result)
     mocks.entry_result = entry_result
+    # The former exit-failed Telegram alert is now an ERROR log line starting "EXIT FAILED ".
+    mocks.exit_failed = [m for m in logged.messages("ERROR") if m.startswith("EXIT FAILED ")]
     return established, mocks
 
 
@@ -220,7 +220,7 @@ class TestCloseOrderFailureNeverLeavesAnUntrackedPosition:
         established, mocks = await _establish(close_result=failed, broker_qty=930)
         assert established is True  # carried on as a normal tracked entry
         assert mocks.place_bracket.await_count == 2  # the stop was cancelled, so it is restored
-        mocks.notifier.notify_exit_failed.assert_awaited_once()
+        assert len(mocks.exit_failed) == 1
         mocks.tracker.register.assert_called_once()
         assert mocks.tracker.register.call_args.args[0].sl_order_id == "SL-2"
         # Nothing is booked as closed. The entry row itself exists from the start (2026-10-23:
@@ -242,7 +242,7 @@ class TestCloseOrderFailureNeverLeavesAnUntrackedPosition:
     async def test_the_failure_alert_does_not_claim_the_position_was_closed(self):
         failed = TradeResult(status=OrderStatus.REJECTED, order_id="", message="margin")
         _, mocks = await _establish(close_result=failed, broker_qty=930)
-        text = mocks.notifier.notify_exit_failed.await_args.args[1]
+        (text,) = mocks.exit_failed
         assert "auto-close attempted" in text and "auto-closed" not in text
 
     async def test_a_timed_out_close_that_filled_is_found_in_the_orderbook(self):

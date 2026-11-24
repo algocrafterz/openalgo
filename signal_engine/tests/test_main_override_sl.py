@@ -6,6 +6,7 @@ import pytest
 
 from signal_engine.main import _ladder_sl_override, _replace_runner_sl
 from signal_engine.models import Direction, OrderStatus, TradeResult
+from signal_engine.tests.log_capture import capturing
 
 
 def _pos(sl=2480.0, direction=Direction.LONG):
@@ -26,13 +27,15 @@ async def _run(pos, override, tp_level="TP1", extended=False, ok=True):
     res = TradeResult(order_id="SL999", status=status, message="m")
     with (
         patch("signal_engine.main.place_sl_order", new_callable=AsyncMock, return_value=res) as place,
-        patch("signal_engine.main.notifier.notify_sl_failed", new_callable=AsyncMock) as failed,
+        capturing() as logged,
         patch("signal_engine.main.settings") as st,
     ):
         st.bracket_enabled = True
         st.tp1_runner_sl_buffer = 0.3
         st.use_extended_runner_tiers = extended
         await _replace_runner_sl(pos, pos.quantity, tp_level, override_sl=override)
+    # The former sl-failed Telegram alert is now this ERROR log line.
+    failed = [m for m in logged.messages("ERROR") if "SL re-placement failed" in m]
     return place, failed
 
 
@@ -76,7 +79,7 @@ class TestOverrideSl:
     async def test_failed_placement_notifies_and_keeps_tracked_sl(self):
         pos = _pos(sl=2480.0)
         _, failed = await _run(pos, 2500.0, ok=False)
-        failed.assert_awaited_once()
+        assert len(failed) == 1
         assert pos.sl == 2480.0
 
     @pytest.mark.asyncio

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 from loguru import logger
 
-from signal_engine import freshness, notifier, order_reconcile, startup
+from signal_engine import freshness, order_reconcile, startup
 from signal_engine.api_client import (
     MarginAPIError,
     cancel_order,
@@ -302,7 +302,7 @@ async def _handle_exit(signal) -> None:
     EXIT pipeline: look up tracker -> resolve qty -> cancel SL (if full exit) ->
     MARKET SELL -> update tracker -> record PnL -> save
     """
-    await notifier.notify_exit_signal_received(signal.symbol, signal.strategy)
+    logger.info(f"EXIT signal | {signal.symbol} [{signal.strategy}]")
 
     # Serialize concurrent exit signals for the same position.
     # When multiple TP levels hit the same 5-min bar, TradingView fires all TP alerts
@@ -415,7 +415,7 @@ async def _handle_exit_locked(signal) -> None:
             # second EXIT row for the same close, at 0 recorded P&L. fetch_day_trades() reads
             # every EXIT row, so this silently double-counted the close as its own "trade"
             # (a phantom win, since 0 >= 0) everywhere trades.db is read: the ledger, the EOD
-            # report, and the Telegram day summary. Partial exits still need this call - it
+            # report and the day summary. Partial exits still need this call - it
             # is the only row ever written for that leg (see db.fetch_day_trades()).
             return
     else:
@@ -499,7 +499,7 @@ async def _recover_position_from_broker(signal) -> "TrackedPosition | None":
     """Rebuild a TrackedPosition after an engine restart lost tracker state.
 
     Queries the broker for the live quantity and the trades.db audit trail for the
-    entry context. Returns None (after notifying) when there is nothing to exit.
+    entry context. Returns None (after logging) when there is nothing to exit.
     """
     logger.warning(
         f"EXIT: {signal.symbol} not in tracker for strategy={signal.strategy}, "
@@ -519,7 +519,6 @@ async def _recover_position_from_broker(signal) -> "TrackedPosition | None":
     api_qty = await tracker.fetch_own_position(signal.symbol, signal.strategy, exchange, product)
     if api_qty is None or api_qty == 0:
         logger.warning(f"EXIT: no open position for {signal.symbol} (strategy={signal.strategy})")
-        await notifier.notify_exit_no_position(signal.symbol, signal.strategy)
         return None
 
     # Negative qty from broker means SHORT position; positive means LONG.
@@ -591,13 +590,6 @@ async def _abort_exit_on_rejected_entry(signal, pos) -> bool:
         logger.info(f"EXIT: cancelled orphaned SL {pos.sl_order_id} for {pos.symbol}")
     risk_engine.record_rejection(strategy=pos.strategy, symbol=pos.symbol)
     tracker.unregister(signal.symbol, signal.strategy)
-    await notifier.notify_orphaned_position(
-        pos.symbol,
-        pos.strategy,
-        pos.direction.value,
-        pos.entry_order_id,
-        f"exit blocked: entry order {status_lower}",
-    )
     return True
 
 
@@ -619,22 +611,18 @@ async def _sl_hit_is_proven(pos) -> bool:
 
 
 async def _alert_sl_hit_unproven(pos) -> None:
-    """Tell the operator, at most once per position per 10 minutes."""
+    """Log the unproven stop-loss hit, at most once per position per 10 minutes."""
     key = _exit_lock_key(pos.symbol, pos.strategy)
     now = time.monotonic()
     last = _sl_hit_unproven_alerted.get(key)
     if last is not None and now - last < _SL_HIT_UNPROVEN_ALERT_INTERVAL_S:
         return
     _sl_hit_unproven_alerted[key] = now
-    try:
-        await notifier.notify_event(
-            "sl_hit_unproven",
-            f"{pos.symbol} [{pos.strategy}]: the chart reported a stop-loss hit, but the broker "
-            "still shows the position open. Nothing was cancelled or closed. The position keeps "
-            "its stop-loss order.",
-        )
-    except Exception:  # noqa: BLE001 - an alert failure must not break the exit handler
-        logger.exception(f"{pos.symbol} [{pos.strategy}]: could not send the unconfirmed stop-loss alert")
+    logger.warning(
+        f"SL HIT UNPROVEN: {pos.symbol} [{pos.strategy}]: the chart reported a stop-loss hit, but "
+        "the broker still shows the position open. Nothing was cancelled or closed. The position "
+        "keeps its stop-loss order."
+    )
 
 
 async def _reconcile_sl_hit(signal, pos, *, broker_flat_confirmed: bool = False) -> None:
@@ -1085,7 +1073,7 @@ async def _hold_uncertain_exit(
     candidates = ", ".join(order_ids) if order_ids else "none found on the book"
     logger.critical(f"EXIT {message}; candidate orders: {candidates}")
     if not notify:
-        # The time exit sends its own single alert for the strategy (tracker._alert_held_exits).
+        # The time exit logs its own single line for the strategy (tracker._alert_held_exits).
         return TradeResult(status=OrderStatus.TIMEOUT, message=message)
     if accepted:
         # The broker accepted this order and reports it working: a manual exit would double it.
@@ -1097,9 +1085,9 @@ async def _hold_uncertain_exit(
         )
         if sl_cancelled:
             text += " The position's stop-loss was cancelled for this exit."
-        await notifier.notify(text)
+        logger.warning(text)
         return TradeResult(status=OrderStatus.TIMEOUT, message=message)
-    await notifier.notify(
+    logger.critical(
         f"ORDER UNCONFIRMED: {message}. The stop was cancelled for this exit, so the position is "
         f"UNPROTECTED. Candidate orders: {candidates}. No further orders go out for it until the "
         f"order book confirms the exit. Check the broker order book and the {pos.symbol} position "
@@ -1143,7 +1131,7 @@ async def _handle_duplicate_exit_fills(pos, action: str, quantity: int, result) 
             if proven_ours
             else "the order book does not tag every extra copy with this strategy"
         )
-        await notifier.notify(
+        logger.critical(
             f"DUPLICATE FILLS: {what} filled more than once (adopted {result.order_id}, extra: {ids}). "
             f"Not closed automatically ({reason}): check the broker now."
         )
@@ -1156,16 +1144,10 @@ async def _handle_duplicate_exit_fills(pos, action: str, quantity: int, result) 
     outcome = await send_order(close)
     if outcome.status == OrderStatus.SUCCESS:
         logger.critical(f"EXIT {what}: closed the duplicate {extra} with {close.action.value} id={outcome.order_id}")
-        await notifier.notify(
-            f"DUPLICATE CLOSED: {what} filled more than once (extra: {ids}); the extra {extra} was "
-            f"closed with {close.action.value} {extra} (id {outcome.order_id})."
-        )
         return
-    logger.critical(f"EXIT {what}: closing the duplicate {extra} failed: {outcome.message}")
-    await notifier.notify(
-        f"DUPLICATE NOT CLOSED: {what} filled more than once (extra: {ids}); the close "
-        f"{close.action.value} {extra} returned {outcome.status.value} ({outcome.message}). "
-        "Not resent: check the broker now."
+    logger.critical(
+        f"EXIT {what}: closing the duplicate {extra} failed: {outcome.status.value} "
+        f"({outcome.message}). Not resent: check the broker now."
     )
 
 
@@ -1533,33 +1515,13 @@ async def _finalize_partial_exit(
     hold_min: int,
     override_sl: float | None = None,
 ) -> None:
-    """Reduce the tracked qty, re-protect the runner, and notify."""
+    """Reduce the tracked qty and re-protect the runner."""
     pos.quantity = remaining
     pos.sl_order_id = ""  # clear old SL id — will be updated below if re-placement succeeds
     logger.info(f"Partial exit: {pos.symbol} exited {exit_qty}, remaining {remaining}")
 
     await _replace_runner_sl(pos, remaining, tp_level, override_sl=override_sl)
 
-    # R for this partial leg only (shows how far into the trade we are)
-    r_partial = _compute_r(pnl_delta, exit_qty, base_price, pos.sl)
-    next_tp_info = compute_next_tp(pos, tp_level)
-    next_tp_label = next_tp_info[0] if next_tp_info else None
-    next_tp_price = next_tp_info[1] if next_tp_info else None
-    await notifier.notify_partial_exit(
-        pos.symbol,
-        exit_qty,
-        remaining,
-        tp_level or "",
-        pnl_delta,
-        strategy=pos.strategy,
-        new_sl=pos.sl,
-        next_tp_label=next_tp_label,
-        next_tp_price=next_tp_price,
-        direction=pos.direction.value,
-        r_multiple=r_partial,
-        entry_price=base_price,
-        hold_minutes=hold_min,
-    )
     # Accumulate partial P&L and record exit label for final TradeRecord
     pos.realized_pnl += pnl_delta
     pos.exit_types.append(tp_level or "TP")
@@ -1657,7 +1619,7 @@ async def _replace_runner_sl(
 
     With `override_sl` (the runner Ladder's effective stop) that price is used instead of the
     rules below, so a runner-managed position has exactly one stop rule. It still only ever
-    tightens, and goes through the same placement and failure notification.
+    tightens, and goes through the same placement and failure logging.
 
     Prefers the structural stop (the level that triggered the entry, floored at break-even);
     falls back to TP1 - tp1_runner_sl_buffer x R for signals with no key level behind them.
@@ -1776,12 +1738,7 @@ async def _place_runner_sl(
     else:
         logger.error(
             f"SL re-placement failed for {pos.symbol} remaining {remaining} qty — "
-            "position unprotected until TP1.5/time-exit"
-        )
-        await notifier.notify_sl_failed(
-            pos.symbol,
-            f"SL re-placement failed after partial exit: {sl_result.message}",
-            strategy=pos.strategy,
+            f"position unprotected until TP1.5/time-exit [{pos.strategy}]: {sl_result.message}"
         )
 
 
@@ -1829,7 +1786,10 @@ async def _handle_exit_order_failure(pos, trade_result, stop_cancelled: bool = F
         # Position still open (broker_qty > 0 for LONG, < 0 for SHORT, -1 for API error).
         # Clear exit_pending so the next TP/EXIT signal can retry.
         pos.exit_pending = False
-        await notifier.notify_exit_failed(pos.symbol, trade_result.message, strategy=pos.strategy)
+        logger.error(
+            f"EXIT FAILED {pos.symbol} [{pos.strategy}]: the broker position is still open "
+            f"(qty {broker_qty}): {trade_result.message}"
+        )
         if (
             stop_cancelled
             and pos.sl_order_id
@@ -1987,7 +1947,6 @@ async def _entry_halted(signal) -> bool:
         return False
     reason = mode_guard.halt_reason()
     logger.critical(f"ENTRY REFUSED (engine halted), skipping {signal.symbol}: {reason}")
-    await notifier.notify_risk_limit_hit(reason)
     await _decline(signal, stage="halted", reason=reason)
     return True
 
@@ -2034,7 +1993,6 @@ async def _entry_rejected_by_symbol_rules(signal) -> bool:
     if _is_be_series(signal.symbol, exchange):
         msg = f"{signal.symbol} is T2T (BE series) — MIS not allowed, add to blacklist to suppress"
         logger.warning(msg)
-        await notifier.notify_entry_declined(signal.symbol, msg, strategy=signal.strategy)
         await _decline(signal, stage="symbol_rules", reason=msg)
         return True
 
@@ -2047,7 +2005,6 @@ async def _entry_rejected_by_symbol_rules(signal) -> bool:
             "— skipping to avoid certain rejection"
         )
         logger.warning(msg)
-        await notifier.notify_entry_declined(signal.symbol, msg, strategy=signal.strategy)
         await _decline(signal, stage="symbol_rules", reason=msg)
         return True
 
@@ -2100,7 +2057,6 @@ async def _entry_passes_risk_gates(signal) -> bool:
     if not risk_engine.check_exposure(signal.strategy):
         reason = risk_engine.exposure_block_reason(signal.strategy)
         logger.warning(f"Risk limit reached, skipping {signal.symbol}: {reason}")
-        await notifier.notify_risk_limit_hit(reason)
         await _decline(signal, stage="risk_gates", reason=reason)
         return False
 
@@ -2145,7 +2101,6 @@ async def _resolve_entry_capital(signal) -> float | None:
             f"min={settings.min_capital_for_entry:,.0f} INR"
         )
         logger.warning(msg)
-        await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
         await _decline(signal, stage="capital", reason=msg)
         return None
 
@@ -2169,7 +2124,6 @@ async def _resolve_entry_quantity(
             f"(capital={sizing_capital:,.0f})"
         )
         logger.info(msg)
-        await notifier.notify_entry_declined(signal.symbol, msg, strategy=signal.strategy)
         await _decline(signal, stage="sizing", reason=msg)
         return None
 
@@ -2188,13 +2142,11 @@ async def _resolve_entry_quantity(
         except MarginAPIError as e:
             msg = f"Margin API failed: {e}"
             logger.error(f"{signal.symbol}: {msg}, skipping trade")
-            await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
             await _decline(signal, stage="margin", reason=msg)
             return None
         if quantity <= 0:
             msg = f"Insufficient capital after margin check — {signal.symbol} requires more margin than available (capital={capital:,.0f})"
             logger.warning(msg)
-            await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
             await _decline(signal, stage="margin", reason=msg)
             return None
 
@@ -2339,7 +2291,6 @@ async def _sandbox_can_fund(signal, quantity: int) -> bool:
         "keep the paper sample complete."
     )
     logger.warning(f"{signal.symbol}: {msg}")
-    await notifier.notify_order_rejected(signal.symbol, msg, strategy=signal.strategy)
     await _decline(signal, stage="sandbox_margin", reason=msg)
     return False
 
@@ -2472,10 +2423,7 @@ async def _hold_uncertain_entry(signal, order, since: datetime) -> TradeResult:
         "entry was sent but its outcome is unknown, and the broker order book could not confirm it; no further orders for "
         "this symbol until it is reconciled"
     )
-    logger.critical(f"ENTRY {message}")
-    await notifier.notify(
-        f"ORDER UNCONFIRMED: {message}. The order may be live at the broker with no stop: check now."
-    )
+    logger.critical(f"ENTRY {message}. The order may be live at the broker with no stop: check now.")
     return TradeResult(status=OrderStatus.TIMEOUT, message=message)
 
 
@@ -2526,11 +2474,8 @@ async def _adopt_untracked_entry(pending, order_id: str) -> None:
     if signal is None or order is None:
         logger.critical(
             f"UNTRACKED FILL {pending.action} {pending.quantity} {pending.symbol} "
-            f"[{pending.strategy}] order {order_id}: no signal kept, cannot place a stop"
-        )
-        await notifier.notify(
-            f"UNTRACKED FILL: {pending.action} {pending.quantity} {pending.symbol} [{pending.strategy}] "
-            f"order {order_id} has no stop and is not tracked. Close it or protect it at the broker now."
+            f"[{pending.strategy}] order {order_id}: no signal kept, cannot place a stop. Close it or "
+            "protect it at the broker now."
         )
         return
     trade_result = TradeResult(order_id=order_id, status=OrderStatus.SUCCESS, message="recovered after timeout")
@@ -2541,13 +2486,12 @@ async def _adopt_untracked_entry(pending, order_id: str) -> None:
     try:
         await _establish_position(signal, order, order.quantity, trade_result)  # saves the entry
     except Exception:  # noqa: BLE001 - alert instead of losing the position silently
-        logger.exception(f"Adopting untracked entry {pending.symbol} [{pending.strategy}] failed")
-        await notifier.notify(
-            f"UNTRACKED FILL: {pending.symbol} [{pending.strategy}] order {order_id} filled but "
-            "adopting it failed. It has no stop: check the broker now."
+        logger.exception(
+            f"UNTRACKED FILL: adopting {pending.symbol} [{pending.strategy}] order {order_id} failed. "
+            "It has no stop: check the broker now."
         )
         return
-    await notifier.notify(
+    logger.info(
         f"ENTRY ADOPTED: {pending.symbol} [{pending.strategy}] order {order_id} filled after a timeout "
         "and is now tracked with its stop."
     )
@@ -2563,9 +2507,9 @@ async def _apply_late_partial_exit(pos, pending, order_id: str = "") -> None:
     Its order id is not the order that closes the position, so it is not filed as the stop id
     (the poll would skip the stop retry, and a later empty book would book the whole position
     closed). The quantity is reduced, the dead stop id and its retry counters are cleared so
-    the poll's missing-stop retry places a stop for the remaining shares, and the operator is
-    told once. The leg's P&L is booked from the order's own fill price, exactly as an on-time
-    partial exit is. When that price cannot be read, nothing is booked and the notice says so.
+    the poll's missing-stop retry places a stop for the remaining shares, and the late fill is
+    logged once. The leg's P&L is booked from the order's own fill price, exactly as an on-time
+    partial exit is. When that price cannot be read, nothing is booked and the log line says so.
     """
     exit_qty = pending.quantity
     base_price = pos.fill_price or pos.entry_price
@@ -2587,16 +2531,6 @@ async def _apply_late_partial_exit(pos, pending, order_id: str = "") -> None:
         f"EXIT {pos.symbol} [{pos.strategy}]: a partial exit of {exit_qty} completed late; "
         f"tracking {remaining} remaining, the poll re-places the stop"
         + (f"; leg P&L {leg:,.2f} booked" if leg is not None else "; leg P&L not booked (no fill price)")
-    )
-    booked = (
-        f"Its result ({leg:,.2f}) is now in today's totals."
-        if leg is not None
-        else "This partial exit's result is not in today's totals yet: check it in the trade book."
-    )
-    await notifier.notify(
-        f"{pos.symbol} [{pos.strategy}]: a partial exit of {exit_qty} shares was confirmed "
-        f"at the broker after a delay. The engine now tracks {remaining} remaining shares and is "
-        f"placing their stop-loss. {booked}"
     )
 
 
@@ -2629,11 +2563,7 @@ async def sweep_unresolved_orders() -> None:
             if order_reconcile.alert_due(pending, now, _UNRESOLVED_ALERT_SECONDS):
                 logger.critical(
                     f"{pending.kind} order for {pending.symbol} [{pending.strategy}] still unconfirmed "
-                    f"({result.detail})"
-                )
-                await notifier.notify(
-                    f"STILL UNCONFIRMED: {pending.kind} {pending.action} {pending.quantity} "
-                    f"{pending.symbol} [{pending.strategy}] ({result.detail}). Check the broker."
+                    f"({result.detail}). Check the broker."
                 )
             continue
         if result.outcome == order_reconcile.ABSENT and order_reconcile.watch_open(pending, now):
@@ -2720,7 +2650,6 @@ async def _absent_exit_decision(pending, now: datetime) -> str:
             "it by hand."
         )
         logger.critical(message)
-        await notifier.notify(message)
     return "hold"
 
 
@@ -2762,12 +2691,7 @@ async def _sweep_late_duplicates(now: datetime) -> None:
             ids = ", ".join(result.ambiguous_ids)
             logger.critical(
                 f"EXIT {w.symbol} [{w.strategy}]: possible late copy of the resent {w.action} {w.quantity}: "
-                f"{ids} (order time unreadable or at the send); not traded"
-            )
-            await notifier.notify(
-                f"POSSIBLE LATE DUPLICATE: {w.symbol} [{w.strategy}] {w.action} {w.quantity} was resent "
-                f"after a timeout and the book shows {ids}, whose time cannot prove it is the original. "
-                "Nothing was sent. Check the broker position now."
+                f"{ids} (order time unreadable or at the send); not traded. Check the broker position now."
             )
 
 
@@ -2791,37 +2715,16 @@ async def _restore_stop_after_absent_exit(pending) -> None:
         f"EXIT {pending.symbol} [{pending.strategy}] is not on the broker and its stop is {status}: "
         "the position is open, restoring its stop"
     )
-    await notifier.notify(
-        f"STOP RESTORING: {pending.symbol} [{pending.strategy}] exit never reached the broker; "
-        "re-placing its stop."
-    )
 
 
 async def _notify_entry_outcome(signal, trade_result, rr: float) -> None:
-    """Announce the broker's response to the entry order."""
+    """Log the broker's response to the entry order (a warning when it was not accepted)."""
     if trade_result.status == OrderStatus.SUCCESS:
         logger.info(f"Order placed for {signal.symbol}: id={trade_result.order_id}")
-        # +1 because risk_engine.record_trade runs below — this slot is now taken.
-        slot_context = notifier.format_slot_context(
-            risk_engine.open_positions_for(signal.strategy) + 1,
-            risk_engine.effective_max_open_positions_for(signal.strategy),
-        )
-        await notifier.notify_order_placed(
-            signal.symbol,
-            signal.direction.value,
-            strategy=signal.strategy,
-            signal_price=signal.entry,
-            sl=signal.sl,
-            tp=signal.tp if signal.tp > 0 else None,  # 0 = no take-profit, not shown
-            rr=rr if signal.tp > 0 else None,
-            slot_context=slot_context,
-        )
     else:
         logger.warning(
-            f"Order {trade_result.status.value} for {signal.symbol}: {trade_result.message}"
-        )
-        await notifier.notify_order_rejected(
-            signal.symbol, trade_result.message, strategy=signal.strategy
+            f"Order {trade_result.status.value} for {signal.symbol} [{signal.strategy}]: "
+            f"{trade_result.message}"
         )
 
 
@@ -2846,11 +2749,7 @@ async def _establish_position(signal, order, quantity: int, trade_result, entry_
             # tracked for this session, but a restart cannot restore it. Say so now.
             logger.critical(
                 f"ENTRY NOT RECORDED: {signal.symbol} [{signal.strategy}] order {trade_result.order_id} "
-                "is open at the broker but could not be written to trades.db"
-            )
-            await notifier.notify(
-                f"ENTRY NOT RECORDED: {signal.symbol} [{signal.strategy}] order {trade_result.order_id} "
-                "is open at the broker but trades.db could not record it. It is managed until the "
+                "is open at the broker but could not be written to trades.db. It is managed until the "
                 "engine stops; after a restart it will not be tracked. Check trades.db now."
             )
 
@@ -2871,8 +2770,8 @@ async def _establish_position(signal, order, quantity: int, trade_result, entry_
     if guard is not None:
         sl_order_id = guard.replacement_sl_order_id
 
-    # Register BEFORE the notice: the notifier can wait on a Telegram flood wait, and until
-    # the position is tracked it has no close detection and no time exit.
+    # Register BEFORE anything below that can wait: until the position is tracked it has no
+    # close detection and no time exit.
     tracker.register(
         TrackedPosition(
             symbol=signal.symbol,
@@ -2890,19 +2789,6 @@ async def _establish_position(signal, order, quantity: int, trade_result, entry_
             context=signal.context or {},
             sig_id=signal.sig_id or "",
         )
-    )
-
-    # Always notify LIVE so trader knows position is active and SL is protecting it.
-    # fill_price=0 triggers "fill pending" wording in the message.
-    await notifier.notify_entry_filled(
-        signal.symbol,
-        signal.direction.value,
-        entry_fill_price or 0.0,
-        quantity,
-        signal.entry,
-        strategy=signal.strategy,
-        sl=signal.sl,
-        tp=signal.tp if signal.tp > 0 else None,  # 0 = no take-profit, not shown
     )
 
     return True
@@ -2930,12 +2816,11 @@ async def _place_entry_bracket(signal, quantity: int, entry_order_id: str) -> st
     sl_result, _ = await send_bracket_legs(signal, quantity, entry_order_id)
     sl_order_id = sl_result.order_id if sl_result else ""
     if sl_result and sl_result.status == OrderStatus.SUCCESS:
-        await notifier.notify_sl_placed(
-            signal.symbol, sl_order_id, strategy=signal.strategy, sl_price=signal.sl
-        )
+        logger.info(f"SL confirmed | {signal.symbol} [{signal.strategy}] sl={signal.sl} id={sl_order_id}")
     else:
-        await notifier.notify_sl_failed(
-            signal.symbol, sl_result.message if sl_result else "no result", strategy=signal.strategy
+        logger.error(
+            f"SL FAILED | {signal.symbol} [{signal.strategy}]: "
+            f"{sl_result.message if sl_result else 'no result'}"
         )
     return sl_order_id
 
@@ -3082,11 +2967,7 @@ async def _auto_close_on_bad_fill(
 
     exit_fill, pnl = await _bad_fill_close_pnl(signal, quantity, entry_fill_price, close_result)
     risk_engine.record_close(pnl, strategy=signal.strategy, symbol=signal.symbol)
-    await notifier.notify_order_rejected(
-        signal.symbol,
-        reason,
-        strategy=signal.strategy,
-    )
+    logger.warning(f"Bad-fill close for {signal.symbol} [{signal.strategy}]: {reason}")
     return BadFillClose(
         closed=True,
         exit_type=exit_type,
@@ -3121,7 +3002,7 @@ async def _bad_fill_close_blocked_by_stop(
         stop_fill = TradeResult(status=OrderStatus.SUCCESS, order_id=sl_order_id, message="stop filled")
         exit_fill, pnl = await _bad_fill_close_pnl(signal, quantity, entry_fill_price, stop_fill)
         risk_engine.record_close(pnl, strategy=signal.strategy, symbol=signal.symbol)
-        await notifier.notify_order_rejected(signal.symbol, reason, strategy=signal.strategy)
+        logger.warning(f"Bad-fill close for {signal.symbol} [{signal.strategy}]: {reason}")
         return BadFillClose(
             closed=True,
             exit_type=exit_type,
@@ -3173,7 +3054,6 @@ async def _hold_unconfirmed_bad_fill_close(
         "broker order book and position now; close or protect it by hand."
     )
     logger.critical(message)
-    await notifier.notify(message)
     return BadFillClose(closed=False, exit_type=exit_type, reason=reason, slippage_r=slippage_r)
 
 
@@ -3230,9 +3110,9 @@ async def _restore_protection_after_failed_close(
     if sl_cancelled:
         sl_order_id = await _place_entry_bracket(signal, quantity, entry_order_id)
     attempted = reason.replace("auto-closed", "auto-close attempted")
-    await notifier.notify_exit_failed(
-        signal.symbol, f"{attempted}; close order failed: {close_result.message}",
-        strategy=signal.strategy,
+    logger.error(
+        f"EXIT FAILED {signal.symbol} [{signal.strategy}]: {attempted}; close order failed: "
+        f"{close_result.message}"
     )
     return BadFillClose(
         closed=False,

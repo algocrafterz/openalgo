@@ -24,6 +24,7 @@ from signal_engine.models import (
     Signal,
     TradeResult,
 )
+from signal_engine.tests.log_capture import capture
 from signal_engine.tracker import PositionTracker, TrackedPosition
 
 # --------------------------------------------------------------------------
@@ -216,11 +217,9 @@ def harness(settings=None, tracker=None, **stubs):
     stack.enter_context(patch("signal_engine.main.settings", settings))
     stack.enter_context(patch("signal_engine.main.tracker", tracker))
     stack.enter_context(patch("signal_engine.main.risk_engine", risk_engine))
-    # Close notifications are emitted by PositionTracker.book_close, entry/partial
-    # notifications by main — patch both module references with the same mock so a
-    # test can assert on either without caring which module owns the call.
-    h.notifier = stack.enter_context(patch("signal_engine.main.notifier", new_callable=AsyncMock))
-    stack.enter_context(patch("signal_engine.tracker.notifier", h.notifier))
+    # The failure lines main logs (once Telegram alerts; outgoing notifications were removed in
+    # November 2026) are captured so a test can assert that the failure is still recorded.
+    h.logged = capture(stack)
     stack.enter_context(patch("signal_engine.tracker.fetch_net_position", _net_position))
     for name, stub in defaults.items():
         if name == "fetch_open_position":
@@ -263,12 +262,11 @@ class TestExitGuards:
             h.send_order.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_no_position_anywhere_notifies_and_stops(self):
-        """Tracker miss + broker flat -> notify_exit_no_position, no order."""
+    async def test_no_position_anywhere_stops(self):
+        """Tracker miss + broker flat -> no order."""
         h = harness(tracker=_real_tracker(), fetch_open_position=AsyncMock(return_value=0))
         with h.stack:
             await _handle_exit(_exit_signal(tp_level="TP1"))
-            h.notifier.notify_exit_no_position.assert_awaited_once_with("RELIANCE", "ORB")
             h.send_order.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -277,7 +275,6 @@ class TestExitGuards:
         h = harness(tracker=_real_tracker(), fetch_open_position=AsyncMock(return_value=-1))
         with h.stack:
             await _handle_exit(_exit_signal(tp_level="TP1"))
-            h.notifier.notify_exit_no_position.assert_awaited_once()
             h.send_order.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -292,7 +289,7 @@ class TestExitGuards:
             h.send_order.assert_not_awaited()
             h.cancel_order.assert_awaited_once_with("SL1", "ORB")
             h.risk.record_rejection.assert_called_once_with(strategy="ORB", symbol="RELIANCE")
-            h.notifier.notify_orphaned_position.assert_awaited_once()
+            assert h.logged.count("aborting exit (no real position)") == 1
         assert tracker.find_position("RELIANCE", "ORB") is None
 
 
@@ -372,7 +369,6 @@ class TestSlHitReconcile:
             h.risk.record_close.assert_called_once_with(
                 pnl=-750.0, strategy="ORB", symbol="RELIANCE"
             )
-            h.notifier.notify_position_closed.assert_awaited_once()
 
         assert tracker.find_position("RELIANCE", "ORB") is None
         assert tracker._day_trades == 1
@@ -470,7 +466,7 @@ class TestExitOrderPlacement:
         flat_book = AsyncMock(return_value=[{"symbol": "RELIANCE", "quantity": 0}])
         with h.stack, patch("signal_engine.tracker.fetch_positionbook", flat_book):
             await _handle_exit(_exit_signal(tp_level="TP1"))
-            h.notifier.notify_exit_failed.assert_not_awaited()
+            assert not h.logged.has("EXIT FAILED ", level="ERROR")
             h.risk.record_close.assert_not_called()  # no 0.0 close; the poll books the real one
         assert tracker.find_position("RELIANCE", "ORB") is pos  # still tracked
         assert pos.exit_pending is False  # released, so the poll can book it
@@ -489,7 +485,7 @@ class TestExitOrderPlacement:
         )
         with h.stack:
             await _handle_exit(_exit_signal(tp_level="TP1"))
-            h.notifier.notify_exit_failed.assert_awaited_once()
+            assert h.logged.count("EXIT FAILED ", level="ERROR") == 1
         assert tracker.find_position("RELIANCE", "ORB") is pos
         assert pos.exit_pending is False
 
@@ -515,8 +511,6 @@ class TestPartialExitEdges:
         with h.stack:
             # qty=1, 50% -> floor(0.5)=0 -> clamped to 1 -> equals quantity -> full exit
             await _handle_exit(_exit_signal(tp_level="TP1"))
-            h.notifier.notify_position_closed.assert_awaited_once()
-            h.notifier.notify_partial_exit.assert_not_awaited()
         assert tracker.find_position("RELIANCE", "ORB") is None
 
     @pytest.mark.asyncio
@@ -534,7 +528,6 @@ class TestPartialExitEdges:
         with h.stack:
             await _handle_exit(_exit_signal(tp_level="TP1", exit_qty_pct=0.25))
             assert h.build_exit_order.call_args.kwargs["quantity"] == 25
-            h.notifier.notify_partial_exit.assert_awaited_once()
         pos = tracker.find_position("RELIANCE", "ORB")
         assert pos is not None and pos.quantity == 75
 
@@ -550,7 +543,7 @@ class TestPartialExitEdges:
         )
         with h.stack:
             await _handle_exit(_exit_signal(tp_level="TP1", exit_qty_pct=0.5))
-            h.notifier.notify_sl_failed.assert_awaited_once()
+            assert h.logged.count("position unprotected until TP1.5/time-exit", level="ERROR") == 1
         pos = tracker.find_position("RELIANCE", "ORB")
         assert pos is not None and pos.sl_order_id == ""
 
@@ -566,7 +559,6 @@ class TestEntryPreflightRejections:
         h = harness(_is_be_series=MagicMock(return_value=True))
         with h.stack:
             await _handle_entry(_entry_signal())
-            h.notifier.notify_entry_declined.assert_awaited_once()  # routine decline, filtered at alerts
             h.send_order.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -574,7 +566,6 @@ class TestEntryPreflightRejections:
         h = harness(settings=_settings_stub(broker_mis_rejected={"RELIANCE"}))
         with h.stack:
             await _handle_entry(_entry_signal())
-            h.notifier.notify_entry_declined.assert_awaited_once()  # routine decline, filtered at alerts
             h.send_order.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -593,16 +584,16 @@ class TestEntryPreflightRejections:
         )
         with h.stack:
             await _handle_entry(_entry_signal())
-            h.notifier.notify_order_rejected.assert_awaited_once()
+            assert h.logged.count("Insufficient capital for new entry") == 1
             h.send_order.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_zero_capital_aborts_without_notification(self):
-        """Capital fetch failure is a log-only abort — no Telegram noise."""
+        """Capital fetch failure is a log-only abort."""
         h = harness(fetch_available_capital=AsyncMock(return_value=0.0))
         with h.stack:
             await _handle_entry(_entry_signal())
-            h.notifier.notify_order_rejected.assert_not_awaited()
+            assert not h.logged.has("Insufficient capital for new entry")
             h.send_order.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -612,7 +603,6 @@ class TestEntryPreflightRejections:
         h.risk.get_sizing_capital.return_value = 100000.0
         with h.stack:
             await _handle_entry(_entry_signal())
-            h.notifier.notify_entry_declined.assert_awaited_once()  # routine decline, filtered at alerts
             h.send_order.assert_not_awaited()
 
 
@@ -635,7 +625,7 @@ class TestEntryMargin:
                 new=AsyncMock(side_effect=MarginAPIError("span down")),
             ):
                 await _handle_entry(_entry_signal())
-            h.notifier.notify_order_rejected.assert_awaited_once()
+            assert h.logged.count("Margin API failed: span down", level="ERROR") == 1
             h.send_order.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -646,7 +636,7 @@ class TestEntryMargin:
         with h.stack:
             with patch("signal_engine.main.adjust_qty_for_margin", new=AsyncMock(return_value=0)):
                 await _handle_entry(_entry_signal())
-            h.notifier.notify_order_rejected.assert_awaited_once()
+            assert h.logged.count("Insufficient capital after margin check") == 1
             h.send_order.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -706,7 +696,7 @@ class TestEntryPostFill:
         )
         with h.stack, self._sized(h):
             await _handle_entry(_entry_signal())
-            h.notifier.notify_sl_failed.assert_awaited_once()
+            assert h.logged.count("SL FAILED | RELIANCE [ORB]", level="ERROR") == 1
         assert tracker.find_position("RELIANCE", "ORB") is not None
 
     @pytest.mark.asyncio
@@ -732,7 +722,7 @@ class TestEntryPostFill:
         h = harness(tracker=tracker, send_order=AsyncMock(return_value=_fail("no funds")))
         with h.stack, self._sized(h):
             await _handle_entry(_entry_signal())
-            h.notifier.notify_order_rejected.assert_awaited_once()
+            assert h.logged.count("Order ERROR for RELIANCE [ORB]: no funds") == 1
         assert tracker.tracked_count == 0
 
     @pytest.mark.asyncio
@@ -784,7 +774,7 @@ class TestEntryPostFill:
     @pytest.mark.asyncio
     async def test_entry_timeout_with_no_broker_fill_is_treated_as_rejected(self):
         """No matching completed order in the orderbook -> genuine failure, unchanged
-        behaviour: notify rejection, nothing tracked."""
+        behaviour: the rejection is logged, nothing tracked."""
         tracker = _real_tracker()
         timeout_result = TradeResult(
             order_id="", status=OrderStatus.TIMEOUT, message="Request timed out"
@@ -799,7 +789,7 @@ class TestEntryPostFill:
         )
         with h.stack, self._sized(h):
             await _handle_entry(_entry_signal())
-            h.notifier.notify_order_rejected.assert_awaited_once()
+            assert h.logged.count("Order TIMEOUT for RELIANCE") == 1
         assert tracker.tracked_count == 0
 
     @pytest.mark.asyncio
@@ -831,7 +821,7 @@ class TestEntryPostFill:
         )
         with h.stack, self._sized(h):
             await _handle_entry(_entry_signal())
-            h.notifier.notify_order_rejected.assert_awaited_once()
+            assert h.logged.count("Order TIMEOUT for RELIANCE") == 1
         # still exactly the one pre-existing tracked position — no duplicate registered
         assert tracker.tracked_count == 1
 
@@ -999,8 +989,6 @@ class TestPartialExitDefensiveGuard:
             # Force the impossible combination: partial flag with a full-size qty
             with patch("signal_engine.main._resolve_exit_qty", return_value=(10, False)):
                 await _handle_exit(_exit_signal(tp_level="TP1"))
-            h.notifier.notify_position_closed.assert_awaited_once()
-            h.notifier.notify_partial_exit.assert_not_awaited()
             h.risk.record_close.assert_called_once_with(
                 pnl=400.0, strategy="ORB", symbol="RELIANCE"
             )
@@ -1009,12 +997,10 @@ class TestPartialExitDefensiveGuard:
 
 
 class TestFullExitDayContext:
-    """The day-context line in a close notification must count the closing trade.
+    """A full exit counts the closing trade in the day counters; a partial leg does not.
 
-    Before the exit paths were unified, the full-exit path computed this with
-    projected_day_context() because record_exit ran afterwards. book_close now
-    records first and reads day_context_line(). These pin that the resulting
-    notification is unchanged.
+    The close notification that carried these counters was removed in November 2026; the
+    counters themselves are unchanged.
     """
 
     @pytest.mark.asyncio
@@ -1024,13 +1010,9 @@ class TestFullExitDayContext:
         h = harness(tracker=tracker, fetch_order_fill_price=AsyncMock(return_value=2518.0))
         with h.stack:
             await _handle_exit(_exit_signal(tp_level="TP1"))
-            # the day context is built from the counters *after* this trade is recorded
-            ctx_args = h.notifier.format_day_context.call_args.kwargs
         assert tracker._day_trades == 1
         assert tracker._day_wins == 1
-        assert ctx_args["day_trades"] == 1
-        assert ctx_args["day_wins"] == 1
-        assert ctx_args["day_losses"] == 0
+        assert tracker._day_losses == 0
 
     @pytest.mark.asyncio
     async def test_losing_full_exit_counts_itself_as_a_loss(self):

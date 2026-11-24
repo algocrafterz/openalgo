@@ -61,10 +61,8 @@ def test_complete_report_with_nonzero_exit_follows_the_verdict(tmp_path):
     assert got["verdict"] == "AMBER"
     assert got["exit"] == 1
     assert "diagnostic" in got["note"]
-    text = verdict.message("close-day", DAY, str(tmp_path))
-    assert "AMBER" in text
-    assert "Steps failed: review" not in text
-    assert "exit code" not in text  # diagnostic: on the workflow page, not in the trader line
+    assert verdict.failed_critical_steps("close-day", DAY, str(tmp_path)) == []
+    assert "exit code" not in got["line"]  # diagnostic: on the workflow page, not in the line
 
 
 def test_a_green_verdict_with_a_nonzero_exit_stays_green(tmp_path):
@@ -218,19 +216,19 @@ def test_a_killed_attempt_has_no_exit_code(tmp_path):
 # ---- message wording ---------------------------------------------------------------------------
 
 
-def test_the_four_telegram_lines_are_distinct_and_name_the_next_action(tmp_path):
+def test_the_four_review_lines_are_distinct_and_name_the_next_action(tmp_path):
     _status(tmp_path, 1)
     lines = {}
     _report(tmp_path, _block("AMBER") + TRACKER)
-    lines["verdict"] = verdict.message("close-day", DAY, str(tmp_path))
+    lines["verdict"] = verdict.review_outcome(DAY, str(tmp_path))["text"]
     (tmp_path / f"eod-{DAY}-claude-review.md").unlink()
     _status(tmp_path, 0)  # exited cleanly but wrote nothing
-    lines["none"] = verdict.message("close-day", DAY, str(tmp_path))
+    lines["none"] = verdict.review_outcome(DAY, str(tmp_path))["text"]
     _status(tmp_path, 1)
     _report(tmp_path, "You've hit your session limit · resets 5:30pm (Asia/Kolkata)\n")
-    lines["limit"] = verdict.message("close-day", DAY, str(tmp_path))
+    lines["limit"] = verdict.review_outcome(DAY, str(tmp_path))["text"]
     _report(tmp_path, "boom\n")
-    lines["failed"] = verdict.message("close-day", DAY, str(tmp_path))
+    lines["failed"] = verdict.review_outcome(DAY, str(tmp_path))["text"]
     assert len(set(lines.values())) == 4
     assert "no verdict" in lines["none"] and "Next:" in lines["none"]
     assert "usage limit" in lines["limit"] and "Next:" in lines["limit"]
@@ -246,15 +244,15 @@ def test_other_failed_steps_are_still_listed_but_not_the_review(tmp_path):
         p.read_text().replace("backfill\t15:40:00\t15:41:00\t0", "backfill\t15:40:00\t15:41:00\t1")
     )
     _report(tmp_path, _block("AMBER") + TRACKER)
-    text = verdict.message("close-day", DAY, str(tmp_path))
-    assert "Steps failed: backfill." in text
+    assert verdict.failed_critical_steps("close-day", DAY, str(tmp_path)) == ["backfill"]
+    assert verdict.review_outcome(DAY, str(tmp_path))["outcome"] == "verdict"  # not the review
 
 
 def test_a_step_run_again_uses_its_newest_row(tmp_path):
     _status(tmp_path, 1, extra="review\t18:35:00\t18:50:00\t0\n")
     _report(tmp_path, _block("AMBER") + TRACKER)
     assert verdict.latest_steps("close-day", DAY, str(tmp_path))["review"] == 0
-    assert verdict._failed_steps("close-day", DAY, str(tmp_path)) == []
+    assert verdict.failed_critical_steps("close-day", DAY, str(tmp_path)) == []
 
 
 def test_old_status_files_without_attempt_files_still_read(tmp_path):

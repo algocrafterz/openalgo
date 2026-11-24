@@ -53,11 +53,9 @@ async def _reconcile(local, engine):
         patch("signal_engine.db.fetch_all_open_positions", return_value=local),
         patch("signal_engine.api_client.fetch_positionbook", new=AsyncMock(return_value=[_flat_row(-100.0)])),
         patch("signal_engine.db.save_reconciled_exit") as save,
-        patch("signal_engine.notifier.notify_position_closed", new=AsyncMock()),
-        patch("signal_engine.notifier.notify", new=AsyncMock()) as notify,
     ):
         await reconcile_open_positions(engine, _tracker())
-    return save, notify
+    return save
 
 
 @pytest.mark.asyncio
@@ -65,20 +63,20 @@ async def test_risk_books_only_what_the_partial_legs_did_not_already_cover():
     engine = _engine()
     engine._state("BREAKOUT").open_positions = 1
     # broker total for the symbol is -100: a +500 leg is already booked, so the runner lost -600
-    save, _ = await _reconcile([{**_local_position(), "legs_pnl": 500.0}], engine)
+    save = await _reconcile([{**_local_position(), "legs_pnl": 500.0}], engine)
     assert save.call_args[0][7] == -100.0  # the ledger row keeps the broker's full figure
     assert engine._state("BREAKOUT").daily_net_pnl == -600.0
 
 
 @pytest.mark.asyncio
-async def test_two_strategies_on_one_flat_symbol_book_nothing_and_alert():
+async def test_two_strategies_on_one_flat_symbol_book_nothing_and_log_critical(logged):
     engine = _engine()
     engine._state("BREAKOUT").open_positions = 1
     local = [
         {**_local_position(), "legs_pnl": 0.0},
         {**_local_position(strategy="BREAKINGTRADE"), "legs_pnl": 0.0},
     ]
-    save, notify = await _reconcile(local, engine)
+    save = await _reconcile(local, engine)
     save.assert_not_called()
     assert engine._state("BREAKOUT").daily_net_pnl == 0.0
-    assert "more than one strategy" in notify.await_args.args[0]
+    assert logged.has("at least one other strategy both show it open", "CRITICAL")

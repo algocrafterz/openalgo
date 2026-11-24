@@ -7,8 +7,8 @@ figures made it +Rs 119.31. Nothing noticed, because nothing ever compared the t
 day summary was assembled from the engine's own counters and reported with confidence.
 
 Every individual bug behind that number is fixed. This is the check that catches the NEXT
-one: a single number, computed two independent ways, compared, and alerted on when they
-disagree. It is deliberately dumb - it does not care WHY they differ, only that they do,
+one: a single number, computed two independent ways, compared, and logged at CRITICAL when
+they disagree. It is deliberately dumb - it does not care WHY they differ, only that they do,
 which is what makes it a canary rather than another thing to maintain.
 
 WHAT IS COMPARED
@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 from loguru import logger
 
-from signal_engine import db, notifier
+from signal_engine import db
 
 #: Rupees of disagreement tolerated before it is called a mismatch. Not zero: the broker
 #: rounds, and a paise-level difference between two float sums is arithmetic, not a defect.
@@ -120,17 +120,15 @@ async def reconcile_day(mode: str = None, day: str = None) -> Reconciliation:
 
 
 async def check_and_alert(mode: str = None, day: str = None) -> Reconciliation:
-    """Run the comparison and escalate a mismatch. Returns the result either way.
+    """Run the comparison and log a mismatch. Returns the result either way.
 
-    A LIVE-money mismatch is CRITICAL and always reaches Telegram - it is never filtered by
-    notify_level, because it means every other number that day is suspect.
+    A LIVE-money mismatch is logged at CRITICAL, because it means every other number that
+    day is suspect.
 
-    An ANALYZE-mode mismatch is logged (still visible in errors_<day>.jsonl for anyone
-    auditing) but does not escalate to Telegram as a CRITICAL "day's numbers are NOT
+    A mismatch that is the known sandbox limitation is logged as a WARNING (still visible in
+    errors_<day>.jsonl for anyone auditing), not as a CRITICAL "day's numbers are NOT
     trustworthy" claim - see Reconciliation.is_known_sandbox_limitation for why: that
-    framing is no longer true once the engine's own P&L bug is fixed (2026-09-21), and
-    crying wolf about a sandbox-side limitation the trader cannot act on just trains them to
-    ignore this channel.
+    framing is no longer true once the engine's own P&L bug is fixed (2026-09-21).
     """
     result = await reconcile_day(mode, day)
     if result.agrees:
@@ -141,14 +139,9 @@ async def check_and_alert(mode: str = None, day: str = None) -> Reconciliation:
         logger.warning(
             result.summary().replace("\n", " | ")
             + " | This is a known OpenAlgo sandbox limitation (undercounts multi-leg closes), "
-            "not a signal_engine defect - trades.db's own total_pnl is the reliable figure. "
-            "Not escalated to Telegram."
+            "not a signal_engine defect - trades.db's own total_pnl is the reliable figure."
         )
         return result
 
     logger.critical(result.summary().replace("\n", " | "))
-    try:
-        await notifier.notify_event("reconciliation_mismatch", result.summary())
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"Reconciliation: could not send the mismatch alert: {e}")
     return result

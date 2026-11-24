@@ -39,7 +39,6 @@ async def _close(pos, statuses, *, pnl_delta, square_off_order=""):
         patch("signal_engine.tracker.fetch_order_status", new=AsyncMock(side_effect=status)),
         patch("signal_engine.tracker.cancel_order", new=AsyncMock(return_value=True)),
         patch.object(tracker, "_cancel_untracked_stops", new=AsyncMock(return_value=None)),
-        patch("signal_engine.tracker.notifier.notify_position_closed", new=AsyncMock()),
         patch("signal_engine.tracker.db.save_tracker_exit") as save,
     ):
         await tracker._record_closed_trade(

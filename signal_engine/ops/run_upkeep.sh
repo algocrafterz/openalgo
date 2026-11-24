@@ -3,14 +3,14 @@
 #
 #   recover         08:36  retry only the steps the previous trading day left open (backfill,
 #                           reports, review), at low priority, ending by 08:55 IST so 09:00-09:15
-#                           stays free. One Telegram notice, and only when something was open.
+#                           stays free. One printed notice line, only when something was open.
 #                           Replaces retry-failed. Rules: signal_engine/ops/recovery.py.
 #   retry-failed   08:56  the line installed until the maintainer installs recover: redo the last
 #                           session's data download if it failed (once, before 09:10). It is
 #                           removed from the schedule; the command stays for that line.
-#   deadman morning 09:40  alert when the 09:12 or 09:27 checkpoint left no record; also prints
+#   deadman morning 09:40  print and exit 1 when the 09:12 or 09:27 checkpoint left no record; also prints
 #                           what the previous day left open and what the recovery did (WARN).
-#   deadman close   16:28  alert when the close-day run is missing, incomplete or failed, judged
+#   deadman close   16:28  print and exit 1 when the close-day run is missing, incomplete or failed, judged
 #                           after the 16:01 retry (close_day.sh --retry, which ends by 16:25).
 #                           (Installed until the maintainer switches the line: 16:20. Both pass the
 #                           jobs audit, signal_engine/ops/jobs.py CRON_LINES.)

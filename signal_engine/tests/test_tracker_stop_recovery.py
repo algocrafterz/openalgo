@@ -2,9 +2,9 @@
 
 * Restart recovery: the pending list is in memory, so the poll also audits the order book for
   exact-twin stops, which finds duplicates a restarted process knows nothing about.
-* Repeated reconcile failure is escalated to the operator once, and never breaks the poll.
+* Repeated reconcile failure is escalated once (one error log line), and never breaks the poll.
 * A position whose stop retries are exhausted is not abandoned: it is reconciled (no send) and
-  re-attempted on a slow cycle, with an alert each time it is still unprotected.
+  re-attempted on a slow cycle, with an error log line each time it is still unprotected.
 * A "held" result (an earlier submission is unresolved) does not use up a re-attempt.
 """
 
@@ -17,6 +17,7 @@ from signal_engine import executor
 from signal_engine.config import settings
 from signal_engine.models import OrderStatus, TradeResult
 from signal_engine.strategies import ORB
+from signal_engine.tests.log_capture import capturing
 from signal_engine.tests.tracker_fixtures import _AGED, _make_engine, _make_position
 from signal_engine.timeutils import IST
 from signal_engine.tracker import PositionTracker
@@ -144,25 +145,26 @@ class TestRestartAudit:
 
 class TestRepeatedReconcileFailureEscalates:
     @pytest.mark.asyncio
-    async def test_the_operator_is_alerted_once_after_repeated_failures(self):
+    async def test_repeated_failures_are_logged_once_as_an_error(self):
         t = _tracker()
         executor._PENDING_DUPLICATE_STOPS.add(KEY, "K")
         live = [_stop("A"), _stop("K")]
-        alert = AsyncMock()
         with (
             patch("signal_engine.main.sweep_unresolved_orders", AsyncMock()),
             patch("signal_engine.tracker.fetch_orderbook", AsyncMock(return_value=live)),
             patch("signal_engine.api_client.fetch_orderbook", AsyncMock(return_value=live)),
             patch("signal_engine.api_client.cancel_order", AsyncMock(return_value=False)),
-            patch("signal_engine.tracker.notifier.notify_sl_failed", alert),
             patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=None)),
             patch.object(executor, "_DUPLICATE_RETRY_INTERVAL_S", 0.0),
+            capturing() as logs,
         ):
             for _ in range(executor._ESCALATE_AFTER_FAILURES + 3):
                 await t.check_positions()
-        alert.assert_awaited_once()
-        assert "duplicate" in alert.await_args.args[1].lower()
-        assert KEY in executor._PENDING_DUPLICATE_STOPS  # still monitored after the alert
+        # Escalated once, in the log (no message goes out), however many polls follow it.
+        failed = [m for m in logs.messages("ERROR") if "Duplicate stop cleanup" in m]
+        assert len(failed) == 1
+        assert "failed repeatedly" in failed[0] and "RELIANCE" in failed[0]
+        assert KEY in executor._PENDING_DUPLICATE_STOPS  # still monitored after the escalation
 
 
 class TestExhaustedPositionIsNotAbandoned:
@@ -185,29 +187,28 @@ class TestExhaustedPositionIsNotAbandoned:
             patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=_book())),
             patch("signal_engine.tracker.place_sl_order", place),
             patch("signal_engine.tracker.adopt_resting_stop", adopt),
-            patch("signal_engine.tracker.notifier.notify_sl_placed", AsyncMock()),
         ):
             await t.check_positions()
         assert pos.sl_order_id == "LATE"
         place.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_no_stop_found_leads_to_a_slow_cycle_send_and_an_alert(self):
+    async def test_no_stop_found_leads_to_a_slow_cycle_send_and_an_error_line(self):
         t = _tracker()
         pos = self._exhausted(t)
         failure = TradeResult(status=OrderStatus.TIMEOUT, message="Request timed out")
         place = AsyncMock(return_value=failure)
-        alert = AsyncMock()
         with (
             patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=_book())),
             patch("signal_engine.tracker.place_sl_order", place),
             patch("signal_engine.tracker.adopt_resting_stop", AsyncMock(return_value=None)),
-            patch("signal_engine.tracker.notifier.notify_sl_failed", alert),
+            capturing() as logs,
         ):
             await t.check_positions()
         place.assert_awaited_once()
-        alert.assert_awaited_once()
-        assert "still unprotected" in alert.await_args.args[1].lower()
+        failed = [m for m in logs.messages("ERROR") if m.startswith("SL FAILED |")]
+        assert len(failed) == 1
+        assert "still unprotected" in failed[0].lower()
         assert pos.sl_retry_count == settings.bracket_max_sl_reretries  # exhaustion is not reset
 
     @pytest.mark.asyncio
@@ -228,19 +229,18 @@ class TestExhaustedPositionIsNotAbandoned:
 
 class TestHeldResultDoesNotBurnAReattempt:
     @pytest.mark.asyncio
-    async def test_a_hold_leaves_the_retry_count_unchanged_and_sends_no_alert(self):
+    async def test_a_hold_leaves_the_retry_count_unchanged_and_logs_no_failure(self):
         t = _tracker()
         pos = _make_position(
             sl_order_id="", sl_retry_count=2, last_sl_retry_at=_AGED - timedelta(hours=1)
         )
         t.register(pos)
         held = TradeResult(status=OrderStatus.TIMEOUT, message=executor.HOLD_MESSAGE)
-        alert = AsyncMock()
         with (
             patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=_book())),
             patch("signal_engine.tracker.place_sl_order", AsyncMock(return_value=held)),
-            patch("signal_engine.tracker.notifier.notify_sl_failed", alert),
+            capturing() as logs,
         ):
             await t.check_positions()
         assert pos.sl_retry_count == 2
-        alert.assert_not_awaited()
+        assert not [m for m in logs.messages("ERROR") if m.startswith("SL FAILED |")]

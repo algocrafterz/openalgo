@@ -1,9 +1,9 @@
 """Which mode (analyze/live) the engine is in, and the guard against a mid-session flip.
 
 ONE SOURCE OF TRUTH. Three separate 60s-TTL mode caches had grown up independently —
-notifier.py's, analysis/breakingtrade/alerts.py's, and (with C1) the listener's — each
-answering the same question with its own copy of the same code. This module owns the cache;
-notifier delegates to it. The BreakingTrade poller keeps its own because it is a SEPARATE
+the former notifier.py's, analysis/breakingtrade/alerts.py's, and (with C1) the listener's —
+each answering the same question with its own copy of the same code. This module owns the
+cache. The BreakingTrade poller keeps its own because it is a SEPARATE
 PROCESS with no shared memory to delegate into.
 
 WHY THE HALT EXISTS

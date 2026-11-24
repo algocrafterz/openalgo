@@ -21,17 +21,6 @@ from signal_engine.models import Action, Direction, Order, OrderStatus, Signal, 
 
 
 @pytest.fixture(autouse=True)
-def _outcome_level(monkeypatch):
-    """These tests cover the day summary and the send queue, not notify_level; the config runs
-    `alerts` since 2026-10-31, which drops both. Pin a level that keeps them."""
-    import dataclasses
-
-    from signal_engine import notifier
-
-    monkeypatch.setattr(notifier, "settings", dataclasses.replace(notifier.settings, notify_level="quiet"))
-
-
-@pytest.fixture(autouse=True)
 def _fresh_db(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "_DB_PATH", str(tmp_path / "trades.db"))
     db.reset_connection()
@@ -296,6 +285,10 @@ class TestExitsPairWithTheirOwnEntry:
 
 
 class TestSummaryReadsTheDatabase:
+    """The day summary step reads trades.db: the count it marks the day with, and the counts the
+    P&L pages show, come from the database rows, never from in-memory counters. No message is
+    sent since outgoing Telegram notifications were removed in November 2026."""
+
     def _tracker(self):
         from signal_engine.tracker import PositionTracker
 
@@ -303,6 +296,15 @@ class TestSummaryReadsTheDatabase:
         risk.total_last_known_capital.return_value = 100_000.0
         risk.last_known_capital_for.return_value = 100_000.0
         return PositionTracker(risk)
+
+    async def _summary(self, tracker):
+        """Run the summary step; return the trade count it marked the day with."""
+        with patch("signal_engine.tracker._summary_already_sent_today", return_value=False), \
+             patch("signal_engine.tracker._mark_summary_sent") as mark, \
+             patch("signal_engine.reconcile.check_and_alert", AsyncMock()):
+            await tracker.send_day_summary()
+        mark.assert_called_once()
+        return mark.call_args.args[0]
 
     @pytest.mark.asyncio
     async def test_trades_from_before_a_restart_are_still_counted(self):
@@ -312,15 +314,10 @@ class TestSummaryReadsTheDatabase:
         tracker = self._tracker()
         assert tracker._day_trades == 0  # memory knows nothing
 
-        with patch("signal_engine.notifier.notify_day_summary",
-                   AsyncMock(return_value=True)) as notify, \
-             patch("signal_engine.tracker._summary_already_sent_today", return_value=False), \
-             patch("signal_engine.tracker._mark_summary_sent"):
-            await tracker.send_day_summary()
-
-        assert notify.await_args.kwargs["trades"] == 1
-        assert notify.await_args.kwargs["net_pnl"] == pytest.approx(50.0)
-        assert [r.symbol for r in notify.await_args.kwargs["trade_records"]] == ["SBIN"]
+        assert await self._summary(tracker) == 1
+        records, counts = tracker._day_from_db()
+        assert counts["net_pnl"] == pytest.approx(50.0)
+        assert [r.symbol for r in records] == ["SBIN"]
 
     @pytest.mark.asyncio
     async def test_wins_and_losses_are_counted_from_the_rows(self):
@@ -328,52 +325,34 @@ class TestSummaryReadsTheDatabase:
             _entry(sym, "ORB", 800.0, 796.0, 810.0, 10)
             _exit(sym, "ORB", 800.0, 796.0, 10, 805.0, pnl, ["TP1"])
         tracker = self._tracker()
-        with patch("signal_engine.notifier.notify_day_summary",
-                   AsyncMock(return_value=True)) as notify, \
-             patch("signal_engine.tracker._summary_already_sent_today", return_value=False), \
-             patch("signal_engine.tracker._mark_summary_sent"):
-            await tracker.send_day_summary()
-        kwargs = notify.await_args.kwargs
-        assert (kwargs["trades"], kwargs["wins"], kwargs["losses"]) == (3, 2, 1)
-        assert kwargs["net_pnl"] == pytest.approx(40.0)
+        assert await self._summary(tracker) == 3
+        _, counts = tracker._day_from_db()
+        assert (counts["trades"], counts["wins"], counts["losses"]) == (3, 2, 1)
+        assert counts["net_pnl"] == pytest.approx(40.0)
 
     @pytest.mark.asyncio
     async def test_a_time_exit_counts_as_a_trade_but_not_as_a_win_or_loss(self):
         _entry("SBIN", "ORB", 800.0, 796.0, 810.0, 10)
         _exit("SBIN", "ORB", 800.0, 796.0, 10, 805.0, 50.0, ["TIME"])
         tracker = self._tracker()
-        with patch("signal_engine.notifier.notify_day_summary",
-                   AsyncMock(return_value=True)) as notify, \
-             patch("signal_engine.tracker._summary_already_sent_today", return_value=False), \
-             patch("signal_engine.tracker._mark_summary_sent"):
-            await tracker.send_day_summary()
-        kwargs = notify.await_args.kwargs
-        assert (kwargs["trades"], kwargs["wins"], kwargs["losses"]) == (1, 0, 0)
-        assert kwargs["time_exits"] == 1
+        assert await self._summary(tracker) == 1
+        _, counts = tracker._day_from_db()
+        assert (counts["trades"], counts["wins"], counts["losses"]) == (1, 0, 0)
+        assert counts["time_exits"] == 1
 
     @pytest.mark.asyncio
     async def test_a_day_with_nothing_in_the_database_still_reports(self):
-        """Every enabled channel files a report - see test_day_summary_every_channel."""
+        """An empty day is still marked done, with zero trades."""
         tracker = self._tracker()
-        with patch("signal_engine.notifier.notify_day_summary",
-                   AsyncMock(return_value=True)) as notify, \
-             patch("signal_engine.tracker._summary_already_sent_today", return_value=False), \
-             patch("signal_engine.tracker._mark_summary_sent"):
-            await tracker.send_day_summary()
-        assert notify.await_args.kwargs["trades"] == 0
+        assert await self._summary(tracker) == 0
 
     @pytest.mark.asyncio
     async def test_an_unreadable_database_falls_back_to_memory(self):
         """A reporting failure must not lose the day - memory is stale, but it is not nothing."""
         tracker = self._tracker()
         tracker._day_trades, tracker._day_pnl, tracker._day_wins = 2, 75.0, 2
-        with patch("signal_engine.db.fetch_day_trades", side_effect=RuntimeError("locked")), \
-             patch("signal_engine.notifier.notify_day_summary",
-                   AsyncMock(return_value=True)) as notify, \
-             patch("signal_engine.tracker._summary_already_sent_today", return_value=False), \
-             patch("signal_engine.tracker._mark_summary_sent"):
-            await tracker.send_day_summary()
-        assert notify.await_args.kwargs["trades"] == 2
+        with patch("signal_engine.db.fetch_day_trades", side_effect=RuntimeError("locked")):
+            assert await self._summary(tracker) == 2
 
 
 class TestBothExitWritersProduceOneShape:

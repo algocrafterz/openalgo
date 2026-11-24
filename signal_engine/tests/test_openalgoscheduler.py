@@ -1,7 +1,7 @@
 """Tests for openalgoscheduler — broker-neutral startup/shutdown automation."""
 
-import asyncio
 import importlib
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -544,56 +544,13 @@ class TestGenerateTotp:
             generate_totp(None)
 
 
-class TestNotifyFailure:
-    """A failed startup must be announced, not swallowed.
+class TestStartupFailuresAreLogged:
+    """_run_startup must log the cause and exit 1 on every failure path.
 
-    Regression guard for 2026-08-24: one auth failure at 09:03 wrote a 24h
-    cooldown that silently blocked 80 further start attempts across the whole
-    trading day. Nothing reached Telegram because _run_startup exited before
-    the notification step.
+    Regression guard for 2026-08-24: one auth failure at 09:03 wrote a 24h cooldown that
+    silently blocked 80 further start attempts. Nothing is sent to Telegram any more, so the
+    log line and the exit code are the whole signal.
     """
-
-    def test_message_contains_stage_and_detail(self):
-        from signal_engine.scripts.openalgoscheduler import notify_failure
-        sent = {}
-
-        def _send(msg):
-            sent["msg"] = msg
-            return True
-
-        assert notify_failure("broker-auth", "Invalid credentials", _send=_send) is True
-        assert "broker-auth" in sent["msg"]
-        assert "Invalid credentials" in sent["msg"]
-
-    def test_message_is_clearly_a_failure(self):
-        from signal_engine.scripts.openalgoscheduler import notify_failure
-        sent = {}
-        notify_failure("login", "boom", _send=lambda m: sent.setdefault("msg", m) or True)
-        assert "FAILED" in sent["msg"].upper()
-
-    def test_message_is_ascii_only(self):
-        """Logs and alerts stay ASCII - no unicode."""
-        from signal_engine.scripts.openalgoscheduler import notify_failure
-        sent = {}
-        notify_failure("login", "boom", _send=lambda m: sent.setdefault("msg", m) or True)
-        sent["msg"].encode("ascii")
-
-    def test_returns_false_when_send_fails(self):
-        from signal_engine.scripts.openalgoscheduler import notify_failure
-        assert notify_failure("login", "x", _send=lambda m: False) is False
-
-    def test_never_raises_when_sender_explodes(self):
-        """An alert failure must not mask the original startup failure."""
-        from signal_engine.scripts.openalgoscheduler import notify_failure
-
-        def _boom(msg):
-            raise RuntimeError("telegram down")
-
-        assert notify_failure("login", "x", _send=_boom) is False
-
-
-class TestStartupAlertsOnFailure:
-    """_run_startup must alert before exiting on every failure path."""
 
     def _patch(self, monkeypatch, **attrs):
         import signal_engine.scripts.openalgoscheduler as sched
@@ -601,45 +558,33 @@ class TestStartupAlertsOnFailure:
             monkeypatch.setattr(sched, k, v)
         return sched
 
-    def test_alerts_when_auto_login_fails(self, monkeypatch):
-        calls = []
-        sched = self._patch(
-            monkeypatch,
-            auto_login=lambda: (False, "Invalid credentials", None),
-            notify_failure=lambda stage, detail: calls.append((stage, detail)),
-        )
-        with pytest.raises(SystemExit):
+    def test_logs_and_exits_when_auto_login_fails(self, monkeypatch, caplog):
+        sched = self._patch(monkeypatch, auto_login=lambda: (False, "Invalid credentials", None))
+        with pytest.raises(SystemExit) as exc:
             sched._run_startup()
-        assert calls, "no alert was sent on auto-login failure"
-        assert "Invalid credentials" in calls[0][1]
+        assert exc.value.code == 1
+        assert "Auto-login failed: Invalid credentials" in caplog.text
 
-    def test_alerts_when_token_verification_fails(self, monkeypatch):
-        calls = []
+    def test_logs_and_exits_when_token_verification_fails(self, monkeypatch, caplog):
         sched = self._patch(
             monkeypatch,
             auto_login=lambda: (True, "ok", "tok"),
             verify_broker_auth=lambda tok: None,
-            notify_failure=lambda stage, detail: calls.append((stage, detail)),
         )
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit) as exc:
             sched._run_startup()
-        assert calls, "no alert was sent on token verification failure"
+        assert exc.value.code == 1
+        assert "Broker auth token verification FAILED" in caplog.text
 
-    def test_alerts_on_configuration_error(self, monkeypatch):
-        calls = []
-
+    def test_logs_and_exits_on_configuration_error(self, monkeypatch, caplog):
         def _boom():
             raise OSError("BROKER_NAME missing")
 
-        sched = self._patch(
-            monkeypatch,
-            auto_login=_boom,
-            notify_failure=lambda stage, detail: calls.append((stage, detail)),
-        )
-        with pytest.raises(SystemExit):
+        sched = self._patch(monkeypatch, auto_login=_boom)
+        with pytest.raises(SystemExit) as exc:
             sched._run_startup()
-        assert calls, "no alert was sent on configuration error"
-        assert "BROKER_NAME missing" in calls[0][1]
+        assert exc.value.code == 1
+        assert "Configuration error: BROKER_NAME missing" in caplog.text
 
 
 class TestHealthcheck:
@@ -672,76 +617,66 @@ class TestHealthcheck:
         )
         sched._run_healthcheck()  # must not raise
 
-    def test_session_still_valid_sends_no_alert(self, monkeypatch):
-        """auto_login() reusing an existing valid session must not trigger a
-        Telegram alert - that would fire every cycle, all day."""
-        calls = []
+    def test_session_still_valid_logs_no_warning(self, monkeypatch, caplog):
+        """auto_login() reusing an existing valid session must stay quiet -
+        a warning would fire every cycle, all day."""
         sched = self._patch(
             monkeypatch,
             _ensure_openalgo_api_usable=lambda context: True,
             validate_auto_login_env=lambda: {"broker_password": "x", "totp_secret": "y"},
             auto_login=lambda: (True, "Session reused (no TOTP needed) for user: anand123hai", "tok"),
-            notify_failure=lambda stage, detail: calls.append(("fail", stage, detail)),
         )
-        sched._run_healthcheck()
-        assert not calls, "no alert should fire when the session was already valid"
+        with caplog.at_level(logging.WARNING):
+            sched._run_healthcheck()
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
-    def test_recovered_session_alerts_once(self, monkeypatch):
-        """A fresh login performed by this check (session was dead) must send
-        exactly one recovery notification."""
-        sent = []
-
-        async def _send(msg):
-            sent.append(msg)
-            return True
-
+    def test_recovered_session_warns_once(self, monkeypatch, caplog):
+        """A fresh login performed by this check (session was dead) must log
+        exactly one recovery warning."""
         sched = self._patch(
             monkeypatch,
             _ensure_openalgo_api_usable=lambda context: True,
             validate_auto_login_env=lambda: {"broker_password": "x", "totp_secret": "y"},
             auto_login=lambda: (True, "Auto-login successful for anand123hai", "tok"),
-            send_telegram_notification=_send,
         )
-        sched._run_healthcheck()
-        assert len(sent) == 1
-        assert "expired" in sent[0].lower()
+        with caplog.at_level(logging.WARNING):
+            sched._run_healthcheck()
+        warned = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(warned) == 1
+        assert "expired" in warned[0].lower()
 
-    def test_relogin_failure_alerts_and_exits_nonzero(self, monkeypatch):
-        """A dead session that auto re-login can't fix must alert and signal
+    def test_relogin_failure_logs_and_exits_nonzero(self, monkeypatch, caplog):
+        """A dead session that auto re-login can't fix must log and signal
         failure via exit code, so openalgoctl.sh's cooldown kicks in."""
-        calls = []
         sched = self._patch(
             monkeypatch,
             _ensure_openalgo_api_usable=lambda context: True,
             validate_auto_login_env=lambda: {"broker_password": "x", "totp_secret": "y"},
             auto_login=lambda: (False, "Invalid credentials", None),
-            notify_failure=lambda stage, detail: calls.append((stage, detail)),
         )
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit) as exc:
             sched._run_healthcheck()
-        assert calls, "no alert was sent when re-login failed"
-        assert "Invalid credentials" in calls[0][1]
+        assert exc.value.code == 1
+        assert "re-login FAILED: Invalid credentials" in caplog.text
 
-    def test_configuration_error_during_relogin_alerts_and_exits(self, monkeypatch):
+    def test_configuration_error_during_relogin_logs_and_exits(self, monkeypatch, caplog):
         def _boom():
             raise OSError("BROKER_PASSWORD missing")
 
-        calls = []
         sched = self._patch(
             monkeypatch,
             _ensure_openalgo_api_usable=lambda context: True,
             validate_auto_login_env=lambda: {"broker_password": "x", "totp_secret": "y"},
             auto_login=_boom,
-            notify_failure=lambda stage, detail: calls.append((stage, detail)),
         )
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit) as exc:
             sched._run_healthcheck()
-        assert calls, "no alert was sent on configuration error during re-login"
-        assert "BROKER_PASSWORD missing" in calls[0][1]
+        assert exc.value.code == 1
+        assert "configuration error: BROKER_PASSWORD missing" in caplog.text
 
-    def test_api_smoke_test_failure_alerts_and_exits(self, monkeypatch):
+    def test_api_smoke_test_failure_exits(self, monkeypatch):
         """If OpenAlgo's own API is unusable even after self-heal, healthcheck
-        must alert and exit non-zero - the exact gap that let 2026-09-28's
+        must exit non-zero - the exact gap that let 2026-09-28's
         ~90 minute outage run silently until a human noticed the missing trades."""
         calls = []
 
@@ -767,7 +702,6 @@ class TestHealthcheck:
             validate_auto_login_env=lambda: {"broker_password": "x", "totp_secret": "y"},
             auto_login=lambda: (True, "fresh login", "tok"),
             _ensure_openalgo_api_usable=lambda context: False,
-            send_telegram_notification=lambda msg: asyncio.sleep(0),
         )
         with pytest.raises(SystemExit) as exc:
             sched._run_healthcheck()
@@ -797,7 +731,6 @@ class TestHealthcheck:
             validate_auto_login_env=lambda: {"broker_password": "x", "totp_secret": "y"},
             auto_login=lambda: order.append("login") or (True, "fresh login", "tok"),
             _ensure_openalgo_api_usable=lambda context: order.append("smoke") or True,
-            send_telegram_notification=lambda msg: asyncio.sleep(0),
         )
         sched._run_healthcheck()
         assert order == ["login", "smoke"]
@@ -1116,7 +1049,7 @@ class TestVerifyOpenAlgoApi:
 
 
 class TestEnsureOpenAlgoApiUsable:
-    """_ensure_openalgo_api_usable: self-heal once, alert on the outcome either way."""
+    """_ensure_openalgo_api_usable: self-heal once, log the outcome either way."""
 
     def test_passes_immediately_without_self_heal(self, monkeypatch):
         import signal_engine.scripts.openalgoscheduler as sched
@@ -1128,11 +1061,10 @@ class TestEnsureOpenAlgoApiUsable:
         assert sched._ensure_openalgo_api_usable("startup") is True
         assert heal_calls == [], "must not self-heal when the first check already passed"
 
-    def test_self_heals_and_recovers(self, monkeypatch):
+    def test_self_heals_and_recovers(self, monkeypatch, caplog):
         import signal_engine.scripts.openalgoscheduler as sched
 
         calls = {"verify": 0}
-        recovered_msgs = []
 
         def _verify(**kw):
             calls["verify"] += 1
@@ -1140,34 +1072,28 @@ class TestEnsureOpenAlgoApiUsable:
                 return False, "403 forbidden"
             return True, "recovered"
 
-        async def _send(msg):
-            recovered_msgs.append(msg)
-            return True
-
         monkeypatch.setattr(sched, "_verify_openalgo_api", _verify)
         monkeypatch.setattr(sched, "_self_heal_master_contract", lambda: True)
-        monkeypatch.setattr(sched, "send_telegram_notification", _send)
 
-        assert sched._ensure_openalgo_api_usable("healthcheck") is True
+        with caplog.at_level(logging.WARNING):
+            assert sched._ensure_openalgo_api_usable("healthcheck") is True
         assert calls["verify"] == 2
-        assert len(recovered_msgs) == 1
-        assert "recovered" in recovered_msgs[0].lower()
+        warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warned) == 1
+        assert "recovered" in warned[0].lower()
 
-    def test_alerts_when_self_heal_does_not_recover(self, monkeypatch):
+    def test_logs_error_when_self_heal_does_not_recover(self, monkeypatch, caplog):
         import signal_engine.scripts.openalgoscheduler as sched
 
-        fail_calls = []
         monkeypatch.setattr(sched, "_verify_openalgo_api", lambda **kw: (False, "still broken"))
         monkeypatch.setattr(sched, "_self_heal_master_contract", lambda: False)
-        monkeypatch.setattr(
-            sched, "notify_failure",
-            lambda stage, detail: fail_calls.append((stage, detail)),
-        )
 
-        assert sched._ensure_openalgo_api_usable("startup") is False
-        assert fail_calls, "must alert when self-heal does not recover the API"
-        assert fail_calls[0][0] == "startup-api-smoke-test"
-        assert "still broken" in fail_calls[0][1]
+        with caplog.at_level(logging.ERROR):
+            assert sched._ensure_openalgo_api_usable("startup") is False
+        errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any(
+            "startup-api-smoke-test FAILED" in m and "still broken" in m for m in errors
+        ), "must log an error when self-heal does not recover the API"
 
 
 @pytest.fixture(autouse=True)
@@ -1453,7 +1379,6 @@ class TestExpectedFailureLogLevels:
         monkeypatch.setenv("BROKER_NAME", "flattrade")
         monkeypatch.setattr(sched, "validate_auto_login_env",
                             lambda: {"broker_password": "x", "totp_secret": "JBSWY3DPEHPK3PXP"})
-        monkeypatch.setattr(sched, "_alert_invalid_ip", lambda e: None)
         import importlib as _il
         funds = MagicMock()
         funds.get_margin_data = MagicMock(return_value={})

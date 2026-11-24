@@ -4,7 +4,7 @@ Before 2026-10-23 the entry row was written last, after the Telegram notice, the
 fill lookup and the bad-fill guard. A crash in between left a broker position with no row, and a
 restart then skipped it ("no entry trade in trades.db today"): no stop recovery, no tracking, no
 time exit. The row is now written the moment the broker accepts the order and its fill price is
-filled in afterwards. Restart also raises a critical alert for a broker position it cannot match.
+filled in afterwards. Restart also logs a critical line for a broker position it cannot match.
 """
 
 from types import SimpleNamespace
@@ -50,15 +50,11 @@ def _boom(*_a, **_k):
 
 class TestTheAcceptedEntryIsSavedFirst:
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("crash_at", ["notify_order_placed", "send_bracket_legs", "fetch_order_fill_price"])
+    @pytest.mark.parametrize("crash_at", ["send_bracket_legs", "fetch_order_fill_price"])
     async def test_a_crash_after_acceptance_leaves_the_entry_row(self, crash_at):
-        stubs = {"tracker": _real_tracker(), "save": db.save}
-        if crash_at != "notify_order_placed":
-            stubs[crash_at] = AsyncMock(side_effect=_boom)
+        stubs = {"tracker": _real_tracker(), "save": db.save, crash_at: AsyncMock(side_effect=_boom)}
         h = harness(**stubs)
         with h.stack, _sized(h):
-            if crash_at == "notify_order_placed":
-                h.notifier.notify_order_placed = AsyncMock(side_effect=_boom)
             with pytest.raises(RuntimeError):
                 await _handle_entry(_entry_signal())
         assert _rows() == [("LONG", "SUCCESS", "EX1", None)]
@@ -104,9 +100,6 @@ def _pfc_order():
 
 async def _establish_bad_fill(entry_row_id):
     settings = SimpleNamespace(exchange="NSE", product="MIS", max_entry_slippage_r=0.5, bracket_enabled=True)
-    notifier = MagicMock()
-    for name in ("notify_order_rejected", "notify_exit_failed", "notify_entry_filled"):
-        setattr(notifier, name, AsyncMock())
     tracker = MagicMock()
     tracker.fetch_own_position = AsyncMock(return_value=0)
     with (
@@ -118,7 +111,6 @@ async def _establish_bad_fill(entry_row_id):
         patch("signal_engine.main._find_recent_market_exit_fill", AsyncMock(return_value=None)),
         patch("signal_engine.main.fetch_order_fill_price", AsyncMock(return_value=326.00)),
         patch("signal_engine.main._book_realised_pnl_delta", AsyncMock(return_value=(-90.0, 0.0))),
-        patch("signal_engine.main.notifier", notifier),
         patch("signal_engine.main.risk_engine", MagicMock()),
         patch("signal_engine.main.tracker", tracker),
     ):
@@ -152,7 +144,7 @@ class TestTheEntryWriteFails:
     """The broker accepted the order but trades.db did not take the row (locked, disk full)."""
 
     @pytest.mark.asyncio
-    async def test_a_failed_first_write_is_retried_once_and_leaves_one_row(self):
+    async def test_a_failed_first_write_is_retried_once_and_leaves_one_row(self, logged):
         calls = []
 
         def flaky_save(*args):
@@ -163,21 +155,20 @@ class TestTheEntryWriteFails:
         with h.stack, _sized(h):
             await _handle_entry(_entry_signal())
         assert _rows() == [("LONG", "SUCCESS", "EX1", 2500.0)]
-        h.notifier.notify.assert_not_awaited()  # recovered, nothing to alert
+        assert not logged.has("ENTRY NOT RECORDED", "CRITICAL")  # recovered, nothing to flag
 
     @pytest.mark.asyncio
-    async def test_both_writes_failing_keeps_the_position_protected_and_alerts(self):
+    async def test_both_writes_failing_keeps_the_position_protected_and_logs_it(self, logged):
         tracker = _real_tracker()
         h = harness(tracker=tracker, save=lambda *a: None)
         with h.stack, _sized(h):
             await _handle_entry(_entry_signal())
             h.send_bracket_legs.assert_awaited_once()  # the stop still goes in
-            alerts = [c.args[0] for c in h.notifier.notify.await_args_list]
         assert _rows() == []
         assert tracker.find_position("RELIANCE", "ORB") is not None  # managed for this session
-        assert any("ENTRY NOT RECORDED" in a and "RELIANCE" in a for a in alerts)
+        assert any("ENTRY NOT RECORDED" in m and "RELIANCE" in m for m in logged.messages("CRITICAL"))
 
-    def test_a_restart_after_an_unrecorded_entry_alerts_and_writes_nothing(self):
+    def test_a_restart_after_an_unrecorded_entry_reports_it_and_writes_nothing(self):
         tracker = MagicMock()
         tracker.find_position.return_value = None
         unmatched = []
@@ -209,7 +200,7 @@ class TestTheEntryWriteFails:
         assert _rows() == [("LONG", "SUCCESS", "EX1", None)]  # still one row, status unchanged
 
 
-class TestRestartAlertsOnAnUnmatchedBrokerPosition:
+class TestRestartReportsAnUnmatchedBrokerPosition:
     def test_an_unmatched_position_is_reported(self):
         tracker = MagicMock()
         tracker.find_position.return_value = None
@@ -225,18 +216,12 @@ class TestRestartAlertsOnAnUnmatchedBrokerPosition:
         assert restored == 0
         assert unmatched == [("SBIN", 40)]
 
-    @pytest.mark.asyncio
-    async def test_reconcile_sends_one_critical_alert(self):
-        sent = AsyncMock()
-        with patch.object(startup.notifier, "notify_event", sent):
-            await startup._alert_unmatched_positions([("SBIN", 40), ("INFY", -25)])
-        sent.assert_awaited_once()
-        event, text = sent.await_args.args[:2]
-        assert event == "untracked_broker_position" and "SBIN" in text and "INFY" in text
+    def test_reconcile_logs_one_critical_line(self, logged):
+        startup._log_unmatched_positions([("SBIN", 40), ("INFY", -25)])
+        lines = logged.messages("CRITICAL")
+        assert len(lines) == 1
+        assert "SBIN +40" in lines[0] and "INFY -25" in lines[0]
 
-    @pytest.mark.asyncio
-    async def test_nothing_unmatched_sends_nothing(self):
-        sent = AsyncMock()
-        with patch.object(startup.notifier, "notify_event", sent):
-            await startup._alert_unmatched_positions([])
-        sent.assert_not_awaited()
+    def test_nothing_unmatched_logs_nothing(self, logged):
+        startup._log_unmatched_positions([])
+        assert logged.messages("DEBUG") == []

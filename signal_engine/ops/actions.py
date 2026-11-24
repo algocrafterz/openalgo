@@ -287,8 +287,6 @@ def _run_one(action: str, day: str, log: str) -> tuple[int, bool, str, str]:
     spec = ACTIONS[action]
     started = now_ist().strftime("%H:%M:%S")
     env = {**os.environ, "PYTHONPATH": REPO}
-    if action == "eod":
-        env["EOD_TELEGRAM"] = "0"  # the digest goes into the report, not to Telegram
     report = os.path.join(REPORTS, f"execution-health-{day}.md")
     out_path = report + ".part" if action == "execution_health" else None
     rc, timed_out = 1, False

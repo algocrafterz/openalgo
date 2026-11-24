@@ -19,17 +19,6 @@ from signal_engine.tracker import TradeRecord, _dedupe_breakingtrade_overlap
 
 
 @pytest.fixture(autouse=True)
-def _outcome_level(monkeypatch):
-    """These tests cover the day summary and the send queue, not notify_level; the config runs
-    `alerts` since 2026-10-31, which drops both. Pin a level that keeps them."""
-    import dataclasses
-
-    from signal_engine import notifier
-
-    monkeypatch.setattr(notifier, "settings", dataclasses.replace(notifier.settings, notify_level="quiet"))
-
-
-@pytest.fixture(autouse=True)
 def _fresh_db(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "_DB_PATH", str(tmp_path / "trades.db"))
     db.reset_connection()
@@ -105,8 +94,9 @@ class TestDedupeBreakingtradeOverlapUnit:
 
 
 class TestDedupeAppliesToTheDaySummary:
-    """Integration through PositionTracker.send_day_summary(), matching
-    test_day_summary_from_db.py's TestSummaryReadsTheDatabase style."""
+    """Integration through PositionTracker.send_day_summary(): the count it marks the day with
+    and the records the day is read from are deduplicated. No message is sent (outgoing
+    Telegram notifications were removed in November 2026)."""
 
     def _tracker(self):
         from signal_engine.tracker import PositionTracker
@@ -116,6 +106,15 @@ class TestDedupeAppliesToTheDaySummary:
         risk.last_known_capital_for.return_value = 100_000.0
         return PositionTracker(risk)
 
+    async def _summary(self, tracker):
+        """Run the summary step; return the trade count it marked the day with."""
+        with patch("signal_engine.tracker._summary_already_sent_today", return_value=False), \
+             patch("signal_engine.tracker._mark_summary_sent") as mark, \
+             patch("signal_engine.reconcile.check_and_alert", AsyncMock()):
+            await tracker.send_day_summary()
+        mark.assert_called_once()
+        return mark.call_args.args[0]
+
     @pytest.mark.asyncio
     async def test_overlapping_symbol_is_counted_once_under_breakingtrade(self):
         _entry("LTM", "BREAKINGTRADE-WATCHLIST", 4485.10, 4520.0, 4400.0, 10)
@@ -124,16 +123,11 @@ class TestDedupeAppliesToTheDaySummary:
         _exit("LTM", "BREAKINGTRADE", 4462.0, 4500.0, 10, 4364.9, -1359.40, ["SL"])
 
         tracker = self._tracker()
-        with patch("signal_engine.notifier.notify_day_summary",
-                   AsyncMock(return_value=True)) as notify, \
-             patch("signal_engine.tracker._summary_already_sent_today", return_value=False), \
-             patch("signal_engine.tracker._mark_summary_sent"):
-            await tracker.send_day_summary()
-
-        kwargs = notify.await_args.kwargs
-        assert kwargs["trades"] == 1
-        assert kwargs["net_pnl"] == pytest.approx(-1359.40)
-        assert [r.strategy for r in kwargs["trade_records"]] == ["BREAKINGTRADE"]
+        assert await self._summary(tracker) == 1
+        records, counts = tracker._day_from_db()
+        assert counts["trades"] == 1
+        assert counts["net_pnl"] == pytest.approx(-1359.40)
+        assert [r.strategy for r in records] == ["BREAKINGTRADE"]
 
     @pytest.mark.asyncio
     async def test_non_overlapping_symbols_still_both_count(self):
@@ -144,12 +138,7 @@ class TestDedupeAppliesToTheDaySummary:
         _exit("KAYNES", "BREAKINGTRADE", 3410.0, 3440.0, 5, 3399.2, 100.0, ["TP1"])
 
         tracker = self._tracker()
-        with patch("signal_engine.notifier.notify_day_summary",
-                   AsyncMock(return_value=True)) as notify, \
-             patch("signal_engine.tracker._summary_already_sent_today", return_value=False), \
-             patch("signal_engine.tracker._mark_summary_sent"):
-            await tracker.send_day_summary()
-
-        kwargs = notify.await_args.kwargs
-        assert kwargs["trades"] == 2
-        assert {r.symbol for r in kwargs["trade_records"]} == {"INDHOTEL", "KAYNES"}
+        assert await self._summary(tracker) == 2
+        records, counts = tracker._day_from_db()
+        assert counts["trades"] == 2
+        assert {r.symbol for r in records} == {"INDHOTEL", "KAYNES"}

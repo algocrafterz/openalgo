@@ -63,7 +63,6 @@ class MainRig:
         self.send_cost = send_cost
         self.book = [] if book is None else book
         self.log: list[tuple] = []  # ("read" | "send", wall time)
-        self.notifier = AsyncMock()
 
     async def _send(self, order):
         self.log.append(("send", self.w.now))
@@ -86,7 +85,6 @@ class MainRig:
             patch.object(main_mod, "send_order", self._send),
             patch.object(main_mod, "fetch_orderbook", self._read),
             patch.object(main_mod, "fetch_order_ids_today", lambda symbol: []),
-            patch.object(main_mod, "notifier", self.notifier),
             patch("asyncio.sleep", AsyncMock(side_effect=self._sleep)),
         ]
 
@@ -635,7 +633,8 @@ class TestN_BookingReadsAreGatedOneByOne:
         assert [n for n, _, _ in reads] == ["pnl", "positionbook", "orderbook", "fill"]
         assert tracker.tracked_count == 1  # the second leg is left to the poll
         assert tracker.find_position("TCS", "B") is not None
-        assert any("TCS" in a and "next position check" in a for a in h.alerts)
+        # a WARNING line since the Telegram alert was removed
+        assert any("TCS" in a and "next position check" in a for a in h.logged)
 
 
 @pytest.mark.asyncio

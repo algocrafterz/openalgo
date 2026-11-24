@@ -326,18 +326,18 @@ def test_run_phase_writes_a_completed_manifest(tree):
     m = _manifest(repo, "open-day")
     assert m["state"] == "completed"
     assert m["pid"] > 0 and m["started_at"].endswith("+05:30")
-    assert [s["step"] for s in m["steps"]] == ["check", "track", "notify"]
+    assert [s["step"] for s in m["steps"]] == ["check", "track"]
     assert (repo / f"signal_engine/reports/open-day-{DAY}-status.tsv").exists()  # TSV kept
 
 
 @pytestmark_shell
 def test_run_phase_records_a_failed_critical_step(tree):
     repo, env = tree
-    res = _run(repo, env, "signal_engine/ops/run_phase.sh", "liveness", DAY, STUB_FAIL="notify")
+    res = _run(repo, env, "signal_engine/ops/run_phase.sh", "liveness", DAY, STUB_FAIL="liveness")
     assert res.returncode == 0
     m = _manifest(repo, "liveness")
     assert m["state"] == "failed"
-    assert {s["step"]: s["exit"] for s in m["steps"]}["notify"] == 3
+    assert {s["step"]: s["exit"] for s in m["steps"]}["check"] == 3
 
 
 @pytestmark_shell
@@ -496,5 +496,5 @@ def test_catchup_appends_a_review_row_so_the_stale_failure_is_replaced(tree):
     rows = (reports / f"close-day-{DAY}-status.tsv").read_text().splitlines()
     review_rows = [r.split("\t") for r in rows if r.startswith("review")]
     assert review_rows[0][3] == "1" and review_rows[-1][3] == "0"  # old row kept, new row last
-    assert any(r.startswith("notify") for r in rows)
+    assert not any(r.startswith("notify") for r in rows)  # no Telegram step any more
     assert verdict.latest_steps("close-day", DAY, str(reports))["review"] == 0

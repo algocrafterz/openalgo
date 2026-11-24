@@ -24,6 +24,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from loguru import logger
 
 from signal_engine import executor, order_reconcile
 from signal_engine import main as main_mod
@@ -523,9 +524,9 @@ class TestM2_HeldLegInTheVerifyLoop:
         cancels = [d for k, d in b.log if k == "cancel"]
         assert cancels == ["SL1"], f"the held exit order was cancelled: {cancels}"
         assert sends == ["PFC"], "the held leg was closed again"
-        words = [a for a in h.alerts if "result is not known" in a]
+        words = [a for a in h.alerts if "result not known" in a]
         assert len(words) == 1, h.alerts
-        assert "PFC" in words[0] and "was sent" in words[0]
+        assert "PFC" in words[0] and "held" in words[0]
         assert "while it may still fill" in words[0] and "14:55 square-off closes" in words[0]
         assert not any("place a stop by hand" in a or "TIME EXIT FAILED" in a for a in h.alerts), h.alerts
         assert h.skip_alerts() == []
@@ -548,27 +549,36 @@ class TestM2_HeldLegInTheVerifyLoop:
                 await tracker.time_exit_all()
         assert sorted(sends) == ["INFY", "PFC"]
         assert [d for k, d in b.log if k == "cancel"] == ["SL1", "SL2"]
-        assert len([a for a in h.alerts if "result is not known" in a]) == 1, h.alerts
+        assert len([a for a in h.alerts if "result not known" in a]) == 1, h.alerts
         assert b.qty_of("INFY") == 0
 
     async def test_the_time_exit_send_raises_no_alert_of_its_own(self):
-        """main._send_exit_with_retries under the time exit: the tracker sends the one alert."""
+        """main._send_exit_with_retries under the time exit: the tracker logs the one line."""
         w = World(14, 53, 0)
         pos = _make_position(symbol="PFC", strategy=STRAT)
         rig = MainRig(w, [_timeout()])
-        result = await rig.run(pos, hard=w.t + 90)
+        logged: list[str] = []
+        sink = logger.add(lambda m: logged.append(m.record["message"]), level="CRITICAL")
+        try:
+            result = await rig.run(pos, hard=w.t + 90)
+        finally:
+            logger.remove(sink)
         assert result.status == OrderStatus.TIMEOUT
-        assert rig.notifier.notify.await_count == 0
+        assert not any(m.startswith("ORDER UNCONFIRMED") for m in logged), logged
         assert order_reconcile.get_uncertain(STRAT, "PFC") is not None
 
     async def test_outside_the_time_exit_the_alert_text_is_unchanged(self):
+        """The former Telegram text is now the CRITICAL log line, word for word."""
         pos = _make_position(symbol="PFC", strategy="A", quantity=10)
         order = SimpleNamespace(symbol="PFC", quantity=10, action=SimpleNamespace(value="SELL"))
-        notifier = AsyncMock()
-        with patch.object(main_mod, "notifier", notifier):
+        logged: list[str] = []
+        sink = logger.add(lambda m: logged.append(m.record["message"]), level="CRITICAL")
+        try:
             await main_mod._hold_uncertain_exit(order, pos, "no reply")
-        (call,) = notifier.notify.await_args_list
-        assert call.args[0] == (
+        finally:
+            logger.remove(sink)
+        (line,) = [m for m in logged if m.startswith("ORDER UNCONFIRMED")]
+        assert line == (
             "ORDER UNCONFIRMED: UNCERTAIN: SELL 10 PFC [A] was sent but its outcome could not be "
             "confirmed (no reply); not resent. The stop was cancelled for this exit, so the position "
             "is UNPROTECTED. Candidate orders: none found on the book. No further orders go out for "

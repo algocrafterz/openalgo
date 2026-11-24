@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from signal_engine.strategies import ORB
+from signal_engine.tests.log_capture import capturing
 from signal_engine.tests.tracker_fixtures import _make_engine, _make_position
 from signal_engine.tracker import _FILL_PROCEED, PositionTracker
 
@@ -21,21 +22,23 @@ def _tracker(**pos_kw):
 async def _audit(tracker, rows):
     with (
         patch("signal_engine.tracker.fetch_orderbook", AsyncMock(return_value=rows)),
-        patch("signal_engine.tracker.notifier.notify", new_callable=AsyncMock) as notify,
+        capturing() as logged,
     ):
         await tracker._audit_duplicate_stops()
-    return notify
+    # The dead-stop line (once a Telegram alert; outgoing notifications were removed in
+    # November 2026) is a CRITICAL log line.
+    return [m for m in logged.messages("CRITICAL") if "at the broker; the position has" in m]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["cancelled", "rejected", "CANCELLED"])
 async def test_a_dead_stop_is_cleared_and_the_operator_told(status):
     tracker, pos = _tracker()
-    notify = await _audit(tracker, [{"orderid": "SL1", "order_status": status}])
+    lines = await _audit(tracker, [{"orderid": "SL1", "order_status": status}])
     assert pos.sl_order_id == ""
     assert pos.sl_retry_count == 0 and pos.last_sl_retry_at is None
-    notify.assert_awaited_once()
-    assert "no stop" in notify.await_args.args[0]
+    assert len(lines) == 1
+    assert "no working stop" in lines[0]
 
 
 @pytest.mark.asyncio
@@ -48,18 +51,18 @@ async def test_a_dead_stop_is_cleared_and_the_operator_told(status):
 ])
 async def test_a_working_filled_or_unlisted_stop_is_left_alone(rows):
     tracker, pos = _tracker()
-    notify = await _audit(tracker, rows)
+    lines = await _audit(tracker, rows)
     assert pos.sl_order_id == "SL1"
-    notify.assert_not_awaited()
+    assert lines == []
 
 
 @pytest.mark.asyncio
 async def test_a_stop_cancelled_by_a_running_exit_is_left_alone():
     tracker, pos = _tracker()
     pos.exit_pending = True
-    notify = await _audit(tracker, [{"orderid": "SL1", "order_status": "cancelled"}])
+    lines = await _audit(tracker, [{"orderid": "SL1", "order_status": "cancelled"}])
     assert pos.sl_order_id == "SL1"
-    notify.assert_not_awaited()
+    assert lines == []
 
 
 @pytest.mark.asyncio
@@ -98,15 +101,15 @@ class _Cfg:
 async def test_a_stop_cancelled_by_the_time_exit_is_not_replaced():
     tracker, pos = _tracker()
     pos.time_exit_left_open = True  # the close could not be confirmed and may still land
-    notify = await _audit(tracker, [{"orderid": "SL1", "order_status": "cancelled"}])
+    lines = await _audit(tracker, [{"orderid": "SL1", "order_status": "cancelled"}])
     assert pos.sl_order_id == "SL1"
-    notify.assert_not_awaited()
+    assert lines == []
 
 
 @pytest.mark.asyncio
 async def test_a_stop_of_a_leg_the_time_exit_closed_is_not_replaced():
     tracker, pos = _tracker()
     tracker._square_off_orders = {tracker._key(pos.symbol, pos.strategy): "TX1"}
-    notify = await _audit(tracker, [{"orderid": "SL1", "order_status": "cancelled"}])
+    lines = await _audit(tracker, [{"orderid": "SL1", "order_status": "cancelled"}])
     assert pos.sl_order_id == "SL1"
-    notify.assert_not_awaited()
+    assert lines == []

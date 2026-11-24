@@ -1,4 +1,4 @@
-"""Single-place rule: only close_day.sh schedules --bug-alerts; --logs is never scheduled with --write."""
+"""Scheduling rules: no script sends Telegram alerts; --logs is never scheduled with --write."""
 
 import re
 import subprocess
@@ -24,12 +24,18 @@ def _code_lines(path):
     ]
 
 
-def test_only_close_day_passes_bug_alerts():
+def test_no_script_schedules_a_telegram_step():
+    """Outgoing Telegram notifications are gone: no scheduled file passes --bug-alerts or runs `ops notify`."""
     users = [
-        p.name for p in _scheduled_files() if any("--bug-alerts" in ln for ln in _code_lines(p))
+        p.name
+        for p in _scheduled_files()
+        if any(
+            "--bug-alerts" in ln
+            or re.search(r"\bops\b.*\bnotify\b|\bnotify (open-day|liveness|close-day)\b", ln)
+            for ln in _code_lines(p)
+        )
     ]
-    assert users == ["close_day.sh"]
-    assert sum("--bug-alerts" in ln for ln in _code_lines(CLOSE)) == 1
+    assert users == []
 
 
 def test_no_script_passes_write_to_logs():
@@ -40,21 +46,17 @@ def test_no_script_passes_write_to_logs():
                 assert "--write" not in ln, f"{path.name}: {ln}"
 
 
-def test_close_day_runs_alerts_after_track_and_never_through_step():
+def test_close_day_runs_the_log_scan_after_track_and_never_through_step():
     code = "\n".join(_code_lines(CLOSE))
-    assert code.index('track --day "$DAY" >>') < code.index("--bug-alerts")
-    line = next(ln for ln in code.splitlines() if "--bug-alerts" in ln)
+    assert code.index('track --day "$DAY" >>') < code.index("--logs")
+    line = next(ln for ln in code.splitlines() if "--logs" in ln and "track" in ln)
     assert not line.lstrip().startswith("step ")  # a failure must not enter the status/manifest
-    block = code[code.index("ALERT_FLAG=") : code.index("REVIEW_REPORT=")]
-    assert "--logs" in block and "--write" not in block
+    start = code.index("if ! timeout --kill-after=10 120")
+    block = code[start : code.index("REVIEW_REPORT=")]
+    assert "--write" not in block
     assert "logscan-candidates-$DAY.txt" in block
     assert "close-day not affected" in block
     assert '--day "$DAY"' in block
-
-
-def test_alerts_are_sent_only_for_a_same_day_run():
-    code = "\n".join(_code_lines(CLOSE))
-    assert 'ALERT_FLAG="--bug-alerts"; [ "$DAY" = "$(date +%F)" ] || ALERT_FLAG=""' in code
 
 
 def test_close_day_script_syntax_is_valid():

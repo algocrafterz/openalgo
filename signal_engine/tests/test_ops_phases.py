@@ -1,4 +1,4 @@
-"""signal_engine/ops: verdicts, log signatures, schedule parsing and the one Telegram line."""
+"""signal_engine/ops: verdicts, log signatures, and schedule parsing."""
 
 import datetime
 import json
@@ -56,33 +56,6 @@ def test_schtasks_rows_are_read_by_header():
     assert jobs.task_check("openAlgoAutoStart", "08:50", row, "2026-10-30").status == OK
     assert jobs.task_check("openAlgoAutoStart", "08:50", row, "2026-11-02").status == FAIL
     assert jobs.task_check("missing", "08:50", None, "2026-11-02").status == FAIL
-
-
-def test_morning_phases_send_only_when_red(tmp_path):
-    folder = str(tmp_path)
-    write_phase("open-day", "2026-11-02", [Check("ports", WARN, "slow")], "s", folder=folder)
-    assert verdict.message("open-day", "2026-11-02", folder) is None
-    write_phase(
-        "open-day", "2026-11-02", [Check("broker session", FAIL, "no funds")], "s", folder=folder
-    )
-    assert "RED. Failed: broker session" in verdict.message("open-day", "2026-11-02", folder)
-    assert "did not produce a result" in verdict.message("liveness", "2026-11-02", folder)
-
-
-def test_close_day_sends_the_review_line_every_day(tmp_path):
-    folder = str(tmp_path)
-    assert "AMBER" in verdict.message("close-day", "2026-11-02", folder)  # no review at all
-    report = tmp_path / "eod-2026-11-02-claude-review.md"
-    block = json.dumps(
-        {"verdict": "GREEN", "line": "Net +1,200 after charges; nothing needs attention."}
-    )
-    report.write_text(f"review\n```close-day-verdict\n{block}\n```\n```bug-tracker\n[]\n```\n")
-    (tmp_path / "close-day-2026-11-02-status.tsv").write_text(
-        "step\tstarted\tended\texit\neod\t1\t2\t0\nlogs\t2\t3\t1\n"
-    )
-    text = verdict.message("close-day", "2026-11-02", folder)
-    assert text.startswith("Close-day 2026-11-02: GREEN. Net +1,200")
-    assert "Steps failed: logs." in text
 
 
 def test_every_check_gets_a_plain_sentence_that_names_its_subject(tmp_path):

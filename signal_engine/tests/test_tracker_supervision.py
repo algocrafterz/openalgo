@@ -14,8 +14,21 @@ import pytest
 from signal_engine import startup
 from signal_engine import tracker as tracker_module
 from signal_engine.strategies import ORB, RSI_TP_MR
+from signal_engine.tests.log_capture import capturing
 from signal_engine.tests.tracker_fixtures import _make_engine, _make_position
 from signal_engine.tracker import PositionTracker
+
+
+def _poll_events(logs) -> list[str]:
+    """The supervision events logged, in order: 'Tracker poll alert (<event>): <text>' lines.
+
+    Reads INFO and above, so a recovery (INFO) is seen next to a failure (ERROR).
+    """
+    out = []
+    for msg in logs.messages("INFO"):
+        if msg.startswith("Tracker poll alert ("):
+            out.append(msg[len("Tracker poll alert (") :].split(")", 1)[0])
+    return out
 
 
 def _tracker(interval=0.01) -> PositionTracker:
@@ -39,7 +52,7 @@ async def _stop(t: PositionTracker, task: asyncio.Task) -> None:
 
 
 @pytest.mark.asyncio
-async def test_one_exception_does_not_end_the_loop_and_alerts_once():
+async def test_one_exception_does_not_end_the_loop_and_logs_once():
     t = _tracker()
     calls = []
 
@@ -49,34 +62,38 @@ async def test_one_exception_does_not_end_the_loop_and_alerts_once():
             raise RuntimeError("positionbook parse failed")
 
     t.check_positions = check
-    with patch.object(tracker_module.notifier, "notify_event", AsyncMock()) as notify:
+    with capturing() as logs:
         task = await _run_for(t, 0.2)
         assert not task.done(), "the poll task ended after one exception"
         await _stop(t, task)
     assert len(calls) > 2  # kept polling
-    alerts = [c for c in notify.await_args_list if c.args[0] == "tracker_poll_failed"]
+    alerts = [
+        m
+        for m in logs.messages("ERROR")
+        if m.startswith("Tracker poll alert (tracker_poll_failed)")
+    ]
     assert len(alerts) == 1
-    assert "being retried" in alerts[0].args[1]
-    assert "RuntimeError" not in alerts[0].args[1]  # trader text, no exception class
+    assert "being retried" in alerts[0]
+    assert "RuntimeError" not in alerts[0]  # trader text, no exception class
 
 
 @pytest.mark.asyncio
-async def test_repeated_failure_alerts_are_rate_limited():
+async def test_repeated_failure_log_lines_are_rate_limited():
     t = _tracker()
     t.check_positions = AsyncMock(side_effect=RuntimeError("down"))
-    with patch.object(tracker_module.notifier, "notify_event", AsyncMock()) as notify:
+    with capturing() as logs:
         task = await _run_for(t, 0.2)
         assert t.check_positions.await_count > 5
-        assert notify.await_count == 1  # first failure only, inside the 5 minute window
-        # Pretend the last alert was sent 6 minutes ago: the next failure alerts again.
+        assert _poll_events(logs) == ["tracker_poll_failed"]  # first failure only, inside 5 minutes
+        # Pretend the last line was logged 6 minutes ago: the next failure is logged again.
         t._poll_last_alert_at = time.monotonic() - 360
         await asyncio.sleep(0.1)
         await _stop(t, task)
-    assert notify.await_count == 2
+    assert _poll_events(logs) == ["tracker_poll_failed", "tracker_poll_failed"]
 
 
 @pytest.mark.asyncio
-async def test_recovery_sends_one_notice_and_records_liveness():
+async def test_recovery_logs_one_line_and_records_liveness():
     t = _tracker()
     state = {"fail": True}
 
@@ -86,14 +103,13 @@ async def test_recovery_sends_one_notice_and_records_liveness():
 
     t.check_positions = check
     assert t.last_poll_ok_at is None
-    with patch.object(tracker_module.notifier, "notify_event", AsyncMock()) as notify:
+    with capturing() as logs:
         task = await _run_for(t, 0.1)
         assert t.last_poll_ok_at is None  # never succeeded yet
         state["fail"] = False
         await asyncio.sleep(0.1)
         await _stop(t, task)
-    events = [c.args[0] for c in notify.await_args_list]
-    assert events == ["tracker_poll_failed", "tracker_poll_recovered"]
+    assert _poll_events(logs) == ["tracker_poll_failed", "tracker_poll_recovered"]
     assert t.last_poll_ok_at is not None
     assert t.last_poll_ok_at.utcoffset().total_seconds() == 5.5 * 3600  # IST
 
@@ -108,21 +124,18 @@ async def test_idle_iteration_with_no_positions_counts_as_ok():
 
 
 @pytest.mark.asyncio
-async def test_a_stalled_alert_cannot_stall_the_loop():
+async def test_repeated_failures_never_stall_the_loop():
     t = _tracker()
     t.check_positions = AsyncMock(side_effect=RuntimeError("down"))
 
-    async def hang(*_a, **_k):
-        await asyncio.sleep(60)
-
-    with (
-        patch.object(tracker_module.notifier, "notify_event", hang),
-        patch.object(tracker_module, "_POLL_ALERT_SEND_TIMEOUT_S", 0.05, create=True),
-    ):
+    # Reporting a failed poll is now one log line, so it cannot wait on anything: the loop keeps
+    # polling at its own interval (this once guarded a stalled outgoing message).
+    with capturing() as logs:
         task = await _run_for(t, 0.4)
         assert not task.done()
         assert t.check_positions.await_count >= 2
         await _stop(t, task)
+    assert _poll_events(logs) == ["tracker_poll_failed"]
 
 
 @pytest.mark.asyncio
@@ -175,39 +188,42 @@ class TestDoneCallback:
         if stopping:
             stop.set()
         task = asyncio.create_task(coro_fn())
-        with patch.object(startup.notifier, "notify_event", AsyncMock()) as notify:
+        with capturing() as logs:
             task.add_done_callback(startup._background_task_ended("Position tracker", "TEXT", stop))
             try:
                 await task
             except BaseException:  # noqa: BLE001
                 pass
             await asyncio.sleep(0.05)
-        return notify
+        return logs
 
     @pytest.mark.asyncio
-    async def test_unexpected_normal_end_alerts(self):
+    async def test_unexpected_normal_end_is_logged_critical(self):
         async def ends():
             return None
 
-        notify = await self._ended(ends)
-        notify.assert_awaited_once()
-        assert notify.await_args.args[1] == "TEXT"
+        logs = await self._ended(ends)
+        lines = logs.messages("CRITICAL")
+        assert len(lines) == 1
+        assert lines[0] == "Position tracker task ended while the engine is still running. TEXT"
 
     @pytest.mark.asyncio
-    async def test_exception_alerts_even_while_stopping(self):
+    async def test_exception_is_logged_critical_even_while_stopping(self):
         async def boom():
             raise RuntimeError("x")
 
-        notify = await self._ended(boom, stopping=True)
-        notify.assert_awaited_once()
+        logs = await self._ended(boom, stopping=True)
+        lines = logs.messages("CRITICAL")
+        assert len(lines) == 1
+        assert lines[0].startswith("Position tracker task stopped with an error: x. TEXT")
 
     @pytest.mark.asyncio
     async def test_end_during_shutdown_is_silent(self):
         async def ends():
             return None
 
-        notify = await self._ended(ends, stopping=True)
-        notify.assert_not_awaited()
+        logs = await self._ended(ends, stopping=True)
+        assert logs.messages("CRITICAL") == []
 
     @pytest.mark.asyncio
     async def test_cancellation_is_silent(self):
@@ -216,9 +232,45 @@ class TestDoneCallback:
 
         stop = asyncio.Event()
         task = asyncio.create_task(hangs())
-        with patch.object(startup.notifier, "notify_event", AsyncMock()) as notify:
+        with capturing() as logs:
             task.add_done_callback(startup._background_task_ended("Position tracker", "TEXT", stop))
             await asyncio.sleep(0)
             task.cancel()
             await asyncio.sleep(0.05)
-        notify.assert_not_awaited()
+        assert logs.messages("CRITICAL") == []
+
+
+@pytest.mark.asyncio
+async def test_recovery_is_logged_at_info_and_failure_at_error():
+    t = _tracker()
+    state = {"fail": True}
+
+    async def check():
+        if state["fail"]:
+            raise RuntimeError("down")
+
+    t.check_positions = check
+    with capturing() as logs:
+        task = await _run_for(t, 0.1)
+        state["fail"] = False
+        await asyncio.sleep(0.1)
+        await _stop(t, task)
+    by_event = {
+        event: name
+        for no, name, msg in logs
+        for event in ("tracker_poll_failed", "tracker_poll_recovered")
+        if msg.startswith(f"Tracker poll alert ({event})")
+    }
+    assert by_event == {"tracker_poll_failed": "ERROR", "tracker_poll_recovered": "INFO"}
+    # A recovery is not an error line.
+    assert not any("tracker_poll_recovered" in m for m in logs.messages("ERROR"))
+
+
+def test_log_poll_alert_defaults_to_error_and_honours_the_level():
+    with capturing() as logs:
+        PositionTracker._log_poll_alert("e1", "failed")
+        PositionTracker._log_poll_alert("e2", "fine", level="INFO")
+    assert [(name, msg) for _no, name, msg in logs] == [
+        ("ERROR", "Tracker poll alert (e1): failed"),
+        ("INFO", "Tracker poll alert (e2): fine"),
+    ]

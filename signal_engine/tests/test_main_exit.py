@@ -45,8 +45,7 @@ class TestExitPipelineDaySummary:
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=1500.0),
-            patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.save")
         ):
             # Set up tracked position
             mock_pos = MagicMock()
@@ -91,8 +90,7 @@ class TestExitPipelineDaySummary:
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=exit_result),
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=1500.0),
-            patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
+            patch("signal_engine.main.save")
         ):
             mock_pos = MagicMock()
             mock_pos.symbol = "RELIANCE"
@@ -113,7 +111,7 @@ class TestExitPipelineDaySummary:
 
 
 class TestTPHitExitFlow:
-    """End-to-end TP HIT signal flow: cancel SL -> MARKET SELL -> notifications."""
+    """End-to-end TP HIT signal flow: cancel SL -> MARKET SELL -> close booked."""
 
     @pytest.mark.asyncio
     async def test_tp_hit_cancels_sl_before_exit(self):
@@ -151,8 +149,7 @@ class TestTPHitExitFlow:
             patch("signal_engine.main.cancel_order", side_effect=mock_cancel),
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_pos = MagicMock()
             mock_pos.symbol = "RELIANCE"
@@ -175,8 +172,8 @@ class TestTPHitExitFlow:
         assert call_order == ["cancel_sl", "send_exit"]
 
     @pytest.mark.asyncio
-    async def test_tp_hit_full_exit_fires_all_notifications(self):
-        """Full TP exit should fire: exit_signal_received, exit_placed."""
+    async def test_tp_hit_full_exit_books_the_close_once(self):
+        """A full TP exit books the close once and writes no second EXIT row."""
         mock_signal = MagicMock()
         mock_signal.strategy = "ORB"
         mock_signal.direction = Direction.EXIT
@@ -200,8 +197,7 @@ class TestTPHitExitFlow:
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
             patch("signal_engine.main.save") as mock_save,
-            patch("signal_engine.main.notifier", new_callable=AsyncMock) as mock_notifier,
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_pos = MagicMock()
             mock_pos.symbol = "RELIANCE"
@@ -223,10 +219,8 @@ class TestTPHitExitFlow:
 
             await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
 
-        mock_notifier.notify_exit_signal_received.assert_called_once_with("RELIANCE", "ORB")
-        # notify_position_closed now fires inside tracker.book_close; with the tracker
-        # mocked, assert the pipeline booked the close rather than the notification
-        # mechanics. Real-tracker coverage lives in test_main_characterization.py.
+        # With the tracker mocked, assert the pipeline booked the close. Real-tracker coverage
+        # lives in test_main_characterization.py.
         mock_tracker.book_close.assert_awaited_once()
         # 2026-09-21: this used to ALSO call save() with the raw (empty-context) signal,
         # writing a second EXIT row for the same close that book_close() already recorded -
@@ -235,8 +229,8 @@ class TestTPHitExitFlow:
         mock_save.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_tp_hit_partial_exit_fires_partial_notification(self):
-        """Partial TP exit should fire notify_partial_exit, NOT notify_exit_placed."""
+    async def test_tp_hit_partial_exit_writes_its_own_row(self):
+        """A partial TP exit writes its own row and does not book a full close."""
         mock_signal = MagicMock()
         mock_signal.strategy = "RSI-TP-MR"
         mock_signal.direction = Direction.EXIT
@@ -262,8 +256,7 @@ class TestTPHitExitFlow:
             patch("signal_engine.main.fetch_order_status", new_callable=AsyncMock, return_value="complete"),
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
             patch("signal_engine.main.save") as mock_save,
-            patch("signal_engine.main.notifier", new_callable=AsyncMock) as mock_notifier,
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_pos = MagicMock()
             mock_pos.symbol = "HDFCBANK"
@@ -285,11 +278,9 @@ class TestTPHitExitFlow:
 
             await handle_message("RSI-TP-MR EXIT\nSymbol: HDFCBANK\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
 
-        # Partial exit notification, not full exit
-        mock_notifier.notify_partial_exit.assert_called_once()
-        mock_notifier.notify_position_closed.assert_not_called()
         # A partial leg writes NO row via book_close() - save() is the only record of it.
         mock_save.assert_called_once()
+        mock_tracker.book_close.assert_not_awaited()  # not booked as a full close
 
     @pytest.mark.asyncio
     async def test_partial_exit_cancels_sl_before_exit(self):
@@ -317,8 +308,7 @@ class TestTPHitExitFlow:
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock) as mock_cancel,
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_pos = MagicMock()
             mock_pos.symbol = "HDFCBANK"
@@ -343,8 +333,8 @@ class TestTPHitExitFlow:
         mock_cancel.assert_called_once_with("SL001", "RSI-TP-MR")
 
     @pytest.mark.asyncio
-    async def test_failed_exit_fires_failure_notification(self):
-        """Failed exit order should fire notify_exit_failed."""
+    async def test_failed_exit_logs_failure_and_keeps_position_tracked(self, logged):
+        """A failed exit order logs EXIT FAILED and leaves the position open for a retry."""
         mock_signal = MagicMock()
         mock_signal.strategy = "ORB"
         mock_signal.direction = Direction.EXIT
@@ -367,7 +357,6 @@ class TestTPHitExitFlow:
             patch("signal_engine.main.send_order", new_callable=AsyncMock, return_value=failed_result),
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock) as mock_notifier,
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_tracker.fetch_own_position.return_value = 50
@@ -388,7 +377,8 @@ class TestTPHitExitFlow:
 
             await handle_message("ORB EXIT\nSymbol: RELIANCE\nEntry: 0.0\nSL: 0.0\nTP: 0.0\nTpLevel: TP1")
 
-        mock_notifier.notify_exit_failed.assert_called_once()
+        assert logged.count("EXIT FAILED RELIANCE [ORB]", "ERROR") == 1
+        assert mock_pos.exit_pending is False  # cleared so the next signal can retry
 
 
 class TestExitPendingGuard:
@@ -427,8 +417,7 @@ class TestExitPendingGuard:
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_settings.strategy_profiles = {}
             mock_settings.bracket_tp_exit_retries = 1
@@ -486,8 +475,7 @@ class TestExitPendingGuard:
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_settings.strategy_profiles = {}
             mock_settings.bracket_tp_exit_retries = 1
@@ -564,8 +552,7 @@ class TestConcurrentTPSignals:
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_settings.strategy_profiles = {}
             mock_settings.bracket_tp_exit_retries = 1
@@ -648,8 +635,7 @@ class TestConcurrentTPSignals:
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
             patch("signal_engine.main.place_sl_order", new_callable=AsyncMock) as mock_place_sl,
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_settings.strategy_profiles = {}
             mock_settings.bracket_tp_exit_retries = 1

@@ -83,7 +83,6 @@ class TestPerSymbolPnlIsPreferred:
         ]
         with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
              patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=30.3)), \
-             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
              patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()), \
              patch.object(tracker, "_position_too_young", return_value=False), \
              patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
@@ -101,7 +100,6 @@ class TestPerSymbolPnlIsPreferred:
         book = [{"symbol": "SBIN", "quantity": 0, "ltp": 805.0}]
         with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
              patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=50.0)), \
-             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
              patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()), \
              patch.object(tracker, "_position_too_young", return_value=False), \
              patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
@@ -118,7 +116,6 @@ class TestCloseIsWrittenToTheAuditTrail:
         book = [{"symbol": "SBIN", "quantity": 0, "ltp": 805.0, "today_realized_pnl": 50.0}]
         with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
              patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=50.0)), \
-             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
              patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()) as save, \
              patch.object(tracker, "_position_too_young", return_value=False), \
              patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
@@ -156,7 +153,6 @@ class TestCloseIsWrittenToTheAuditTrail:
         book = [{"symbol": "PFC", "quantity": 0, "ltp": 347.55, "today_realized_pnl": -688.50}]
         with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
              patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=-688.50)), \
-             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
              patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()) as save, \
              patch.object(tracker, "_position_too_young", return_value=False), \
              patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
@@ -173,7 +169,6 @@ class TestCloseIsWrittenToTheAuditTrail:
         book = [{"symbol": "BIOCON", "quantity": 0, "ltp": 381.0, "today_realized_pnl": 10.0}]
         with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
              patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=10.0)), \
-             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
              patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()) as save, \
              patch.object(tracker, "_position_too_young", return_value=False), \
              patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
@@ -215,7 +210,6 @@ class TestFinalLegDoesNotDoubleCountPriorPartialExits:
         book = [{"symbol": "BHARTIARTL", "quantity": 0, "ltp": 1833.80, "today_realized_pnl": 718.80}]
         with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
              patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=718.80)), \
-             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
              patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()), \
              patch.object(tracker, "_position_too_young", return_value=False), \
              patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
@@ -238,7 +232,6 @@ class TestFinalLegDoesNotDoubleCountPriorPartialExits:
         book = [{"symbol": "PFC", "quantity": 0, "ltp": 345.75, "today_realized_pnl": 87.40}]
         with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
              patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=87.40)), \
-             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
              patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()), \
              patch.object(tracker, "_position_too_young", return_value=False), \
              patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
@@ -283,7 +276,6 @@ class TestSandboxSingleCloseTrustsPriceNotTheBrokerFigure:
         book = [{"symbol": "TCS", "quantity": 0, "ltp": 3558.92, "today_realized_pnl": -578.00}]
         with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
              patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=-578.00)), \
-             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
              patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()), \
              patch.object(tracker, "_position_too_young", return_value=False), \
              patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
@@ -305,7 +297,6 @@ class TestSandboxSingleCloseTrustsPriceNotTheBrokerFigure:
         book = [{"symbol": "TCS", "quantity": 0, "ltp": 3558.92, "today_realized_pnl": -578.00}]
         with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
              patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=-578.00)), \
-             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
              patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()), \
              patch.object(tracker, "_position_too_young", return_value=False), \
              patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
@@ -337,7 +328,6 @@ class TestSandboxSingleCloseTrustsPriceNotTheBrokerFigure:
             book = [{"symbol": "TCS", "quantity": 0, "ltp": 0, "today_realized_pnl": -578.00}]
             with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
                  patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=-578.00)), \
-                 patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
                  patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()), \
                  patch.object(tracker, "_position_too_young", return_value=False), \
                  patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
@@ -370,7 +360,6 @@ class TestFinalLegAuditTrailIsNotMisattributedToTheEntry:
         book = [{"symbol": "BHARTIARTL", "quantity": 0, "ltp": 1833.8, "today_realized_pnl": 522.90}]
         with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
              patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=522.90)), \
-             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
              patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()) as save, \
              patch.object(tracker, "_position_too_young", return_value=False), \
              patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
@@ -392,8 +381,7 @@ class TestFinalLegAuditTrailIsNotMisattributedToTheEntry:
         with patch("signal_engine.tracker.cancel_order", AsyncMock(return_value=True)), \
              patch("signal_engine.main.send_order",
                    AsyncMock(return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="MARKET-EXIT-9"))), \
-             patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=None)), \
-             patch("signal_engine.notifier.notify_no_progress_exit", AsyncMock()):
+             patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=None)):
             await tracker._no_progress_market_exit(pos, timedelta(minutes=90), 345.75, 345.85, 0.09)
         assert pos.sl_order_id == "MARKET-EXIT-9"
 
@@ -427,7 +415,6 @@ class TestSignalDrivenExitRecordsItsOwnOrderId:
              patch("signal_engine.main._book_realised_pnl_delta",
                    AsyncMock(return_value=(0.0, 0.0))), \
              patch("signal_engine.main.fetch_order_fill_price", AsyncMock(return_value=326.45)), \
-             patch("signal_engine.notifier.notify_position_closed", AsyncMock()), \
              patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()) as save, \
              patch.object(tracker, "maybe_send_day_summary", AsyncMock()), \
              patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
@@ -469,8 +456,6 @@ class TestNoProgressExitBooksItsOwnFill:
                    AsyncMock(return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="MARKET-EXIT-9"))), \
              patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=1024.40)), \
              patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=281.00)), \
-             patch("signal_engine.notifier.notify_no_progress_exit", AsyncMock()), \
-             patch("signal_engine.notifier.notify_position_closed", AsyncMock()) as notify_closed, \
              patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()) as save, \
              patch.object(tracker, "maybe_send_day_summary", AsyncMock()):
             await tracker._no_progress_market_exit(pos, timedelta(minutes=95), 1024.40, 1021.80, 0.10)
@@ -478,9 +463,7 @@ class TestNoProgressExitBooksItsOwnFill:
         # The real fill-derived loss, NOT the +281.00 the broker's portfolio-level delta
         # (mocked above, matching the confirmed same-second value) would have produced.
         assert save.call_args.kwargs["pnl"] == pytest.approx(-104.00)
-        # notify_position_closed(symbol, pnl, ...) — pnl is positional, not a kwarg.
-        assert notify_closed.await_args.args[1] == pytest.approx(-104.00)
-        assert notify_closed.await_args.kwargs["exit_price"] == pytest.approx(1024.40)
+        assert save.call_args.kwargs["exit_price"] == pytest.approx(1024.40)
         # The position is fully closed here, not left for the next poll to discover.
         assert tracker.find_position("INFY", "BREAKINGTRADE") is None
 
@@ -499,7 +482,6 @@ class TestNoProgressExitBooksItsOwnFill:
              patch("signal_engine.main.send_order",
                    AsyncMock(return_value=TradeResult(status=OrderStatus.SUCCESS, order_id="MARKET-EXIT-9"))), \
              patch("signal_engine.tracker.fetch_order_fill_price", AsyncMock(return_value=None)), \
-             patch("signal_engine.notifier.notify_no_progress_exit", AsyncMock()), \
              patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()) as save:
             await tracker._no_progress_market_exit(pos, timedelta(minutes=95), 1024.40, 1021.80, 0.10)
 
@@ -522,12 +504,11 @@ class TestExitTypeNamesTheRealCause:
         book = [{"symbol": "SBIN", "quantity": 0, "ltp": 805.0, "today_realized_pnl": 50.0}]
         with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
              patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=50.0)), \
-             patch("signal_engine.notifier.notify_position_closed", AsyncMock()) as notify, \
-             patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()), \
+             patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()) as save, \
              patch.object(tracker, "_position_too_young", return_value=False), \
              patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
             await tracker.check_positions()
-        assert notify.await_args.kwargs["exit_types"] == ["NO-PROGRESS"]
+        assert save.call_args.kwargs["exit_types"] == ["NO-PROGRESS"]
 
     async def _flat_close(self, exit_types):
         risk = MagicMock()
@@ -538,12 +519,11 @@ class TestExitTypeNamesTheRealCause:
         book = [{"symbol": "SBIN", "quantity": 0, "ltp": 800.0, "today_realized_pnl": 0.0}]
         with patch("signal_engine.tracker.fetch_positionbook", AsyncMock(return_value=book)), \
              patch("signal_engine.tracker.fetch_realised_pnl", AsyncMock(return_value=0.0)), \
-             patch("signal_engine.notifier.notify_position_closed", AsyncMock()) as notify, \
-             patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()), \
+             patch("signal_engine.tracker.db.save_tracker_exit", MagicMock()) as save, \
              patch.object(tracker, "_position_too_young", return_value=False), \
              patch.object(tracker, "_maybe_send_day_summary", AsyncMock()):
             await tracker.check_positions()
-        return notify.await_args.kwargs["exit_types"]
+        return save.call_args.kwargs["exit_types"]
 
     @pytest.mark.asyncio
     async def test_a_stop_after_a_tp1_partial_is_labelled_sl_not_tp1(self):

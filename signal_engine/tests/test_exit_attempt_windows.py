@@ -82,21 +82,19 @@ async def _replay(world, own_qty=0):
                   order_type="MARKET", product="MIS", strategy_tag="EVWAP-EARLY-PY")
     pos = SimpleNamespace(symbol="AXISBANK", strategy="EVWAP-EARLY-PY", quantity=154,
                           exchange="NSE", product="MIS", direction=Direction.LONG)
-    notify = AsyncMock()
     with (
         patch("signal_engine.main.settings", SETTINGS),
         patch("signal_engine.main.datetime", _clock(world)),
         patch("signal_engine.main.send_order", AsyncMock(side_effect=world.send)),
         patch("signal_engine.main.fetch_orderbook", AsyncMock(side_effect=world.book)),
         patch("signal_engine.main.fetch_order_ids_today", MagicMock(return_value=set())),
-        patch("signal_engine.main.notifier", MagicMock(notify=notify)),
         patch("signal_engine.main.tracker",
               MagicMock(fetch_own_position=AsyncMock(return_value=own_qty))),
         patch("signal_engine.main._watch_for_late_duplicate", MagicMock()),
         patch("signal_engine.order_reconcile.asyncio", SimpleNamespace(sleep=world.sleep)),
     ):
         result = await _send_exit_with_retries(order, pos)
-    return result, notify
+    return result
 
 
 @pytest.fixture(autouse=True)
@@ -112,7 +110,7 @@ class TestReplay20261104:
         """Old core (no guard). Copy 1 lands 150 s after send 1, inside attempt 2's own window.
         Before the fix attempt 2 had no window and attempt 3 went out about 5 s after it."""
         world = World(copy_delay=150, core_guard=False)
-        result, _ = await _replay(world)
+        result = await _replay(world)
         assert len(world.send_times) == 2, [world.elapsed(t) for t in world.send_times]
         assert (result.status, result.order_id) == (OrderStatus.SUCCESS, "C1")
 
@@ -128,19 +126,19 @@ class TestReplay20261104:
         """New core: copy 1 is still being placed when attempt 2 arrives and is refused. The engine
         must wait for that copy and adopt it: one copy ever created, one fill, two sends."""
         world = World(copy_delay=150, core_guard=True)
-        result, _ = await _replay(world)
+        result = await _replay(world)
         assert len(world.copies) == 1
         assert len(world.send_times) == 2
         assert (result.status, result.order_id) == (OrderStatus.SUCCESS, "C1")
 
-    async def test_in_flight_rejection_with_no_copy_ever_visible_holds_and_alerts(self):
+    async def test_in_flight_rejection_with_no_copy_ever_visible_holds_and_logs_it(self, logged):
         """The core keeps reporting a copy in flight that never reaches the book: after the last
-        attempt's window the exit is held and the UNPROTECTED alert goes out; nothing is resent."""
+        attempt's window the exit is held and the UNPROTECTED line is logged; nothing is resent."""
         world = World(copy_delay=10**6, core_guard=True)
-        result, notify = await _replay(world)
+        result = await _replay(world)
         assert len(world.send_times) == 3 and len(world.copies) == 1
         assert result.status == OrderStatus.TIMEOUT and "UNCERTAIN" in result.message
-        assert "UNPROTECTED" in str(notify.await_args_list)
+        assert "UNPROTECTED" in logged.text("CRITICAL")
         assert oc.get_uncertain("EVWAP-EARLY-PY", "AXISBANK") is not None
 
     async def test_a_window_that_ends_without_a_decision_is_logged(self):
@@ -254,7 +252,7 @@ async def test_lock_busy_409_is_retried_normally_without_a_reconcile_window():
         return interpret(order, _response(409, busy), busy)
 
     world.send = send
-    result, _ = await _replay(world)
+    result = await _replay(world)
     assert len(world.send_times) == 3  # every retry was sent
     assert world.elapsed(world.now) < 60, world.elapsed(world.now)  # no 120 s window anywhere
     assert result.status == OrderStatus.REJECTED and not result.inflight

@@ -61,8 +61,7 @@ class TestPartialExitFlow:
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=1500.0),
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_pos = MagicMock()
             mock_pos.symbol = "HDFCBANK"
@@ -119,8 +118,7 @@ class TestPartialExitFlow:
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_pos = MagicMock()
             mock_pos.symbol = "HDFCBANK"
@@ -174,8 +172,7 @@ class TestPartialExitFlow:
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_pos = MagicMock()
             mock_pos.symbol = "HDFCBANK"
@@ -234,8 +231,7 @@ class TestPartialExitFlow:
             patch("signal_engine.main.cancel_order", new_callable=AsyncMock, return_value=True),
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=1500.0),
             patch("signal_engine.main.save") as mock_save,
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_pos = MagicMock()
             mock_pos.symbol = "HDFCBANK"
@@ -320,8 +316,7 @@ class TestPartialExitSlReplacement:
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
             patch("signal_engine.main.place_sl_order", new_callable=AsyncMock, return_value=new_sl_result) as mock_place_sl,
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_tracker.find_position.return_value = mock_pos
             mock_tracker._time_exit_active = False
@@ -367,8 +362,7 @@ class TestPartialExitSlReplacement:
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
             patch("signal_engine.main.place_sl_order", new_callable=AsyncMock, return_value=new_sl_result) as mock_place_sl,
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_tracker.find_position.return_value = mock_pos
             mock_tracker._time_exit_active = False
@@ -387,8 +381,8 @@ class TestPartialExitSlReplacement:
         assert mock_place_sl.call_args.kwargs["sl_price"] == 2500.0  # fallback: no buffer when tp=0
 
     @pytest.mark.asyncio
-    async def test_sl_replacement_failure_logs_error_and_notifies(self):
-        """If SL re-placement fails after partial exit, error is logged and Telegram notified."""
+    async def test_sl_replacement_failure_logs_error(self, logged):
+        """If SL re-placement fails after partial exit, the error is logged."""
         mock_signal, mock_pos = self._make_partial_exit_context(sl_order_id="SL001")
         valid_result = ValidationResult(status=ValidationStatus.VALID)
         exit_result = TradeResult(order_id="EXIT001", status=OrderStatus.SUCCESS, message="ok")
@@ -405,7 +399,6 @@ class TestPartialExitSlReplacement:
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
             patch("signal_engine.main.place_sl_order", new_callable=AsyncMock, return_value=failed_sl_result),
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock) as mock_notifier,
             patch("signal_engine.main.settings") as mock_settings,
         ):
             mock_tracker.find_position.return_value = mock_pos
@@ -423,8 +416,7 @@ class TestPartialExitSlReplacement:
 
         # sl_order_id remains empty — no protection, but position is still tracked
         assert mock_pos.sl_order_id == ""
-        # Telegram notification fired to alert operator
-        mock_notifier.notify_sl_failed.assert_called_once()
+        assert logged.count("SL re-placement failed for RELIANCE", "ERROR") == 1
 
     @pytest.mark.asyncio
     async def test_sl_not_replayed_when_bracket_disabled(self):
@@ -444,8 +436,7 @@ class TestPartialExitSlReplacement:
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
             patch("signal_engine.main.place_sl_order", new_callable=AsyncMock) as mock_place_sl,
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_tracker.find_position.return_value = mock_pos
             mock_tracker._time_exit_active = False
@@ -502,8 +493,7 @@ class TestPartialExitSlReplacement:
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=500.0),
             patch("signal_engine.main.place_sl_order", new_callable=AsyncMock, return_value=new_sl_result) as mock_place_sl,
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_tracker.find_position.return_value = mock_pos
             mock_tracker._time_exit_active = False
@@ -563,8 +553,7 @@ class TestPartialExitSlReplacement:
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=1000.0),
             patch("signal_engine.main.place_sl_order", new_callable=AsyncMock) as mock_place_sl,
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_tracker.find_position.return_value = mock_pos
             mock_tracker._time_exit_active = False
@@ -756,8 +745,7 @@ class TestExtendedRunnerTierRatchet:
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
             patch("signal_engine.main.place_sl_order", new_callable=AsyncMock, return_value=new_sl_result) as mock_place_sl,
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_tracker.find_position.return_value = mock_pos
             mock_tracker._time_exit_active = False
@@ -853,8 +841,7 @@ class TestExtendedRunnerTierRatchet:
             patch("signal_engine.main.fetch_realised_pnl", new_callable=AsyncMock, return_value=2000.0),
             patch("signal_engine.main.place_sl_order", new_callable=AsyncMock, return_value=new_sl_result) as mock_place_sl,
             patch("signal_engine.main.save"),
-            patch("signal_engine.main.notifier", new_callable=AsyncMock),
-            patch("signal_engine.main.settings") as mock_settings,
+            patch("signal_engine.main.settings") as mock_settings
         ):
             mock_tracker.find_position.return_value = mock_pos
             mock_tracker._time_exit_active = False

@@ -5,13 +5,14 @@
     uv run python -m signal_engine.ops logs [--day D]           error signatures vs the last 5 sessions
     uv run python -m signal_engine.ops jobs [--day D]           scheduled-job audit
     uv run python -m signal_engine.ops value-areas [--day D]    store the day's VAH/POC/VAL, check coverage
-    uv run python -m signal_engine.ops track [--day D] [--logs [--write]] [--bug-alerts]   record FAIL checks; alerts/log bugs dry-run unless flagged
+    uv run python -m signal_engine.ops track [--day D] [--logs [--write]]   record FAIL checks; log bugs dry-run unless --write
     uv run python -m signal_engine.ops retry-failed             overnight retry of yesterday's failed backfill (installed 08:56 line)
     uv run python -m signal_engine.ops recover                  08:36: retry only the open steps of the previous trading day
     uv run python -m signal_engine.ops close-day-retry [--day D] 16:01: retry only the open steps of today (close_day.sh --retry)
-    uv run python -m signal_engine.ops deadman PHASE            alert when a checkpoint is missing, incomplete or failed
+    uv run python -m signal_engine.ops deadman PHASE            print and exit 1 when a checkpoint is missing, incomplete or failed
     uv run python -m signal_engine.ops run-action ACTION --day D --id RUN   run a step again (the page)
-    uv run python -m signal_engine.ops notify PHASE [--day D]   the one Telegram message for a phase
+
+Nothing here sends to Telegram. The results are the reports, the run manifests and /logs/workflow.
 
 Exit status: 0 GREEN or AMBER, 1 RED, so a phase status file shows a failed check as a failed step.
 """
@@ -22,10 +23,8 @@ from datetime import datetime
 
 from signal_engine.ops import (
     actions,
-    alerts,
     automation,
     autotrack,
-    bugalerts,
     jobs,
     logscan,
     readiness,
@@ -37,22 +36,13 @@ from signal_engine.ops.model import read_phase
 from signal_engine.timeutils import IST
 
 
-def _previous_day_line(day: str, *, dry_run: bool) -> None:
+def _previous_day_line(day: str) -> None:
     """The morning dead-man's extra line: what the previous trading day left open and what the
     08:36 recovery did. WARN level, never RED, and it never changes the dead-man's own result."""
     if not automation.is_trading_day(day):
         return
     line = recovery.previous_day_line(day, folder=automation.REPORTS)
     print(f"previous day [{line['level']}] {line['outcome']}: {line['text']}")
-    if line["level"] != "WARN" or dry_run:
-        return
-    alerts.deliver(
-        line["text"],
-        kind="deadman",
-        phase="morning-previous-day",
-        condition=line["outcome"],
-        severity="WARN",
-    )
 
 
 def main(argv=None) -> int:
@@ -65,7 +55,6 @@ def main(argv=None) -> int:
             "logs",
             "jobs",
             "value-areas",
-            "notify",
             "track",
             "run-action",
             "retry-failed",
@@ -74,31 +63,15 @@ def main(argv=None) -> int:
             "deadman",
         ),
     )
-    parser.add_argument("phase", nargs="?", help="for notify: open-day, liveness or close-day")
+    parser.add_argument(
+        "phase", nargs="?", help="deadman: morning or close; run-action: the action"
+    )
     parser.add_argument("--day", default=datetime.now(IST).strftime("%Y-%m-%d"))
     parser.add_argument("--at", help="liveness only: end of the window, HH:MM (default: now)")
     parser.add_argument("--id", help="run-action only: the run id the page is watching")
-    parser.add_argument("--bug-alerts", action="store_true", help="track only: send bug alerts")
     parser.add_argument("--logs", action="store_true", help="track only: detect recurring errors")
     parser.add_argument("--write", action="store_true", help="track --logs only: write the bugs")
-    parser.add_argument("--dry-run", action="store_true", help="notify only: print, do not send")
     args = parser.parse_args(argv)
-
-    if args.command == "notify":
-        if args.phase not in ("open-day", "liveness", "close-day"):
-            parser.error("notify needs a phase: open-day, liveness or close-day")
-        text = verdict.message(args.phase, args.day)
-        if text is None:
-            print(f"{args.phase} {args.day}: nothing to send")
-            if not args.dry_run and verdict.recover(args.phase, args.day):
-                print(f"{args.phase} {args.day}: recovery line sent")
-            return 0
-        if args.dry_run:
-            print(f"[dry-run] would send: {text}")
-            return 0
-        sent = verdict.send(args.phase, args.day)
-        print(f"{'sent' if sent else 'NOT sent'}: {text}")
-        return 0 if sent else 1
 
     if args.command == "retry-failed":
         for line in automation.retry_failed():
@@ -118,25 +91,17 @@ def main(argv=None) -> int:
         text = automation.deadman(args.phase, args.day)
         state = automation.worst_state(report)
         if args.phase == "morning" and report:  # only once the morning checkpoints are due
-            _previous_day_line(args.day, dry_run=args.dry_run)
+            _previous_day_line(args.day)
         if text is None:
             if not report:
-                # A holiday, a weekend or a phase not yet due: nothing was checked, so nothing is
-                # healthy and no earlier RED is cleared.
+                # A holiday, a weekend or a phase not yet due: nothing was checked.
                 print(f"deadman {args.phase} {args.day}: nothing due, nothing checked")
                 return 0
             print(f"deadman {args.phase} {args.day}: healthy, every due checkpoint is complete")
-            if not args.dry_run and all(r["state"] == automation.HEALTHY for r in report):
-                alerts.recover(kind="deadman", phase=args.phase)
             return 0
-        if args.dry_run:
-            print(f"[dry-run] would send ({state}): {text}")
-            return 0
-        sent = alerts.deliver(
-            text, kind="deadman", phase=args.phase, condition=state, severity="RED"
-        )
-        print(f"{'sent' if sent else 'NOT sent'} ({state}): {text}")
-        return 0 if sent else 1
+        # Printed to logs/ops_cron.log; the exit status marks the finding in the cron log line.
+        print(f"deadman {args.phase} {args.day} ({state}): {text}")
+        return 1
 
     if args.command == "run-action":
         if args.phase not in actions.ACTIONS or not actions.RUN_ID.match(args.id or ""):
@@ -151,9 +116,6 @@ def main(argv=None) -> int:
         if args.logs:
             for line in logscan.detect(args.day, dry_run=not args.write):
                 print(f"  {line}")
-        # Alerts print only, until the owner enables sending with --bug-alerts.
-        for line in bugalerts.run(args.day, dry_run=args.dry_run or not args.bug_alerts):
-            print(f"  {line}")
         return 0
 
     if args.command == "open-day":
