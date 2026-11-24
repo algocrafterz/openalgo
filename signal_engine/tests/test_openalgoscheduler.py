@@ -1378,3 +1378,102 @@ class TestTradingDayGate:
 
         monkeypatch.setattr(cal, "is_trading_day", boom)
         assert tradingday_exit_code(date(2026, 11, 10)) == 0
+
+
+class TestExpectedFailureLogLevels:
+    """Expected morning failures log WARNING; real, final failures stay ERROR."""
+
+    @staticmethod
+    def _errors(caplog):
+        import logging
+        return [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+    def _smoke_seq(self, monkeypatch, results):
+        import signal_engine.scripts.openalgoscheduler as sched
+
+        it = iter(results)
+
+        async def _smoke():
+            return next(it)
+
+        monkeypatch.setattr(sched, "_openalgo_api_smoke_test", _smoke)
+        return sched
+
+    def test_smoke_retried_failure_is_warning_not_error(self, monkeypatch, caplog):
+        import logging
+        sched = self._smoke_seq(monkeypatch, [(False, "no mode"), (True, "OK")])
+        with caplog.at_level(logging.DEBUG):
+            ok, _ = sched._verify_openalgo_api(max_attempts=3, retry_delay=0)
+        assert ok is True
+        assert self._errors(caplog) == []
+        failed = [r for r in caplog.records if "smoke test FAILED (attempt 1/3)" in r.getMessage()]
+        assert [r.levelno for r in failed] == [logging.WARNING]
+
+    def test_smoke_final_failed_attempt_is_error(self, monkeypatch, caplog):
+        import logging
+        sched = self._smoke_seq(monkeypatch, [(False, "d1"), (False, "d2"), (False, "d3")])
+        with caplog.at_level(logging.DEBUG):
+            ok, detail = sched._verify_openalgo_api(max_attempts=3, retry_delay=0)
+        assert (ok, detail) == (False, "d3")
+        levels = {r.getMessage().split(":")[0]: r.levelno for r in caplog.records
+                  if "smoke test FAILED" in r.getMessage()}
+        assert levels == {
+            "OpenAlgo API smoke test FAILED (attempt 1/3)": logging.WARNING,
+            "OpenAlgo API smoke test FAILED (attempt 2/3)": logging.WARNING,
+            "OpenAlgo API smoke test FAILED (attempt 3/3)": logging.ERROR,
+        }
+
+    def test_stale_token_then_successful_login_logs_no_error(self, monkeypatch, caplog):
+        import logging
+
+        import signal_engine.scripts.openalgoscheduler as sched
+
+        monkeypatch.setenv("BROKER_NAME", "flattrade")
+        monkeypatch.setattr(sched, "validate_auto_login_env",
+                            lambda: {"broker_password": "x", "totp_secret": "JBSWY3DPEHPK3PXP"})
+        import importlib as _il
+        funds = MagicMock()
+        funds.get_margin_data = MagicMock(return_value={})
+        monkeypatch.setattr(_il, "import_module", lambda name: funds)
+        with caplog.at_level(logging.DEBUG):
+            ok, msg, tok = sched._totp_session_token(
+                "flattrade", "u", lambda u: ("old", None),
+                lambda pw, totp: ("new", "feed", None), lambda *a, **k: True,
+            )
+        assert (ok, msg, tok) == (True, "", "new")
+        empty = [r for r in caplog.records if "empty funds data" in r.getMessage()]
+        assert [r.levelno for r in empty] == [logging.WARNING]
+        assert self._errors(caplog) == []
+
+    def test_stale_token_then_failed_login_still_logs_error(self, monkeypatch, caplog):
+        import logging
+
+        import signal_engine.scripts.openalgoscheduler as sched
+
+        monkeypatch.setenv("BROKER_NAME", "flattrade")
+        monkeypatch.setattr(sched, "validate_auto_login_env",
+                            lambda: {"broker_password": "x", "totp_secret": "JBSWY3DPEHPK3PXP"})
+        monkeypatch.setattr(sched, "_alert_invalid_ip", lambda e: None)
+        import importlib as _il
+        funds = MagicMock()
+        funds.get_margin_data = MagicMock(return_value={})
+        monkeypatch.setattr(_il, "import_module", lambda name: funds)
+        with caplog.at_level(logging.DEBUG):
+            ok, msg, tok = sched._totp_session_token(
+                "flattrade", "u", lambda u: ("old", None),
+                lambda pw, totp: (None, None, "bad totp"), lambda *a, **k: True,
+            )
+        assert (ok, msg, tok) == (False, "bad totp", None)
+        assert [r.getMessage() for r in self._errors(caplog)] == [
+            "Broker authentication failed: bad totp"
+        ]
+
+    def test_verify_broker_auth_default_empty_funds_stays_error(self, caplog):
+        import logging
+
+        from signal_engine.scripts.openalgoscheduler import verify_broker_auth
+
+        with caplog.at_level(logging.DEBUG):
+            assert verify_broker_auth("tok", _get_margin_data=lambda t: {}) is None
+        empty = [r for r in caplog.records if "empty funds data" in r.getMessage()]
+        assert [r.levelno for r in empty] == [logging.ERROR]
