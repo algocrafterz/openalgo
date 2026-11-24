@@ -2270,7 +2270,9 @@ def test_unresolved_without_reasons_when_the_inputs_fail(env, monkeypatch):
     assert "reason" not in rows[0]
 
 
-def test_trade_rows_carry_entry_and_exit_fill_counts_tcs_shape(env):
+def test_trade_rows_do_not_carry_fill_counts_tcs_shape(env):
+    # Renamed and changed on purpose: the response contract dropped entry_fills / exit_fills
+    # (nothing read them; the fills dialog loads fills through get_trade_fills).
     # 2026-11-19 TCS: three entry fills, four partial exits, flat at the end
     env.now = d(19, 15, 0)
     env.fill("BUY", 10, 3000.0, d(19, 9, 20), symbol="TCS", order_id="E1")
@@ -2280,7 +2282,8 @@ def test_trade_rows_carry_entry_and_exit_fill_counts_tcs_shape(env):
         env.fill("SELL", 15, 3010.0 + i, d(19, 11, mm), symbol="TCS", order_id=f"X{i}")
     perf = pnl.get_performance(period="all")
     (trade,) = perf["trades"]
-    assert (trade["entry_fills"], trade["exit_fills"]) == (3, 4)
+    assert "entry_fills" not in trade
+    assert "exit_fills" not in trade
     assert trade["legs"] == 4
     fills = pnl.get_trade_fills(trade["id"], perf["build_id"])["fills"]
     roles = [f["role"] for f in fills]

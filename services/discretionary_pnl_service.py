@@ -2570,22 +2570,6 @@ def get_trade_fills(trade_id: int, build_id: str | None = None) -> dict | None:
     }
 
 
-def fill_counts(trade: dict, links: list[dict], build_id: str | None) -> dict:
-    """{"entry_fills", "exit_fills"}: distinct ledger fills linked as ENTRY / EXIT to the
-    legs (``leg_ids``) of one completed trade in ``build_id``; the same rows, merged per
-    (fill, role), that ``get_trade_fills`` returns. Display only."""
-    legs = set(trade.get("leg_ids") or [])
-    seen = {
-        (lk["fill_ref"], lk["role"])
-        for lk in links
-        if lk.get("trade_id") in legs and lk.get("build_id") == build_id
-    }
-    return {
-        "entry_fills": sum(1 for _ref, role in seen if role == "ENTRY"),
-        "exit_fills": sum(1 for _ref, role in seen if role == "EXIT"),
-    }
-
-
 def get_performance(
     period: str = "30d",
     start: str | None = None,
@@ -2607,8 +2591,7 @@ def get_performance(
     Win / loss figures are on the NET basis. MAE / MFE are NOT here (lazy ``get_excursions``).
 
     ``get_summary`` plus: by_period {daily, weekly, monthly}, by_symbol, by_side, by_product,
-    by_holding {intraday, overnight}, hold, trades (COMPLETED trades, each with ``legs``,
-    ``entry_fills`` and ``exit_fills``, see ``fill_counts``) /
+    by_holding {intraday, overnight}, hold, trades (COMPLETED trades, each with ``legs``) /
     positions (newest first, at most TABLE_LIMIT each, with ``*_total`` and ``*_truncated``;
     every total is computed before the cut), withheld and labels. Breakdown money sums the
     legs, breakdown counts the completed trades (see the module docstring). The
@@ -2651,9 +2634,7 @@ def get_performance(
     out["costs"] = _safe_block("costs", lambda: an.costs_summary(trades), out["warnings"])
 
     newest = sorted(trades, key=lambda t: (t["closed_at"], t["id"]), reverse=True)
-    out["trades"] = [
-        {**t, **fill_counts(t, snap["links"], snap["build_id"])} for t in newest[:TABLE_LIMIT]
-    ]
+    out["trades"] = newest[:TABLE_LIMIT]
     out["trades_total"] = len(newest)
     out["trades_shown"] = len(out["trades"])
     out["trades_truncated"] = max(0, len(newest) - TABLE_LIMIT)

@@ -407,9 +407,6 @@ export interface DiscretionaryTrade {
   opening_unknown?: boolean
   has_orphan_fills?: boolean
   orphan_fills?: number
-  /** Distinct entry / exit fills of the trade (its fill links); absent from older servers. */
-  entry_fills?: number
-  exit_fills?: number
 }
 
 export interface DiscretionaryPosition {
