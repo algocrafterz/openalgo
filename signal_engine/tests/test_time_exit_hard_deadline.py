@@ -258,7 +258,13 @@ class TestAcceptedCancelBudgetGone:
         with Harness(w, b, tracker) as h:
             await tracker.time_exit_all()
             assert b.count("send") == 0  # no close without a confirmed cancel
-            assert pos.sl_order_id == "", "the cancelled stop must be handed to the missing-stop retry"
+            assert pos.sl_order_id == ""
+            assert pos.time_exit_left_open is True, "the leg is flagged: only the 14:55 square-off acts"
+            w.now = w.at(14, 54, 45)  # between 14:54:30 and 15:00 the missing-stop retry places nothing
+            await _poll_retry(tracker, b)
+            await _poll_retry(tracker, b)
+            assert h.place.await_count == 0
+            w.now = w.at(15, 0, 5)  # after the failsafe window the retry resumes
             await _poll_retry(tracker, b)
             await _poll_retry(tracker, b)  # a second poll must not place a second stop
         assert h.place.await_count == 1
@@ -278,7 +284,10 @@ class TestAcceptedCancelBudgetGone:
             tracker._last_stop_audit = tracker_mod.time.monotonic()  # an audit ran a moment ago
             await tracker._reconcile_stops()
             await _poll_retry(tracker, b)
-        assert h.place.await_count == 1, "the first poll after the pass must restore the stop"
+            assert h.place.await_count == 0, "no stop is placed before the failsafe window ends"
+            w.now = w.at(15, 0, 5)
+            await _poll_retry(tracker, b)
+        assert h.place.await_count == 1, "the first poll after 15:00 must restore the stop"
 
 
 async def _poll_retry(tracker, broker):

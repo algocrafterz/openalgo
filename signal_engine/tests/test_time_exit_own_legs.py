@@ -7,6 +7,7 @@ the engine booked. Each leg now gets its own MARKET order for its own quantity, 
 the broker's net position leaves for it.
 """
 
+from contextlib import nullcontext
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -29,16 +30,28 @@ def _ok(order_id):
     return TradeResult(status=OrderStatus.SUCCESS, order_id=order_id, message="ok")
 
 
-async def _close(tracker, strategy, symbols, net, send=None):
+async def _close(tracker, strategy, symbols, net, send=None, book=None):
     send = send or AsyncMock(side_effect=lambda order, pos: _ok(f"X-{pos.strategy}"))
     with (
         patch("signal_engine.tracker.fetch_net_position", AsyncMock(return_value=net)),
+        (
+            patch("signal_engine.tracker.fetch_orderbook", AsyncMock(return_value=book))
+            if book is not None
+            else nullcontext()
+        ),
         patch("signal_engine.main._send_exit_with_retries", send),
         patch("signal_engine.api_client.close_all_positions", AsyncMock()) as close_all,
         patch("signal_engine.tracker.notifier", AsyncMock()) as notifier,
     ):
         await tracker._close_strategy(strategy, symbols)
     return send, close_all, notifier
+
+
+def _filled_close(order_id, strategy, symbol, qty, action="SELL"):
+    return {
+        "orderid": order_id, "symbol": symbol, "action": action, "pricetype": "MARKET",
+        "product": "MIS", "order_status": "complete", "strategy": strategy, "quantity": qty,
+    }
 
 
 class TestCloseOwnLegs:
@@ -65,7 +78,8 @@ class TestCloseOwnLegs:
         )
         await _close(tracker, BT, {"ANGELONE"}, net=264)
         # BT's sell has filled: the broker now nets to RI's 132 alone.
-        send, _, _ = await _close(tracker, RI, {"ANGELONE"}, net=132)
+        filled = [_filled_close(f"X-{BT}", BT, "ANGELONE", 132)]
+        send, _, _ = await _close(tracker, RI, {"ANGELONE"}, net=132, book=filled)
         order, pos = send.await_args.args
         assert pos.strategy == RI and order.quantity == 132
 
@@ -134,11 +148,12 @@ class TestTimeExitEndToEnd:
             _make_position(symbol="ANGELONE", strategy=RI, quantity=132, fill_price=290.8),
         )
         nets = iter([264, 132])
+        filled = [_filled_close(f"X-{BT}", BT, "ANGELONE", 132)]
         send = AsyncMock(side_effect=lambda order, pos: _ok(f"X-{pos.strategy}"))
         saved = []
         with (
             patch("signal_engine.api_client.cancel_all_orders", AsyncMock(return_value=True)),
-            patch("signal_engine.tracker.fetch_orderbook", AsyncMock(return_value=[])),
+            patch("signal_engine.tracker.fetch_orderbook", AsyncMock(return_value=filled)),
             patch(
                 "signal_engine.tracker.fetch_net_position",
                 AsyncMock(side_effect=lambda *a: next(nets, 0)),

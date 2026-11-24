@@ -870,7 +870,8 @@ async def _send_exit_with_retries(exit_order, pos) -> TradeResult:
                 )
             )
             return await _hold_uncertain_exit(
-                exit_order, pos, "the time exit's deadline leaves no time to check the order book"
+                exit_order, pos, "the time exit's deadline leaves no time to check the order book",
+                notify=False,
             )
         if trade_result.status == OrderStatus.TIMEOUT or in_flight:
             # The window restarts at EVERY send. Counted from the first send it was spent by the
@@ -1075,7 +1076,7 @@ async def _watch_exit_for_late_fill(
 
 async def _hold_uncertain_exit(
     exit_order, pos, detail: str, order_ids: tuple = (), *, accepted: bool = False,
-    sl_cancelled: bool = True,
+    sl_cancelled: bool = True, notify: bool = True,
 ) -> TradeResult:
     message = (
         f"UNCERTAIN: {exit_order.action.value} {exit_order.quantity} {pos.symbol} "
@@ -1083,6 +1084,9 @@ async def _hold_uncertain_exit(
     )
     candidates = ", ".join(order_ids) if order_ids else "none found on the book"
     logger.critical(f"EXIT {message}; candidate orders: {candidates}")
+    if not notify:
+        # The time exit sends its own single alert for the strategy (tracker._alert_held_exits).
+        return TradeResult(status=OrderStatus.TIMEOUT, message=message)
     if accepted:
         # The broker accepted this order and reports it working: a manual exit would double it.
         text = (

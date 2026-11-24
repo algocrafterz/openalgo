@@ -22,6 +22,10 @@ from signal_engine.api_client import (
 )
 from signal_engine.config import settings as _cfg
 from signal_engine.executor import (
+    _EPISODE_START,
+    _LAST_UNKNOWN_SEND,
+    _PENDING_DUPLICATE_STOPS,
+    _UNCONFIRMED_SL,
     HOLD_MESSAGE,
     adopt_resting_stop,
     build_exit_order,
@@ -402,6 +406,16 @@ _monotonic = time.monotonic
 def _now_ist() -> datetime:
     """Wall-clock now in IST (the market-time zone used across this module); tests replace it."""
     return datetime.now(IST)
+
+
+#: IST time of day from which the missing-stop retry may act again on a leg the time exit left
+#: open: the 14:55 square-off has had its five minutes.
+_FAILSAFE_WINDOW_END_IST = (15, 0)
+
+
+def _before_failsafe_window_end() -> bool:
+    now = _now_ist()
+    return (now.hour, now.minute) < _FAILSAFE_WINDOW_END_IST
 
 
 #: Wall-clock end of a time-exit pass, IST. Nothing in the pass (read, cancel, wait, close)
@@ -1383,6 +1397,10 @@ class PositionTracker:
         now = datetime.now(IST)
         for key, pos in list(self._positions.items()):
             if pos.sl_order_id or pos.exit_pending or pos.quantity <= 0:
+                continue
+            if pos.time_exit_left_open and _before_failsafe_window_end():
+                # The time exit left it open on purpose: only the 14:55 square-off acts on it, and
+                # a stop placed in between would race that square-off. Retries resume at 15:00.
                 continue
             if order_reconcile.get_uncertain(pos.strategy, pos.symbol) is not None:
                 continue  # an order for this position is unconfirmed: a stop now could reverse it
@@ -2547,7 +2565,12 @@ class PositionTracker:
                     "its closes. They are booked by the next position check."
                 )
             elif closed:
-                await self._confirm_orders_cancelled(closed, uncancelled - skipped)
+                # A leg whose exit order result is unknown may still fill, and the sweep cancels by
+                # strategy: it skips a strategy that has such a leg, so that exit order stays.
+                held = {p.strategy for p in closed.values() if self._exit_uncertain(p)}
+                sweep = {k: p for k, p in closed.items() if p.strategy not in held}
+                if sweep:
+                    await self._confirm_orders_cancelled(sweep, uncancelled - skipped)
                 await self._book_time_exit_trades(closed, _settings, started, still_open)
         finally:
             self._time_exit_active = False
@@ -2764,8 +2787,9 @@ class PositionTracker:
         When this pass sent no cancel for the strategy, nothing was changed and the alert says so
         without a read. When it did, the stop status and the net position are read now (inside the
         hard deadline) and the alert states them. A stop this pass cancelled on a position that is
-        still open is handed to the missing-stop retry (see _hand_back_stops), which places it
-        again from the position book on the next poll. Never claims a stop it has not read.
+        still open is put back in the pass when the time and the book allow it (see _restore_stop);
+        otherwise the leg is flagged and only the 14:55 square-off acts on it. Never claims a
+        stop it has not read.
         """
         if strategy in self._skip_alerted:
             return
@@ -2780,7 +2804,7 @@ class PositionTracker:
             head = f"TIME EXIT SKIPPED for {strategy} ({names}): pending orders not confirmed cancelled ({detail})."
         now = _now_ist()
         if now.hour > 15 or (now.hour == 15 and now.minute >= 30):
-            return  # the market is closed: nothing to act on, only the clean-up below runs
+            return  # the market is closed: nothing to act on, no alert goes out
         if not self._touched(strategy):
             body = (
                 "The time exit sent no cancel and no close for this strategy, so its orders are as "
@@ -2841,21 +2865,33 @@ class PositionTracker:
     def _others_signed_qty(self, key: str, pos, book: list) -> int:
         """Signed quantity the OTHER tracked legs on this symbol still hold at the broker.
 
-        As _own_close_qty counts it, without a read: a leg whose close this pass sent, or whose
-        unconfirmed exit the `book` shows complete, no longer holds its shares.
+        As _own_close_qty counts it, without a read: a leg whose close this pass sent no longer
+        holds its shares only when the `book` shows that close complete (working, absent or an
+        unreadable book leave the leg counted); neither does a leg whose unconfirmed exit the
+        `book` shows complete.
         """
         others = 0
         for k, p in self._positions.items():
             if (
                 k == key
-                or k in self._square_off_orders
                 or (p.symbol, p.exchange, p.product) != (pos.symbol, pos.exchange, pos.product)
             ):
                 continue
-            if self._exit_uncertain(p) and self._uncertain_exit_filled(p, book):
+            if k in self._square_off_orders and self._close_complete(k, book):
+                continue
+            if k not in self._square_off_orders and self._exit_uncertain(p) and self._uncertain_exit_filled(p, book):
                 continue
             others += p.quantity if p.direction == Direction.LONG else -p.quantity
         return others
+
+    def _close_complete(self, key: str, book) -> bool:
+        """True only when `book` shows the close order this pass sent for `key` complete."""
+        order_id = self._square_off_orders.get(key)
+        for o in book or []:
+            if isinstance(o, dict) and order_id and str(o.get("orderid") or o.get("order_id") or "") == order_id:
+                status = str(o.get("order_status") or o.get("status") or "").strip().lower()
+                return status in ("complete", "completed")
+        return False
 
     async def _describe_left_open(self, pos, symbol: str, working: list, sent: dict, own) -> str:
         """One symbol's sentence. `own` is this strategy's signed broker quantity (None = unread).
@@ -2896,6 +2932,22 @@ class PositionTracker:
                 "but not confirmed. No new stop is placed beside that order. Check the position "
                 "book now; the 14:55 square-off closes anything still open."
             )
+        other = [o for o in working if str(o.get("symbol") or "").upper() == symbol.upper()]
+        if other:
+            # Any working order of this strategy on the symbol (a LIMIT target whose cancel failed,
+            # a close, a stop of another kind): a stop beside it could reverse the position.
+            pos.time_exit_left_open = True  # only the 14:55 square-off acts on it
+            names = ", ".join(
+                f"{o.get('pricetype') or o.get('price_type') or 'order'} "
+                f"{o.get('orderid') or o.get('order_id') or '?'}"
+                for o in other
+            )
+            return (
+                f"the position is open ({held} shares) and its stop was cancelled by the time exit, "
+                f"but an order of this strategy is still working on the order book ({names}). "
+                "No new stop is placed beside it. Check the order book now; the 14:55 square-off "
+                "closes the position."
+            )
         return await self._restore_stop(pos, symbol, min(pos.quantity, held))
 
     async def _restore_stop(self, pos, symbol: str, qty: int) -> str:
@@ -2909,6 +2961,7 @@ class PositionTracker:
         from signal_engine.config import settings as _settings
 
         pos.sl_order_id = ""  # the tracked id is the one this pass cancelled
+        no_new_stop = "No new stop will be placed before 14:55; the 14:55 square-off closes this position."
         if not _settings.bracket_enabled:
             return (
                 f"the position is open ({qty} shares) and its stop was cancelled by the time exit. "
@@ -2919,11 +2972,15 @@ class PositionTracker:
         left = None if hard is None else hard - _monotonic() - _ORDERBOOK_READ_WORST_S
         if not self._can_begin(_STOP_PLACE_MIN_S, pos.strategy, hard_only=True):
             logger.warning(f"Time exit: {symbol} [{pos.strategy}] no time left to place the stop again")
+            # Flagged: the poll's missing-stop retry leaves it to the 14:55 square-off.
+            pos.time_exit_left_open = True
             return (
                 f"the position is open ({qty} shares) and its stop was cancelled by the time exit. "
-                "There was no time left to place a new stop. It will be closed by the 14:55 square-off."
+                f"A protective stop could not be confirmed (no time was left to place one). {no_new_stop}"
             )
         logger.warning(f"Time exit: {symbol} [{pos.strategy}] stop cancelled, position open: placing the stop again")
+        key = (pos.strategy.upper(), pos.symbol.upper(), "SELL" if pos.direction == Direction.LONG else "BUY")
+        started = datetime.now(IST).replace(microsecond=0)  # taken before the send, as the executor does
         try:
             result = await asyncio.wait_for(
                 place_sl_order(
@@ -2932,14 +2989,22 @@ class PositionTracker:
                 ),
                 timeout=None if left is None else max(1.0, left),
             )
-        except Exception:  # includes the time-out of wait_for
+        except BaseException as exc:  # a cut or a cancelled task may leave the order at the broker
+            self._mark_stop_unconfirmed(key, started)
+            if not isinstance(exc, Exception):
+                pos.time_exit_left_open = True
+                raise  # CancelledError and the like propagate; the stop lock is released by the executor
             logger.exception(f"Time exit: placing the stop for {symbol} [{pos.strategy}] did not finish")
             result = None
         unconfirmed = (
-            f"the position is open ({qty} shares) and its stop was cancelled by the time exit. A new "
-            "stop could not be confirmed. It will be closed by the 14:55 square-off."
+            f"the position is open ({qty} shares) and its stop was cancelled by the time exit. "
+            f"A protective stop could not be confirmed (the broker did not confirm one). {no_new_stop}"
         )
         if result is None or result.status != OrderStatus.SUCCESS:
+            # An error or a time-out may still have left an order at the broker: the next
+            # place_sl_order for this stop reads the book first and adopts it.
+            self._mark_stop_unconfirmed(key, started)
+            pos.time_exit_left_open = True
             return unconfirmed
         pos.sl_order_id = result.order_id
         pos.sl_retry_count = 0
@@ -2949,12 +3014,23 @@ class PositionTracker:
             book = await fetch_orderbook()
         rows = self._working_orders(book, {pos.strategy}, {symbol}) if book is not None else []
         if not any(str(o.get("orderid") or o.get("order_id") or "") == result.order_id for o in rows):
+            pos.time_exit_left_open = True
             return unconfirmed
         return (
             f"the position is open ({qty} shares) and its stop was cancelled by the time exit. A new "
             f"stop was placed and confirmed on the order book (id {result.order_id}) at the same "
             "trigger price. The 14:55 square-off cancels it and closes the position."
         )
+
+    @staticmethod
+    def _mark_stop_unconfirmed(key: tuple, started: datetime) -> None:
+        """Record that a stop submission for `key` has an unknown outcome, as the executor does when
+        its own send times out: the next place_sl_order for the key reads the book first, adopts a
+        stop that landed and sends nothing within the resend grace."""
+        _UNCONFIRMED_SL.add(key)
+        _EPISODE_START.setdefault(key, started)
+        _PENDING_DUPLICATE_STOPS.add(key, "")
+        _LAST_UNKNOWN_SEND[key] = time.monotonic()
 
     @staticmethod
     def _is_stop_row(row: dict, pos) -> bool:
@@ -3068,18 +3144,20 @@ class PositionTracker:
         for k, p in self._positions.items():
             if (
                 k == key
-                or k in self._square_off_orders
                 or (p.symbol, p.exchange, p.product) != (pos.symbol, pos.exchange, pos.product)
             ):
                 continue
-            if self._exit_uncertain(p):
+            if k in self._square_off_orders or self._exit_uncertain(p):
                 if book is None:
                     book = (
                         await fetch_orderbook()
                         if self._can_begin(_ORDERBOOK_READ_WORST_S, pos.strategy)
                         else None
                     ) or []
-                if self._uncertain_exit_filled(p, book):
+                if k in self._square_off_orders:
+                    if self._close_complete(k, book):
+                        continue  # the book shows its close complete: not another holder's
+                elif self._uncertain_exit_filled(p, book):
                     continue  # its shares already left the broker's net: not another holder's
             others += p.quantity if p.direction == Direction.LONG else -p.quantity
         own = net - others
@@ -3236,6 +3314,9 @@ class PositionTracker:
         pending = [(k, p) for k, p in mis_positions.items() if p.strategy not in skipped]
         if not pending:
             return left_open
+        # A leg whose exit order was sent and whose result is unknown (held) may still fill: it is
+        # read, but never cancelled or closed again here, and it is reported once per strategy.
+        held_open: set[str] = set()
 
         for attempt in range(1, _MAX_CLOSE_ATTEMPTS + 1):
             pending_strategies = {pos.strategy for _, pos in pending}
@@ -3261,10 +3342,15 @@ class PositionTracker:
                     unread.append(pos)
                 elif qty != 0:
                     still_open.append((k, pos))
+            held_now = [(k, p) for k, p in still_open if self._exit_uncertain(p)]
+            if held_now:
+                held_open |= {k for k, _ in held_now}
+                still_open = [(k, p) for k, p in still_open if k not in held_open]
+                await self._alert_held_exits(held_now)
             if out_of_time:
                 if unread:
                     await self._report_unverified_close(unread)
-                return await self._unverified_at_deadline(left_open, still_open, out_of_time)
+                return await self._unverified_at_deadline(left_open | held_open, still_open, out_of_time)
 
             if unread:
                 await self._report_unverified_close(unread)
@@ -3274,7 +3360,7 @@ class PositionTracker:
                     f"Time exit: {len(pending)} position(s) confirmed closed at broker "
                     f"(attempt {attempt})"
                 )
-                return left_open
+                return left_open | held_open
 
             pending = still_open
             logger.warning(
@@ -3283,7 +3369,9 @@ class PositionTracker:
                 + ", ".join(pos.symbol for _, pos in still_open)
             )
             if attempt < _MAX_CLOSE_ATTEMPTS:
-                for strategy in sorted({pos.strategy for _, pos in still_open} - skipped):
+                held_strategies = {p.strategy for k, p in mis_positions.items() if k in held_open}
+                for strategy in sorted({pos.strategy for _, pos in still_open} - skipped - held_strategies):
+                    # (a strategy with a held leg is not cancelled again: that cancels its exit order)
                     symbols = {pos.symbol for _, pos in still_open if pos.strategy == strategy}
                     # A new cancel-and-close cycle needs the soft budget, as the first one did.
                     if not self._can_begin(_ORDERBOOK_READ_WORST_S, strategy, new_work=True):
@@ -3307,7 +3395,22 @@ class PositionTracker:
             f"TIME EXIT FAILED: {symbols_str} not closed after {_MAX_CLOSE_ATTEMPTS} attempts. "
             f"Close manually before 15:20!"
         )
-        return left_open | {k for k, _ in pending}
+        return left_open | held_open | {k for k, _ in pending}
+
+    async def _alert_held_exits(self, held: list) -> None:
+        """The one time-exit alert per strategy and pass for legs whose exit result is not known."""
+        for strategy in sorted({p.strategy for _, p in held}):
+            if strategy in self._skip_alerted:
+                continue  # this strategy's alert for the pass has already gone out
+            self._skip_alerted.add(strategy)
+            names = sorted({p.symbol for _, p in held if p.strategy == strategy})
+            logger.critical(f"Time exit: exit order result not known for {strategy}: {', '.join(names)}; held")
+            one = len(names) == 1
+            await notifier.notify(
+                f"TIME EXIT {strategy}: the exit order for {', '.join(names)} was sent but "
+                f"{'its result is' if one else 'their results are'} not known. Do not exit by hand "
+                "while it may still fill. The 14:55 square-off closes anything left open."
+            )
 
     async def _unverified_at_deadline(self, left_open: set, still_open: list, unverified: list) -> set:
         """The hard deadline came before every close could be checked.
