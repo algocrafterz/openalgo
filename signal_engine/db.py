@@ -391,9 +391,13 @@ EXIT_BAD_FILL_CLOSE = "BAD_FILL_CLOSE"
 
 #: Exit types that are a trade and real money but NOT a decided win or loss: the clock (TIME) or
 #: the execution guard (BAD_FILL_CLOSE) closed the position, which is no evidence about the entry
-#: rule. Win rate and average R leave them out; trade counts and net P&L keep them. One set, so
-#: the headline summary and the per-strategy lines cannot disagree.
-NOT_DECIDED_EXIT_TYPES = frozenset({"TIME", EXIT_BAD_FILL_CLOSE})
+#: rule. SQUAREOFF is a close the tracker found at the broker that neither its own stop nor its own
+#: time exit made (a failsafe or broker square-off): the same, no evidence about the rule. Win rate
+#: and average R leave them out; trade counts and net P&L keep them. One set, so the headline
+#: summary and the per-strategy lines cannot disagree.
+NOT_DECIDED_EXIT_TYPES = frozenset({"TIME", "SQUAREOFF", EXIT_BAD_FILL_CLOSE})
+#: The closes the summary counts as time exits ("T:"): the clock or the square-off, not the rule.
+TIME_EXIT_TYPES = frozenset({"TIME", "SQUAREOFF"})
 EXIT_ENTRY_REJECTED_SLIPPAGE = "ENTRY_REJECTED_SLIPPAGE"
 EXIT_ENTRY_REJECTED_TP_OVERSHOT = "ENTRY_REJECTED_TP_OVERSHOT"
 EXIT_ENTRY_REJECTED_STOP_BREACHED = "ENTRY_REJECTED_STOP_BREACHED"
@@ -705,7 +709,7 @@ def _exit_class(payload: dict, types: list) -> str:
         return explicit
     if payload.get("execution_exit") is True:
         return EXIT_BAD_FILL_CLOSE
-    if "TIME" in types:
+    if "TIME" in types or "SQUAREOFF" in types:
         return "TIME_EXIT"
     if payload.get("reconciled") is True:
         return "RECONCILED"

@@ -140,6 +140,11 @@ _MAX_UNKNOWN_SENDS = 2
 #: A stop that landed AND fired after that moment is adopted instead of replaced.
 _EPISODE_START: dict[tuple, datetime] = {}
 
+#: Keys the time exit marked unconfirmed (tracker._mark_stop_unconfirmed). The duplicate-stop
+#: resolver keeps their _UNCONFIRMED_SL flag even when the book shows 0 or 1 live stop, so the
+#: next place_sl_order reads the book and adopts a late stop before any send.
+_SCAN_BEFORE_CLEAR: set[tuple] = set()
+
 #: loop -> {(strategy, symbol, action): Lock}. Locks bind to the loop that first waits on them,
 #: so they are kept per loop; one stop submission per key runs at a time.
 _STOP_LOCKS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
@@ -156,6 +161,21 @@ def _stop_lock(key) -> asyncio.Lock:
 def _end_episode(key) -> None:
     _EPISODE_START.pop(key, None)
     _LAST_UNKNOWN_SEND.pop(key, None)
+    if key in _SCAN_BEFORE_CLEAR:
+        # The stop was scanned for and adopted or sent; the resolver's pass has settled the key
+        # unless it is still pending, in which case it clears the flag itself on a later pass.
+        _SCAN_BEFORE_CLEAR.discard(key)
+        if key not in _PENDING_DUPLICATE_STOPS:
+            _UNCONFIRMED_SL.discard(key)
+
+
+def _clear_unconfirmed(key) -> None:
+    """Drop the unconfirmed flag, except for a key the time exit marked: that one stays until
+    place_sl_order has read the book and adopted a stop that landed (it ends the episode)."""
+    if key in _SCAN_BEFORE_CLEAR and key in _UNCONFIRMED_SL:
+        return
+    _SCAN_BEFORE_CLEAR.discard(key)
+    _UNCONFIRMED_SL.discard(key)
 
 
 def round_to_tick(price: float, direction: str = "nearest") -> float:
@@ -664,7 +684,7 @@ async def _reconcile_pending_key(key: tuple, entry, book: list, api_client) -> b
     if len(live) <= 1:
         keep = entry.keep_id
         if not live or not keep or live[0] == keep:
-            _UNCONFIRMED_SL.discard(key)
+            _clear_unconfirmed(key)
             return True
         if keep not in status_by_id and time.monotonic() - entry.since < _KEEP_LAG_TTL_S:
             return False  # the kept stop may still be landing; the lone live stop may be a twin
@@ -673,7 +693,7 @@ async def _reconcile_pending_key(key: tuple, entry, book: list, api_client) -> b
                 f"Duplicate SL watch for {symbol} [{strategy}] dropped: kept stop {keep} never appeared "
                 f"on the book in {_KEEP_LAG_TTL_S:.0f}s (live: {live})"
             )
-        _UNCONFIRMED_SL.discard(key)
+        _clear_unconfirmed(key)
         return True
     keep = entry.keep_id if entry.keep_id in live else live[0]
     entry.keep_id = keep
@@ -892,7 +912,7 @@ async def cancel_live_protective_orders(
     targets = [_order_id(o) for o in protective_orders(book, symbol, strategy, action)]
     targets = [t for t in targets if t != keep_id]
     if not targets:
-        _UNCONFIRMED_SL.discard(key)
+        _clear_unconfirmed(key)
         return StopSweep(clear=True)
 
     for order_id in targets:
@@ -921,7 +941,7 @@ async def cancel_live_protective_orders(
         and _order_status(o) in ("complete", "partially filled")
     )
     if not still_live:
-        _UNCONFIRMED_SL.discard(key)
+        _clear_unconfirmed(key)
     status_by_id = {_order_id(o): _order_status(o) for o in book if isinstance(o, dict)}
     confirmed = tuple(t for t in targets if status_by_id.get(t) in _DEAD_ORDER_STATUSES)
     return StopSweep(

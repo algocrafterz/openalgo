@@ -26,7 +26,7 @@ class TestTimeExitCncAwareness:
         tracker.register(_make_position(symbol="HDFCBANK", strategy=RSI_TP_MR, product="CNC"))
 
         with (
-            patch("signal_engine.tracker.cancel_all_orders", new_callable=AsyncMock),
+            patch("signal_engine.api_client.cancel_all_orders", new_callable=AsyncMock),
             patch.object(PositionTracker, "_close_strategy", new_callable=AsyncMock),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=0),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
@@ -48,7 +48,7 @@ class TestTimeExitCncAwareness:
         tracker.register(_make_position(symbol="TCS", strategy=ORB, product="MIS"))
 
         with (
-            patch("signal_engine.tracker.cancel_all_orders", new_callable=AsyncMock),
+            patch("signal_engine.api_client.cancel_all_orders", new_callable=AsyncMock),
             patch.object(PositionTracker, "_close_strategy", new_callable=AsyncMock),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=0),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
@@ -74,7 +74,7 @@ class TestTimeExitCncAwareness:
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB, product="MIS"))
 
         with (
-            patch("signal_engine.tracker.cancel_all_orders", new_callable=AsyncMock),
+            patch("signal_engine.api_client.cancel_all_orders", new_callable=AsyncMock),
             patch.object(PositionTracker, "_close_strategy", new_callable=AsyncMock),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=0),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=-500.0),
@@ -101,7 +101,7 @@ class TestTimeExitVerification:
         mock_close = AsyncMock()
         mock_cancel = AsyncMock()
         with (
-            patch("signal_engine.tracker.cancel_all_orders", mock_cancel),
+            patch("signal_engine.api_client.cancel_all_orders", mock_cancel),
             patch.object(PositionTracker, "_close_strategy", mock_close),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=0),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
@@ -126,7 +126,7 @@ class TestTimeExitVerification:
         mock_close = AsyncMock()
         mock_cancel = AsyncMock()
         with (
-            patch("signal_engine.tracker.cancel_all_orders", mock_cancel),
+            patch("signal_engine.api_client.cancel_all_orders", mock_cancel),
             patch.object(PositionTracker, "_close_strategy", mock_close),
             patch("signal_engine.tracker.fetch_net_position", mock_open_pos),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
@@ -151,7 +151,7 @@ class TestTimeExitVerification:
         mock_open_pos = AsyncMock(return_value=50)
         mock_notify = AsyncMock()
         with (
-            patch("signal_engine.tracker.cancel_all_orders", new_callable=AsyncMock),
+            patch("signal_engine.api_client.cancel_all_orders", new_callable=AsyncMock),
             patch.object(PositionTracker, "_close_strategy", new_callable=AsyncMock),
             patch("signal_engine.tracker.fetch_net_position", mock_open_pos),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
@@ -179,7 +179,7 @@ class TestTimeExitVerification:
         tracker.register(_make_position(symbol="RELIANCE", strategy=ORB, product="MIS"))
 
         with (
-            patch("signal_engine.tracker.cancel_all_orders", new_callable=AsyncMock),
+            patch("signal_engine.api_client.cancel_all_orders", new_callable=AsyncMock),
             patch.object(PositionTracker, "_close_strategy", new_callable=AsyncMock),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=None),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
@@ -210,7 +210,7 @@ class TestTimeExitVerificationReadings:
         mock_close = AsyncMock()
         mock_notify = AsyncMock()
         with (
-            patch("signal_engine.tracker.cancel_all_orders", new_callable=AsyncMock),
+            patch("signal_engine.api_client.cancel_all_orders", new_callable=AsyncMock),
             patch.object(PositionTracker, "_close_strategy", mock_close),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=-1),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),
@@ -235,7 +235,7 @@ class TestTimeExitVerificationReadings:
 
         mock_notify = AsyncMock()
         with (
-            patch("signal_engine.tracker.cancel_all_orders", new_callable=AsyncMock),
+            patch("signal_engine.api_client.cancel_all_orders", new_callable=AsyncMock),
             patch.object(PositionTracker, "_close_strategy", new_callable=AsyncMock),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=None),
             patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=0.0),

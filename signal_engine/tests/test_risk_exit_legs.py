@@ -60,7 +60,7 @@ async def test_time_exit_books_only_the_closing_leg_when_earlier_legs_exist():
     pos.realized_pnl = 500.0  # an earlier leg, already booked when it filled
     tracker.register(pos)
     with (
-        patch("signal_engine.tracker.cancel_all_orders", new_callable=AsyncMock),
+        patch("signal_engine.api_client.cancel_all_orders", new_callable=AsyncMock),
         patch.object(PositionTracker, "_close_strategy", new_callable=AsyncMock),
         patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=0),
         patch("signal_engine.tracker.fetch_realised_pnl", new_callable=AsyncMock, return_value=-300.0),

@@ -1,7 +1,7 @@
 """Time exit (14:45): a stop must not be left working after the flatten.
 
-Call path: tracker.time_exit_all -> _square_off_strategies (cancel_all_orders, one retry if it
-fails; the order book must then show no working order of the strategy, re-cancelling by id, BEFORE
+Call path: tracker.time_exit_all -> _square_off_strategies (cancel of the strategy's own working
+orders by order id, one retry if it fails; never the broker-wide cancel-all, BUG-019; the order book must then show no working order of the strategy, re-cancelling by id, BEFORE
 _close_strategy) -> _verify_positions_closed (re-check each symbol; the same confirmation
 before any re-close) -> _confirm_orders_cancelled.
 
@@ -47,8 +47,8 @@ async def _time_exit(cancel_results, books, broker_qty=0):
     engine._state(STRAT).open_positions = 1
     tracker = PositionTracker(engine)
     tracker.register(_make_position(symbol="PFC", strategy=STRAT, product="MIS"))
-    cancel = AsyncMock(side_effect=list(cancel_results) + [True] * 10)
-    cancel_one = AsyncMock(return_value=True)  # re-cancels of working orders go by order id
+    cancel = AsyncMock(return_value=True)  # cancel_all_orders: must never be awaited (BUG-019)
+    cancel_one = AsyncMock(side_effect=list(cancel_results) + [True] * 10)  # cancels go by order id
     close = AsyncMock(return_value=True)
     seq = list(books)
 
@@ -56,8 +56,9 @@ async def _time_exit(cancel_results, books, broker_qty=0):
         return seq.pop(0) if len(seq) > 1 else seq[0]
 
     with (
-        patch("signal_engine.tracker.cancel_all_orders", cancel),
+        patch("signal_engine.api_client.cancel_all_orders", cancel),
         patch("signal_engine.tracker.cancel_order", cancel_one),
+        patch("signal_engine.tracker.fetch_order_status", new_callable=AsyncMock, return_value=""),
         patch.object(PositionTracker, "_close_strategy", close),
         patch(
             "signal_engine.tracker.fetch_net_position",
@@ -71,6 +72,7 @@ async def _time_exit(cancel_results, books, broker_qty=0):
     ):
         await tracker.time_exit_all()
     tracker.cancel_one = cancel_one  # test handle on the by-id cancels
+    assert cancel.await_count == 0  # the broker-wide cancel-all is never used
     return tracker, cancel, close, notifier
 
 
@@ -81,18 +83,19 @@ def _alerts(notifier) -> str:
 @pytest.mark.asyncio
 class TestTimeExitStopNotLeftWorking:
     async def test_clean_cancel_is_unchanged_one_cancel_one_close(self):
-        tracker, cancel, close, notifier = await _time_exit([True], books=[[_order("cancelled")]])
-        assert cancel.await_count == 1 and close.await_count == 1
+        tracker, cancel, close, notifier = await _time_exit(
+            [True], books=[[_order()], [_order("cancelled")]]
+        )
+        assert tracker.cancel_one.await_count == 1 and close.await_count == 1
         assert tracker.tracked_count == 0
         assert "not confirmed cancelled" not in _alerts(notifier)
 
     async def test_api_success_is_not_proof_the_book_decides(self):
         # cancel API says success, but the order book still shows the SL-M working once
         tracker, cancel, close, notifier = await _time_exit(
-            [True], books=[[_order()], [_order("cancelled")]]
+            [True], books=[[_order()], [_order()], [_order("cancelled")]]
         )
-        assert cancel.await_count == 1
-        assert tracker.cancel_one.await_count == 1  # re-cancelled by id: the book disagreed
+        assert tracker.cancel_one.await_count == 2  # first cancel + re-cancel: the book disagreed
         assert close.await_count == 1
         assert "not confirmed cancelled" not in _alerts(notifier)
 
@@ -102,22 +105,23 @@ class TestTimeExitStopNotLeftWorking:
             [True], books=[[_order()]], broker_qty=0
         )
         assert close.await_count == 0
-        assert cancel.await_count == 1
-        assert tracker.cancel_one.await_count == 3  # three re-cancels by id, then escalate
+        assert tracker.cancel_one.await_count == 1 + 3  # first cancel, three re-cancels, escalate
         alert = _alerts(notifier)
         assert "not confirmed cancelled" in alert and "id=SL1" in alert
 
     async def test_cancel_api_failed_but_stop_already_gone_needs_nothing_more(self):
         # the stop filled before the cancel: API fails twice (incl. the pre-close retry), book is clean
-        _, cancel, close, notifier = await _time_exit([False, False], books=[[_order("complete")]])
-        assert cancel.await_count == 2 and close.await_count == 1
+        tracker, cancel, close, notifier = await _time_exit(
+            [False, False], books=[[_order()], [_order()], [_order("complete")]]
+        )
+        assert tracker.cancel_one.await_count == 2 and close.await_count == 1
         assert "not confirmed cancelled" not in _alerts(notifier)
 
     async def test_unreadable_order_book_is_unconfirmed_and_alerts(self):
         tracker, cancel, close, notifier = await _time_exit([True], books=[None])
         assert close.await_count == 0
-        assert cancel.await_count == 1 + 3  # no order ids to use: falls back to cancel-all
-        assert tracker.cancel_one.await_count == 0
+        assert cancel.await_count == 0  # no cancel-all fallback on an unreadable book
+        assert tracker.cancel_one.await_count == 0  # and nothing to cancel by id
         assert "could not be read" in _alerts(notifier)
 
     async def test_other_strategies_and_finished_orders_are_ignored(self):
@@ -126,13 +130,13 @@ class TestTimeExitStopNotLeftWorking:
             _order("rejected"),
             _order("complete"),
         ]
-        _, cancel, close, notifier = await _time_exit([True], books=[book])
-        assert cancel.await_count == 1
+        tracker, cancel, close, notifier = await _time_exit([True], books=[book])
+        assert tracker.cancel_one.await_count == 0  # none of these is ours: nothing cancelled
         assert "not confirmed cancelled" not in _alerts(notifier)
 
     async def test_untagged_mis_stop_on_a_squared_off_symbol_counts_as_ours(self):
         tracker, cancel, close, notifier = await _time_exit([True], books=[[_order(strategy="")]])
-        assert cancel.await_count == 1 and tracker.cancel_one.await_count == 3
+        assert tracker.cancel_one.await_count == 1 + 3
         assert close.await_count == 0
         assert "not confirmed cancelled" in _alerts(notifier)
 
@@ -160,7 +164,7 @@ class TestCancelAllSkipsTriggerPending:
         cancel_all = AsyncMock(return_value=True)  # "success", but cancels nothing (the core bug)
         cancel_one = AsyncMock(side_effect=cancel_by_id)
         with (
-            patch("signal_engine.tracker.cancel_all_orders", cancel_all),
+            patch("signal_engine.api_client.cancel_all_orders", cancel_all),
             patch("signal_engine.tracker.cancel_order", cancel_one),
             patch.object(
                 PositionTracker,
@@ -209,7 +213,7 @@ class TestNoCloseBesideAnUnconfirmedStop:
         tracker = PositionTracker(engine)
         tracker.register(_make_position(symbol="PFC", strategy=STRAT, product="MIS"))
         with (
-            patch("signal_engine.tracker.cancel_all_orders", AsyncMock(return_value=True)),
+            patch("signal_engine.api_client.cancel_all_orders", AsyncMock(return_value=True)),
             patch("signal_engine.tracker.cancel_order", AsyncMock(side_effect=cancel_by_id)),
             patch.object(PositionTracker, "_close_strategy", AsyncMock(side_effect=close)),
             patch("signal_engine.tracker.fetch_net_position", new_callable=AsyncMock, return_value=0),
@@ -224,7 +228,7 @@ class TestNoCloseBesideAnUnconfirmedStop:
     async def test_a_skipped_position_keeps_its_stop_and_its_tracking(self):
         tracker, cancel, close, notifier = await _time_exit([True], books=[[_order()]], broker_qty=50)
         assert close.await_count == 0
-        assert tracker.cancel_one.await_count == 3  # the pre-close attempts only: no later sweep
+        assert tracker.cancel_one.await_count == 1 + 3  # the pre-close attempts only: no later sweep
         assert tracker.tracked_count == 1  # left for the poll to book the stop or broker close
         alert = _alerts(notifier)
         assert "TIME EXIT SKIPPED" in alert and STRAT in alert and "id=SL1" in alert
@@ -249,7 +253,7 @@ class TestNoCloseBesideAnUnconfirmedStop:
             return open_qty[symbol]
 
         with (
-            patch("signal_engine.tracker.cancel_all_orders", AsyncMock(return_value=True)),
+            patch("signal_engine.api_client.cancel_all_orders", AsyncMock(return_value=True)),
             patch("signal_engine.tracker.cancel_order", AsyncMock(return_value=True)),
             patch.object(PositionTracker, "_close_strategy", close),
             patch("signal_engine.tracker.fetch_net_position", AsyncMock(side_effect=qty)),
@@ -265,7 +269,7 @@ class TestNoCloseBesideAnUnconfirmedStop:
 
     async def test_a_retry_close_also_waits_for_a_confirmed_cancel(self):
         """First close leaves the position open; a stop reappears before the retry: no re-close."""
-        books = [[], [_order()]]  # clean before the first close; a stop has landed by the retry
+        books = [[], [_order()]]  # clean before the first close (one read); a stop has landed by the retry
         tracker, cancel, close, notifier = await _time_exit([True], books=books, broker_qty=50)
         assert close.await_count == 1
         assert "TIME EXIT SKIPPED" in _alerts(notifier)
