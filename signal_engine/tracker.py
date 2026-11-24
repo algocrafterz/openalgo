@@ -25,6 +25,7 @@ from signal_engine.executor import (
     _EPISODE_START,
     _LAST_UNKNOWN_SEND,
     _PENDING_DUPLICATE_STOPS,
+    _SCAN_BEFORE_CLEAR,
     _UNCONFIRMED_SL,
     HOLD_MESSAGE,
     adopt_resting_stop,
@@ -2565,12 +2566,13 @@ class PositionTracker:
                     "its closes. They are booked by the next position check."
                 )
             elif closed:
-                # A leg whose exit order result is unknown may still fill, and the sweep cancels by
-                # strategy: it skips a strategy that has such a leg, so that exit order stays.
-                held = {p.strategy for p in closed.values() if self._exit_uncertain(p)}
-                sweep = {k: p for k, p in closed.items() if p.strategy not in held}
+                # A leg whose exit order result is unknown may still fill: the sweep never lists or
+                # cancels that leg's orders (its strategy and symbol), so the exit order stays. The
+                # strategy's other legs are still swept and confirmed.
+                held = {(p.strategy, p.symbol.upper()) for p in closed.values() if self._exit_uncertain(p)}
+                sweep = {k: p for k, p in closed.items() if (p.strategy, p.symbol.upper()) not in held}
                 if sweep:
-                    await self._confirm_orders_cancelled(sweep, uncancelled - skipped)
+                    await self._confirm_orders_cancelled(sweep, uncancelled - skipped, held)
                 await self._book_time_exit_trades(closed, _settings, started, still_open)
         finally:
             self._time_exit_active = False
@@ -2937,6 +2939,8 @@ class PositionTracker:
             # Any working order of this strategy on the symbol (a LIMIT target whose cancel failed,
             # a close, a stop of another kind): a stop beside it could reverse the position.
             pos.time_exit_left_open = True  # only the 14:55 square-off acts on it
+            # The cancelled stop's id stays in pos.sl_order_id, so the missing-stop retry (which
+            # needs it empty) does not resume for this leg after 15:00: the square-off closes it.
             names = ", ".join(
                 f"{o.get('pricetype') or o.get('price_type') or 'order'} "
                 f"{o.get('orderid') or o.get('order_id') or '?'}"
@@ -3028,6 +3032,7 @@ class PositionTracker:
         its own send times out: the next place_sl_order for the key reads the book first, adopts a
         stop that landed and sends nothing within the resend grace."""
         _UNCONFIRMED_SL.add(key)
+        _SCAN_BEFORE_CLEAR.add(key)  # the duplicate-stop resolver may not clear the flag unscanned
         _EPISODE_START.setdefault(key, started)
         _PENDING_DUPLICATE_STOPS.add(key, "")
         _LAST_UNKNOWN_SEND[key] = time.monotonic()
@@ -3191,16 +3196,26 @@ class PositionTracker:
         )
 
     @staticmethod
-    def _working_orders(book, strategies: set[str], symbols: set[str]) -> list[dict]:
+    def _working_orders(
+        book, strategies: set[str], symbols: set[str], held: frozenset = frozenset()
+    ) -> list[dict]:
         """Orders still working at the broker for the squared-off strategies.
 
         Matches the order's strategy tag; a row without one counts when it is an MIS order on a
         squared-off symbol (a stop we cannot attribute is treated as ours, the safe direction).
+        `held` is {(strategy, SYMBOL)} of legs whose exit order may still fill: their orders are
+        never listed, so they are never cancelled.
         """
         working = []
+        held_symbols = {sym for _, sym in held}
         for o in book or []:
             if not isinstance(o, dict):
                 continue
+            if held:
+                row_symbol = str(o.get("symbol") or "").upper()
+                row_tag = str(o.get("strategy") or "").strip()
+                if (row_tag, row_symbol) in held or (not row_tag and row_symbol in held_symbols):
+                    continue
             status = str(o.get("order_status") or o.get("status") or "").lower()
             if status not in _WORKING_ORDER_STATUSES:
                 continue
@@ -3214,7 +3229,9 @@ class PositionTracker:
                 working.append(o)
         return working
 
-    async def _confirm_orders_cancelled(self, mis_positions: dict, uncancelled: set[str]) -> None:
+    async def _confirm_orders_cancelled(
+        self, mis_positions: dict, uncancelled: set[str], held: frozenset = frozenset()
+    ) -> None:
         """After the flatten, confirm from the broker's ORDER BOOK that no order of the squared-off
         strategies is still working; a cancel API "success" is not taken as proof.
 
@@ -3227,7 +3244,7 @@ class PositionTracker:
         symbols = {pos.symbol for pos in mis_positions.values()}
         if uncancelled:
             logger.warning(f"Time exit: cancel not acknowledged for {', '.join(sorted(uncancelled))}")
-        cleared, detail = await self._clear_working_orders(strategies, symbols)
+        cleared, detail = await self._clear_working_orders(strategies, symbols, held=held)
         if cleared:
             return
         logger.critical(
@@ -3241,7 +3258,8 @@ class PositionTracker:
         )
 
     async def _clear_working_orders(
-        self, strategies: set[str], symbols: set[str], first_book: list | None = None
+        self, strategies: set[str], symbols: set[str], first_book: list | None = None,
+        held: frozenset = frozenset(),
     ) -> tuple[bool, str]:
         """Re-cancel until the order book shows no working order of `strategies` on `symbols`.
 
@@ -3261,7 +3279,7 @@ class PositionTracker:
                 budget_gone = True
                 break
             book = first_book if attempt == 0 and first_book is not None else await fetch_orderbook()
-            working = self._working_orders(book, strategies, symbols)
+            working = self._working_orders(book, strategies, symbols, held)
             if book is not None and not working:
                 if attempt:
                     logger.info(f"Time exit: no working orders left for {', '.join(sorted(strategies))}")
@@ -3322,7 +3340,7 @@ class PositionTracker:
             pending_strategies = {pos.strategy for _, pos in pending}
             left = self._work_left(pending_strategies)
             if left <= 0:
-                return await self._unverified_at_deadline(left_open, pending, [])
+                return await self._unverified_at_deadline(left_open | held_open, pending, [])
             await asyncio.sleep(min(_VERIFY_WAIT, left))  # a wait never runs past the deadline
             still_open = []
             unread = []

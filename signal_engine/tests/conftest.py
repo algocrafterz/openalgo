@@ -194,12 +194,14 @@ def _fresh_unconfirmed_stop_registry(monkeypatch):
     executor._PENDING_DUPLICATE_STOPS.clear()
     executor._LAST_UNKNOWN_SEND.clear()
     executor._EPISODE_START.clear()
+    executor._SCAN_BEFORE_CLEAR.clear()
     _wipe_order_reconcile()
     yield
     executor._UNCONFIRMED_SL.clear()
     executor._PENDING_DUPLICATE_STOPS.clear()
     executor._LAST_UNKNOWN_SEND.clear()
     executor._EPISODE_START.clear()
+    executor._SCAN_BEFORE_CLEAR.clear()
     _wipe_order_reconcile()
 
 
