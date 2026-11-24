@@ -68,6 +68,31 @@ def _connect_read_only(db_path: str, *, wait: float | None = None, poll: float |
             logger.warning("historify.duckdb is locked by another process; waiting %.0fs", poll)
             time.sleep(poll)
 
+#: BUG-030: the write side of the same lock. database.historify_db.get_connection tries three
+#: times over ~1.5 s and re-raises the last duckdb.IOException ("Could not set lock ...
+#: Conflicting lock is held in ..."); upsert_market_data re-raises it unchanged. 2026-11-17
+#: 15:41:55 the app held the file just long enough to fail COALINDIA's chunk. Retry the write
+#: 5 times with 2, 4, 8, 16 s sleeps (~30 s); any other error, or the last lock error, propagates.
+WRITE_LOCK_SLEEPS = (2, 4, 8, 16)
+_sleep = time.sleep
+
+
+def _write_with_lock_retry(write, df, symbol, exchange, interval):
+    import duckdb
+
+    attempts = len(WRITE_LOCK_SLEEPS) + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            return write(df, symbol, exchange, interval)
+        except duckdb.IOException as exc:
+            if "Could not set lock" not in str(exc) or attempt == attempts:
+                raise
+            wait = WRITE_LOCK_SLEEPS[attempt - 1]
+            logger.warning("historify.duckdb write locked for %s (attempt %d/%d); retrying in %ds",
+                           symbol, attempt, attempts, wait)
+            _sleep(wait)
+
+
 #: About one calendar month per request. ~7,500 one-minute bars against a cap near 58,000 -
 #: deliberately conservative, because the failure mode is silent.
 #:
@@ -318,7 +343,8 @@ def backfill(symbols: list[str], start: str, end: str | None = None, *,
                                 f"{sym} {c0}..{c1}: {mism}/{n} overlapping bars disagree "
                                 f"with the existing store by >{COMPARE_TOLERANCE_PCT:.1f}% "
                                 f"(worst {worst:.2f}%) - new source is replacing them")
-                    res.stored += upsert_market_data(df, sym, exchange, interval)
+                    res.stored += _write_with_lock_retry(
+                        upsert_market_data, df, sym, exchange, interval)
                     res.chunks_ok += 1
                     ts = pd.to_datetime(df["timestamp"], unit="s", utc=True).dt.tz_convert(
                         "Asia/Kolkata")
