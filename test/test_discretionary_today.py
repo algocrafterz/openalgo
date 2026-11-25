@@ -488,3 +488,16 @@ def test_exit_classified_by_a_later_sync_completes_the_position_on_the_next_read
     assert (t["completed_positions"], t["open_positions"], t["realized_gross"]) == (1, 0, 450)
     assert t["pending_attribution"]["grace_count"] == 0
     assert_reconciles(after)
+
+
+def test_intraday_overlay_does_not_change_the_today_block_or_totals(env):
+    env.fill("BUY", 25, 100, d(17, 9, 30))
+    env.fill("BUY", 20, 103, d(17, 10, 0), state="unresolved")
+    out = perf(with_quotes=True)
+    # the confirmed 'today' block still shows only the confirmed 25
+    t = out["today"]
+    assert t["open_positions"] == 1 and t["open_position_rows"][0]["open_qty"] == 25
+    assert t["pending_attribution"]["grace_count"] + t["pending_attribution"]["other_total"] == 1
+    # the overlay is an extra block that combines both
+    assert out["intraday"]["positions"][0]["quantity"] == 45
+    assert out["intraday"]["totals"]["pending_fills"] == 1

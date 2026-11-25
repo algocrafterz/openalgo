@@ -1536,10 +1536,94 @@ def position_excursion(
     }
 
 
+# Capture and giveback need a path the excursion actually observed. A position whose fills sit
+# in the same or in adjacent minutes has no full-candle bar strictly between its first and last
+# fill minutes, so its MFE comes from fill prices alone (a few traded prices, not a price
+# path). Such a position is left out of capture and giveback (its MFE and MAE stay shown).
+# "Reliable coverage" = the excursion is available (no missing and no invalid bar) AND at least
+# this many full-candle bars (``bars_used``) lie strictly between the first and last fill minutes.
+CAPTURE_MIN_BARS_BETWEEN_FILLS = 1
+
+# Why a position is outside the capture statistics, in the order the checks run.
+CAPTURE_REASON_TEXT = {
+    "net_unavailable": "charges not available, so net result unknown",
+    "not_net_winner": "not a net winner",
+    "excursion_unavailable": "price data not available",
+    "insufficient_candle_coverage": "no full candle between the first and last fill",
+    "mfe_not_positive": "no favourable move recorded",
+    "data_inconsistency": "exit price outside the recorded price path",
+}
+
+
+def position_realized_points(direction: str, fills: list[dict]) -> float | None:
+    """Realised GROSS points per unit of one closed position, on the in-force basis.
+
+    For every EXIT fill: ``sign * (exit price - average entry in force at that exit)`` with
+    ``sign`` +1 for LONG and -1 for SHORT. The average in force is the quantity-weighted
+    average of the entries made up to that exit (see ``_path_states``). The result is the
+    average of those values weighted by the exited quantity, divided by the total exited
+    quantity. It never uses the final average entry, so a scale-in after a partial exit does
+    not change what an earlier exit earned. Charges are money, not points: never deducted.
+    None when the direction is unknown or the fills are not a consistent path.
+    """
+    side = str(direction).upper()
+    if side not in ("LONG", "SHORT"):
+        return None
+    try:
+        states = _path_states(fills)
+    except ValueError:
+        return None
+    sign = 1.0 if side == "LONG" else -1.0
+    total = weighted = 0.0
+    for f, _qb, avg_before, _qa, _aa in states:
+        if f["role"] != "EXIT":
+            continue
+        qty = _num(f["qty"])
+        weighted += sign * (float(f["price"]) - avg_before) * qty
+        total += qty
+    return None if total <= 0 else weighted / total
+
+
+def position_capture(net_pnl, realized_points, excursion: dict) -> dict:
+    """Capture and giveback of one position, or the reason there is none.
+
+    ``capture`` = realised points / MFE points; ``giveback_points`` = MFE points - realised
+    points (both gross points per unit, both on the average-entry-in-force basis). Not capped.
+    Eligible only when ALL hold, checked in this order (the first failure is the reason):
+    net P&L after charges known (``net_unavailable``) and > 0 (``not_net_winner``); excursion
+    available (``excursion_unavailable``); ``bars_used`` >= ``CAPTURE_MIN_BARS_BETWEEN_FILLS``
+    (``insufficient_candle_coverage``); MFE > 0 (``mfe_not_positive``); realised points known
+    and not above the MFE (``data_inconsistency``: on this basis every exit price is itself
+    a point of the observed path, so it cannot happen with consistent inputs; such a row is
+    reported, never clipped). The MFE is a conservative lower bound.
+    """
+    out = {"realized_points": None, "capture": None, "giveback_points": None, "reason": None}
+    if realized_points is not None:
+        out["realized_points"] = _r(float(realized_points), 4)
+    if net_pnl is None:
+        out["reason"] = "net_unavailable"
+    elif clean_money(net_pnl) <= 0:
+        out["reason"] = "not_net_winner"
+    elif excursion.get("status") != "available" or excursion.get("mfe_points") is None:
+        out["reason"] = "excursion_unavailable"
+    elif int(excursion.get("bars_used") or 0) < CAPTURE_MIN_BARS_BETWEEN_FILLS:
+        out["reason"] = "insufficient_candle_coverage"
+    elif float(excursion["mfe_points"]) <= 0:
+        out["reason"] = "mfe_not_positive"
+    elif out["realized_points"] is None or out["realized_points"] > float(excursion["mfe_points"]):
+        out["reason"] = "data_inconsistency"
+    else:
+        mfe = float(excursion["mfe_points"])
+        out["capture"] = out["realized_points"] / mfe
+        out["giveback_points"] = _r(mfe - out["realized_points"], 4)
+    return out
+
+
 def profit_capture(net_pnl, gross_points, mfe_points) -> float | None:
     """Realised gross points per unit / MFE points, for a WINNER (net P&L > 0) only. None when
     the position is not a winner, the MFE is unavailable or the MFE is 0. Not capped: MFE is a
-    lower bound (see ``position_excursion``)."""
+    lower bound (see ``position_excursion``). Callers pass the in-force realised points (see
+    ``position_realized_points``); the coverage rule is in ``position_capture``."""
     if net_pnl is None or mfe_points is None or gross_points is None:
         return None
     if clean_money(net_pnl) <= 0 or float(mfe_points) <= 0:
@@ -1555,15 +1639,82 @@ def _dist(values: list[float], places: int = 4) -> dict:
     }
 
 
+def _instrument_key(row: dict) -> tuple:
+    return (row.get("symbol"), row.get("exchange"))
+
+
+def _group_points(items: list[dict]) -> dict:
+    return {
+        "mae_points": _dist([float(r["mae_points"]) for r in items]),
+        "mfe_points": _dist([float(r["mfe_points"]) for r in items]),
+        "mae_amount": _dist([float(r["mae_amount"]) for r in items], 2),
+        "mfe_amount": _dist([float(r["mfe_amount"]) for r in items], 2),
+    }
+
+
+def _reliable(row: dict) -> bool:
+    return (
+        row.get("status") == "available"
+        and row.get("mfe_points") is not None
+        and row.get("mae_points") is not None
+        and int(row.get("bars_used") or 0) >= CAPTURE_MIN_BARS_BETWEEN_FILLS
+    )
+
+
+def instrument_capture_stats(rows: list[dict]) -> dict:
+    """Capture statistics of ONE instrument's positions (never mixed with another).
+
+    ``positions`` N = every completed position given; ``captured`` n = those that entered the
+    capture statistics (``profit_capture`` not None); ``excluded`` = count per reason, so
+    n + sum(excluded) = N. Medians over those n only (capture as a fraction, giveback in gross
+    points). ``mae_over_half``: of the positions with reliable coverage and MFE > 0
+    (``denominator``), how many had MAE above half of MFE.
+    """
+    excluded: dict[str, int] = {}
+    captures: list[float] = []
+    givebacks: list[float] = []
+    for r in rows:
+        if r.get("profit_capture") is not None:
+            captures.append(float(r["profit_capture"]))
+            if r.get("giveback_points") is not None:
+                givebacks.append(float(r["giveback_points"]))
+        else:
+            key = r.get("capture_reason") or "excursion_unavailable"
+            excluded[key] = excluded.get(key, 0) + 1
+    base = [r for r in rows if _reliable(r) and float(r["mfe_points"]) > 0]
+    over = sum(1 for r in base if float(r["mae_points"]) > 0.5 * float(r["mfe_points"]))
+    return {
+        "positions": len(rows),
+        "captured": len(captures),
+        "excluded": dict(sorted(excluded.items())),
+        "excluded_total": sum(excluded.values()),
+        "median_capture": _r(_median(captures), 4),
+        "median_giveback_points": _r(_median(givebacks), 4),
+        "mae_over_half": {
+            "count": over,
+            "denominator": len(base),
+            "share": _r(over / len(base), 4) if base else None,
+        },
+        "basis": "gross points per unit, average entry in force; winners by net P&L",
+    }
+
+
 def excursion_aggregates(rows: list[dict]) -> dict:
     """Aggregates over per-position excursion results.
 
     Each row: ``status``, ``net_pnl``, ``mae_points``, ``mfe_points``, ``mae_amount``,
-    ``mfe_amount``, ``profit_capture``. Winners are net > 0, losers net < 0 (break-even and
-    no-net positions are in coverage only). Per group: average / median / count of MAE and MFE
-    in points and in rupees; ``profit_capture`` (winners only): average / median / count over
-    the winners where it is available. ``coverage``: ``available`` of ``total`` positions,
+    ``mfe_amount``, ``profit_capture`` and (for capture statistics) ``symbol``, ``exchange``,
+    ``bars_used``, ``giveback_points``, ``capture_reason``. Winners are net > 0, losers net < 0
+    (break-even and no-net positions are in coverage only). Per group: average / median / count
+    of MAE and MFE in points and in rupees. ``coverage``: ``available`` of ``total`` positions,
     plus the unavailable reasons.
+
+    Points and capture are never pooled across instruments (symbol + exchange). ``winners`` /
+    ``losers`` keep the rupee figures for the whole scope; their points figures and the winners'
+    ``profit_capture`` are filled only when the available positions are of ONE instrument
+    (``None`` otherwise).
+    ``instruments`` holds the per-instrument points, capture, giveback and MAE-over-half
+    statistics (see ``instrument_capture_stats``).
     """
     done = [r for r in rows if r.get("status") == "available"]
     reasons: dict[str, int] = {}
@@ -1572,23 +1723,44 @@ def excursion_aggregates(rows: list[dict]) -> dict:
             key = r.get("reason") or "unknown"
             reasons[key] = reasons.get(key, 0) + 1
 
+    def pick(side) -> list[dict]:
+        return [r for r in done if r.get("net_pnl") is not None and side(clean_money(r["net_pnl"]))]
+
+    keys = sorted({_instrument_key(r) for r in rows}, key=lambda k: (str(k[0]), str(k[1])))
+    single = len({_instrument_key(r) for r in done}) <= 1  # what the pooled figures cover
+    instruments = []
+    for key in keys:
+        mine = [r for r in rows if _instrument_key(r) == key]
+        mine_done = [r for r in mine if r.get("status") == "available"]
+        instruments.append(
+            {
+                "symbol": key[0],
+                "exchange": key[1],
+                "available": len(mine_done),
+                "winners": _group_points(
+                    [r for r in pick(lambda v: v > 0) if _instrument_key(r) == key]
+                ),
+                "losers": _group_points(
+                    [r for r in pick(lambda v: v < 0) if _instrument_key(r) == key]
+                ),
+                "capture": instrument_capture_stats(mine),
+            }
+        )
+
     def group(side) -> dict:
-        items = [
-            r for r in done if r.get("net_pnl") is not None and side(clean_money(r["net_pnl"]))
-        ]
-        return {
-            "mae_points": _dist([float(r["mae_points"]) for r in items]),
-            "mfe_points": _dist([float(r["mfe_points"]) for r in items]),
-            "mae_amount": _dist([float(r["mae_amount"]) for r in items], 2),
-            "mfe_amount": _dist([float(r["mfe_amount"]) for r in items], 2),
-        }
+        out = _group_points(pick(side))
+        if not single:
+            out["mae_points"] = out["mfe_points"] = None
+        return out
 
     winners = group(lambda v: v > 0)
     captures = [float(r["profit_capture"]) for r in done if r.get("profit_capture") is not None]
-    winners["profit_capture"] = _dist(captures)
+    winners["profit_capture"] = _dist(captures) if single else None
     return {
         "winners": winners,
         "losers": group(lambda v: v < 0),
+        "instrument_count": len(keys),
+        "instruments": instruments,
         "coverage": {
             "available": len(done),
             "total": len(rows),

@@ -522,7 +522,9 @@ def test_quotes_1_uses_the_mocked_quote_function_only(client, env, monkeypatch):
     seed(env)
     env.quotes[("ITC", "NSE")] = 410.0
     body = summary(client, quotes="1")
-    assert env.quote_calls == [("flattrade", [("ITC", "NSE")])]
+    # one call for the confirmed open position, one for the intraday overlay's pending UNRES
+    # fill (same quote path). The exact set is pinned so an extra symbol or call fails.
+    assert env.quote_calls == [("flattrade", [("ITC", "NSE")]), ("flattrade", [("UNRES", "NSE")])]
     assert env.positionbook_calls == 0
     pos = body["positions"][0]
     assert pos["ltp"] == 410.0 and pos["unrealized"] == pytest.approx(100.0)
@@ -795,7 +797,8 @@ def test_no_route_writes_the_ledger_or_calls_a_broker(client, env, monkeypatch):
     assert env.positionbook_calls == 0 and env.quote_calls == []
     summary(client, quotes="1")
     assert env.ledger_digest() == before
-    assert len(env.quote_calls) == 1 and env.positionbook_calls == 0
+    assert env.quote_calls == [("flattrade", [("ITC", "NSE")]), ("flattrade", [("UNRES", "NSE")])]
+    assert env.positionbook_calls == 0
 
 
 def test_disabled_routes_touch_nothing(client, env):

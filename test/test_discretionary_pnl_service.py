@@ -1854,6 +1854,7 @@ def _money_view(out):
         "source_labels",  # read-time source label counts: informational, no figure
         "data_quality",
         "provisional",
+        "intraday",  # read-only overlay of today's unresolved fills: informational, no confirmed figure
         "unresolved_in_range",  # count of unresolved / orphan fills of the range: informational
     }
 

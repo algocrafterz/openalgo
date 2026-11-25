@@ -1736,6 +1736,12 @@ def _summary_parts(
             ),
             warnings,
         ),
+        # today's confirmed + pending fills replayed together; read only (see intraday_block)
+        "intraday": _safe_block(
+            "intraday",
+            lambda: intraday_block(snap["fills"], filters, today, pos_view_all, with_quotes),
+            warnings,
+        ),
         # the current session, from the same build rows (ignores the period; see today_block)
         "today": _safe_block(
             "today",
@@ -2059,6 +2065,355 @@ def today_block(
         "closed_positions": closed_rows,
         "open_position_rows": open_rows,
         "pending_attribution": pending,
+    }
+
+
+# ---------------------------------------------------------------- intraday overlay
+
+INTRADAY_RELIABLE_PRICE = frozenset({"live", "last_close"})
+INTRADAY_REASONS = {
+    "stale": "The last price is older than the freshness limit.",
+    "cached": "Only an older saved price is available.",
+    "unavailable": "No price is available.",
+    "not_requested": "Prices were not requested.",
+}
+
+
+def _has_strategy_evidence(fill: dict) -> bool:
+    """True when the stored order evidence of a fill points at an OpenAlgo strategy order
+    (a remarks tag) or a system marker. Read only."""
+    ev = ledger_svc.parse_evidence(fill.get("source_evidence"))
+    return bool(ev) and (ev.get("rk") == "tag" or bool(ev.get("sm")))
+
+
+def _unmatched_row(f: dict, reason: str, text: str, today_iso: str) -> dict:
+    when = f.get("fill_time")
+    return {
+        "fill_ref": f.get("id"),
+        "broker": f.get("broker"),
+        "account": f.get("account"),
+        "exchange": f.get("exchange"),
+        "symbol": f.get("symbol"),
+        "product": f.get("product"),
+        "side": f.get("side"),
+        "qty": f.get("qty"),
+        "price": f.get("price"),
+        "fill_time": _iso_time(when),
+        "session_date": _session_of(when),
+        "reason": reason,
+        "reason_text": text,
+        "today": _session_of(when) == today_iso,
+    }
+
+
+def _intraday_prices(
+    positions: list[dict], book_views: list[dict], with_quotes: bool
+) -> list[dict]:
+    """Price the overlay positions. A symbol the book already priced reuses that quote (no
+    second broker call); only symbols with no book view are fetched. Unrealized is set only
+    for a reliable price (live, or the last close when the market is shut)."""
+    now = _now()
+    known: dict[tuple, dict] = {}
+    for v in book_views:
+        if v.get("ltp") is not None:
+            known.setdefault((v["broker"], v["symbol"], v["exchange"]), v)
+    missing = [p for p in positions if (p["broker"], p["symbol"], p["exchange"]) not in known]
+    fetched: dict[tuple, dict] = {}
+    if missing and with_quotes:
+        views, _ = _price_positions(missing, True)
+        for v in views:
+            fetched[(v["broker"], v["symbol"], v["exchange"])] = v
+    out = []
+    for p in positions:
+        key = (p["broker"], p["symbol"], p["exchange"])
+        src = known.get(key) or fetched.get(key)
+        if src is None or src.get("ltp") is None:
+            status = "unavailable" if with_quotes else "not_requested"
+            out.append(_position_view(p, None, None, status, now))
+            continue
+        ts = None
+        if src.get("fetched_at"):
+            try:
+                ts = datetime.strptime(src["fetched_at"], "%Y-%m-%d %H:%M:%S.%f")
+            except ValueError:
+                ts = None
+        out.append(_position_view(p, src["ltp"], ts, src["price_status"], now))
+    return out
+
+
+def intraday_block(
+    fills: list[dict],
+    filters: dict,
+    today: date,
+    book_views: list[dict],
+    with_quotes: bool,
+) -> dict:
+    """Today's trading in one place: confirmed fills and today's pending fills replayed
+    together by the SAME engine as the book. Read only, in memory; no total, metric, chart,
+    history row or book row changes, and nothing is checked against the broker.
+
+    Input: every confirmed (manual / ui_manual) fill, earlier sessions included so a carried
+    NRML or CNC position opens correctly, plus the unresolved fills of today's session
+    (``session_date(now)``), grace window included. One ``reconstruct`` pass, per identity
+    (broker, account, exchange, symbol, product); accounts and products never merge.
+
+    Left out of the replay and listed under ``unmatched`` instead (never guessed):
+    unresolved fills of earlier sessions on an identity that is active today, and today's
+    unresolved fills whose stored evidence points at a strategy order. Orphan and invalid
+    fills of the replay are listed there too.
+
+    Status of a position or leg: ``confirmed`` (every fill it rests on is manual),
+    ``provisional`` (every fill pending) or ``partially_reconciled`` (mixed). A leg rests on
+    its exit fill and the entry fills it consumed; an open position on its remaining entry
+    fills and on the legs already closed against it. With no pending fill today the open
+    positions and today's confirmed realized equal the confirmed book.
+
+    Unrealized only with a reliable price (``live`` or ``last_close``): otherwise null with
+    the reason, counted in ``totals.unpriced_positions`` and left out of the sum, and the
+    total is flagged partial.
+    """
+    today_iso = today.isoformat()
+    matching = [f for f in fills if not any(f.get(k) != v for k, v in filters.items())]
+    timed = [f for f in matching if isinstance(f.get("fill_time"), datetime)]
+    unmatched: list[dict] = []
+    confirmed = [f for f in timed if f["attribution_state"] in DISCRETIONARY_STATES]
+    pending: list[dict] = []
+    earlier_unresolved: list[dict] = []
+    for f in timed:
+        if f["attribution_state"] != ledger.STATE_UNRESOLVED:
+            continue
+        if _session_of(f["fill_time"]) != today_iso:
+            earlier_unresolved.append(f)
+        elif _has_strategy_evidence(f):
+            unmatched.append(
+                _unmatched_row(
+                    f,
+                    "strategy_evidence",
+                    "Its order carries strategy evidence, so it is not added to your position.",
+                    today_iso,
+                )
+            )
+        else:
+            pending.append(f)
+    # a fill id enters the replay once: the two groups are disjoint by state, and this guard
+    # keeps a repeated row in the snapshot from being counted twice (confirmed wins)
+    combined, seen_ids = [], set()
+    for f in confirmed + pending:
+        if f["id"] not in seen_ids:
+            seen_ids.add(f["id"])
+            combined.append(f)
+    confirmed_ids = {f["id"] for f in confirmed}
+    pending = [f for f in combined if f["id"] not in confirmed_ids]
+    confirmed = [f for f in combined if f["id"] in confirmed_ids]
+    pending_ids = {f["id"] for f in pending}
+    by_id = {f["id"]: f for f in combined}
+    result = reconstruct(combined)
+    allocate_charges(result, by_id)
+
+    trades, positions_raw, links = result["trades"], result["positions"], result["links"]
+    entry_fills_of_trade: dict[int, set] = {}
+    entry_fills_of_pos: dict[int, set] = {}
+    for lk in links:
+        if "trade_idx" in lk:
+            entry_fills_of_trade.setdefault(lk["trade_idx"], set()).add(lk["fill_ref"])
+        elif "pos_idx" in lk:
+            entry_fills_of_pos.setdefault(lk["pos_idx"], set()).add(lk["fill_ref"])
+
+    def fills_of_leg(i: int) -> set:
+        return {trades[i]["closing_fill"]} | entry_fills_of_trade.get(i, set())
+
+    def status_of(ids: set) -> str:
+        n_pending = len(ids & pending_ids)
+        if n_pending == 0:
+            return "confirmed"
+        return "provisional" if n_pending == len(ids) else "partially_reconciled"
+
+    legs_by_pos: dict[tuple, list[int]] = {}
+    for i, t in enumerate(trades):
+        legs_by_pos.setdefault(_ident_seq(t), []).append(i)
+
+    # closed legs of today
+    closed = []
+    conf_gross = prov_gross = conf_charges = est_charges = 0.0
+    conf_legs = prov_legs = 0
+    charges_unavailable = 0
+    for i, t in enumerate(trades):
+        if t["trade_date"] != today_iso:
+            continue
+        ids = fills_of_leg(i)
+        status = "confirmed" if not (ids & pending_ids) else "provisional"
+        gross = float(t["realized_pnl"])
+        charges = t.get("charges")
+        if status == "confirmed":
+            conf_gross += gross
+            conf_legs += 1
+            if charges is None:
+                charges_unavailable += 1
+            else:
+                conf_charges += charges
+        else:
+            prov_gross += gross
+            prov_legs += 1
+            if charges is None:
+                charges_unavailable += 1
+            else:
+                est_charges += charges
+        closed.append(
+            {
+                "broker": t["broker"],
+                "account": t["account"],
+                "exchange": t["exchange"],
+                "symbol": t["symbol"],
+                "product": t["product"],
+                "direction": t["direction"],
+                "quantity": _round(t["closed_quantity"]),
+                "entry_price": _round(t["entry_price"]),
+                "exit_price": _round(t["exit_price"]),
+                "opened_at": _iso_time(t["opened_at"]),
+                "closed_at": _iso_time(t["closed_at"]),
+                "realized_gross": _round(gross),
+                "charges": _round(charges),
+                "charges_estimated": status == "provisional",
+                "status": status,
+                "confirmed_fills": len(ids - pending_ids),
+                "pending_fills": len(ids & pending_ids),
+            }
+        )
+    closed.sort(key=lambda r: (r["closed_at"], r["symbol"]), reverse=True)
+
+    # open positions
+    open_raw = []
+    meta: dict[int, dict] = {}
+    for idx, p in enumerate(positions_raw):
+        if p["status"] != "OPEN":
+            continue
+        ids = set(entry_fills_of_pos.get(idx, set()))
+        c_real = p_real = 0.0
+        for i in legs_by_pos.get(_ident_seq(p), []):
+            ids |= fills_of_leg(i)
+            if fills_of_leg(i) & pending_ids:
+                p_real += float(trades[i]["realized_pnl"])
+            else:
+                c_real += float(trades[i]["realized_pnl"])
+        view = dict(p)
+        view["opened_at"] = _iso_time(p["opened_at"])
+        open_raw.append(view)
+        meta[len(open_raw) - 1] = {"ids": ids, "c_real": c_real, "p_real": p_real}
+    priced = _intraday_prices(open_raw, book_views, with_quotes)
+    open_rows = []
+    unrealized = 0.0
+    unpriced = 0
+    for k, v in enumerate(priced):
+        m = meta[k]
+        reliable = v["price_status"] in INTRADAY_RELIABLE_PRICE and v["unrealized"] is not None
+        if reliable:
+            unrealized += v["unrealized"]
+        else:
+            unpriced += 1
+        open_rows.append(
+            {
+                "broker": v["broker"],
+                "account": v["account"],
+                "exchange": v["exchange"],
+                "symbol": v["symbol"],
+                "product": v["product"],
+                "direction": v["direction"],
+                "quantity": _round(v["open_qty"]),
+                "avg_entry": _round(v["avg_entry"]),
+                "opened_at": v["opened_at"],
+                "opened_session": v.get("opened_session"),
+                "status": status_of(m["ids"]),
+                "confirmed_fills": len(m["ids"] - pending_ids),
+                "pending_fills": len(m["ids"] & pending_ids),
+                "realized_so_far_confirmed": _round(m["c_real"]),
+                "realized_so_far_provisional": _round(m["p_real"]),
+                "ltp": v["ltp"],
+                "price_status": v["price_status"],
+                "unrealized": _round(v["unrealized"]) if reliable else None,
+                "unrealized_reason": None
+                if reliable
+                else INTRADAY_REASONS.get(v["price_status"], "No reliable price."),
+                "opening_unknown": bool(v.get("opening_unknown")),
+                "not_checked_against_broker": True,
+            }
+        )
+    open_rows.sort(key=lambda r: (str(r["opened_at"]), r["symbol"]), reverse=True)
+
+    # unmatched
+    active = {
+        (r["broker"], r["account"], r["exchange"], r["symbol"], r["product"]) for r in open_rows
+    }
+    active |= {
+        (f["broker"], f["account"], f["exchange"], f["symbol"], f["product"])
+        for f in combined
+        if _session_of(f["fill_time"]) == today_iso
+    }
+    for o in result["orphans"]:
+        ident = (o["broker"], o["account"], o["exchange"], o["symbol"], o["product"])
+        if ident in active or _session_of(o["fill_time"]) == today_iso:
+            reason = o["reason"]
+            text = (
+                "The fill is not valid and was left out."
+                if reason == "invalid_fill"
+                else "No opening trade is known for this sale, so it is not matched to a position."
+            )
+            row = _unmatched_row(by_id.get(o["fill_ref"], o), reason, text, today_iso)
+            row["pending"] = o["fill_ref"] in pending_ids
+            unmatched.append(row)
+    for f in earlier_unresolved:
+        if (f["broker"], f["account"], f["exchange"], f["symbol"], f["product"]) in active:
+            unmatched.append(
+                _unmatched_row(
+                    f,
+                    "earlier_session_unresolved",
+                    "An earlier-session execution still awaits attribution. It is not added to "
+                    "today's position.",
+                    today_iso,
+                )
+            )
+    unmatched.sort(key=lambda r: (r["fill_time"] or "", r["fill_ref"] or 0))
+
+    gross_total = conf_gross + prov_gross + unrealized
+    charges_total = conf_charges + est_charges
+    complete = unpriced == 0
+    return {
+        "session_date": today_iso,
+        "definition": (
+            "Today's confirmed executions and today's pending executions replayed together "
+            "as one position per instrument. Pending figures are provisional and can change "
+            "when an execution is attributed. Nothing is checked against the broker."
+        ),
+        "basis": "gross, before charges; charges shown separately",
+        "not_checked_against_broker": True,
+        "quotes_requested": bool(with_quotes),
+        "positions": open_rows,
+        "closed": closed,
+        "unmatched": unmatched,
+        "totals": {
+            "confirmed_realized": _round(conf_gross),
+            "provisional_realized": _round(prov_gross),
+            "unrealized": None
+            if (open_rows and len(open_rows) == unpriced)
+            else _round(unrealized),
+            "priced_positions": len(open_rows) - unpriced,
+            "unpriced_positions": unpriced,
+            "confirmed_charges": _round(conf_charges),
+            "estimated_charges": _round(est_charges),
+            "charges_unavailable_legs": charges_unavailable,
+            "total_gross": _round(gross_total),
+            "total_net": _round(gross_total - charges_total) if charges_unavailable == 0 else None,
+            "total_complete": complete,
+            "partial_reason": None
+            if complete
+            else f"{unpriced} open position(s) have no reliable price and are left out of "
+            "the unrealized figure and the total.",
+            "basis": "gross, before charges; net is gross minus realized-leg charges",
+            "confirmed_legs": conf_legs,
+            "provisional_legs": prov_legs,
+            "open_positions": len(open_rows),
+            "confirmed_fills": len(confirmed),
+            "pending_fills": len(pending),
+        },
     }
 
 
@@ -2869,6 +3224,9 @@ def _excursion_rows_in(snap, scope, reader, provider, links_by_leg, fills_by_id)
             reads += 1 if supported else 0
             result = position_excursion_result(t, fills, provider, scope["now"], reader)
         net = t["net_pnl"]
+        capture = an.position_capture(
+            net, an.position_realized_points(t["direction"], fills) if fills else None, result
+        )
         rows.append(
             {
                 "id": t["id"],
@@ -2894,9 +3252,15 @@ def _excursion_rows_in(snap, scope, reader, provider, links_by_leg, fills_by_id)
                         "minute_bar_precision",
                     )
                 },
-                "profit_capture": _round(
-                    an.profit_capture(net, t["points_per_unit"], result["mfe_points"]), 4
-                ),
+                "bars_used": result.get("bars_used"),
+                "bars_expected": result.get("bars_expected"),
+                # Capture, giveback and realised points are on ONE basis: the average entry in
+                # force at each exit (an.position_realized_points), not ``points_per_unit``.
+                "realized_points": capture["realized_points"],
+                "profit_capture": _round(capture["capture"], 4),
+                "giveback_points": capture["giveback_points"],
+                "capture_reason": capture["reason"],
+                "capture_reason_text": an.CAPTURE_REASON_TEXT.get(capture["reason"]),
             }
         )
     return rows, reads
@@ -2962,6 +3326,11 @@ EXPORT_COLUMNS = (
     "profit_capture",
     "excursion_status",
     "excursion_reason",
+    "realized_points",
+    "giveback_points",
+    "capture_reason",
+    "bars_used",
+    "bars_expected",
 )
 EXPORT_NUMERIC = frozenset(
     {
@@ -2978,6 +3347,10 @@ EXPORT_NUMERIC = frozenset(
         "mae_amount",
         "mfe_amount",
         "profit_capture",
+        "realized_points",
+        "giveback_points",
+        "bars_used",
+        "bars_expected",
     }
 )
 
@@ -3033,6 +3406,11 @@ def get_export(
                 "profit_capture": ex["profit_capture"],
                 "excursion_status": ex["status"],
                 "excursion_reason": ex["reason"],
+                "realized_points": ex["realized_points"],
+                "giveback_points": ex["giveback_points"],
+                "capture_reason": ex["capture_reason"],
+                "bars_used": ex["bars_used"],
+                "bars_expected": ex["bars_expected"],
             }
         )
     return {
