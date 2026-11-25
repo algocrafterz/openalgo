@@ -1289,7 +1289,9 @@ describe("today's performance", () => {
     expect(await screen.findByTestId('discretionary-awaiting-attribution')).toBeInTheDocument()
     const section = screen.getByTestId('today-line')
     expect(within(section).getByTestId('today-pending')).toHaveTextContent('Earliest: 11:20 IST')
-    expect(within(section).getByTestId('today-summary')).toHaveTextContent('no closed trades')
+    expect(within(section).getByTestId('today-summary')).toHaveTextContent(
+      'no confirmed closed trades'
+    )
   })
 
   it('is absent when an older server sends no today block', async () => {
@@ -1366,7 +1368,7 @@ describe('dashboard additions', () => {
     }
   })
 
-  it('keeps the awaiting message and shows no provisional panel when only unresolved fills exist', async () => {
+  it('keeps the awaiting message and renders no provisional panel when only unresolved fills exist', async () => {
     summaryFn.mockResolvedValue({
       ...emptySummary(),
       executions_collected: 5,
@@ -1380,25 +1382,72 @@ describe('dashboard additions', () => {
         included: 0,
         not_placed: 0,
       }),
-      // the server still sends it; the page no longer shows it
       provisional: provisional(),
     })
     renderIt()
     const block = await screen.findByTestId('discretionary-awaiting-attribution')
     expect(block).toHaveTextContent('No trades to show yet: 5 of 5 fills are not counted.')
     expect(screen.queryByTestId('provisional-panel')).not.toBeInTheDocument()
-    expect(screen.queryByText(/Pending attribution: provisional figures/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Provisional (not yet attributed)')).not.toBeInTheDocument()
     expect(screen.queryByTestId('dq-awaiting')).not.toBeInTheDocument()
     expect(screen.queryByText('Net realized (after est. charges)')).not.toBeInTheDocument()
   })
 
-  it('keeps provisional figures out of the populated page', async () => {
+  it('keeps provisional figures out of the confirmed totals and shows no panel on the populated page', async () => {
     summaryFn.mockResolvedValue({ ...full(), provisional: provisional() })
     renderIt()
     await screen.findByText('Closed trades')
     expect(screen.queryByTestId('provisional-panel')).not.toBeInTheDocument()
     expect(cardValue('Gross realized')).toBe('Rs 60.00')
     expect(cardValue('Completed trades')).toBe('2')
+  })
+
+  it('shows the pending-attribution message without a link to a provisional panel', async () => {
+    summaryFn.mockResolvedValue({
+      ...emptySummary(),
+      executions_collected: 5,
+      executions_unresolved: 5,
+      today: {
+        ...emptyToday(),
+        pending_attribution: {
+          ...emptyToday().pending_attribution,
+          grace_minutes: 30,
+          grace_count: 5,
+          grace_fills: [],
+          other_today: 0,
+        },
+      },
+      provisional: provisional(),
+    })
+    renderIt()
+    const pending = await screen.findByTestId('today-pending')
+    expect(pending).toHaveTextContent('5 execution(s) await attribution (30-minute window)')
+    expect(within(pending).queryByTestId('today-provisional-link')).not.toBeInTheDocument()
+    expect(screen.queryByText('See provisional figures')).not.toBeInTheDocument()
+    expect(document.getElementById('provisional-panel')).toBeNull()
+  })
+
+  it('keeps the pending message without a link when the server sends no provisional block', async () => {
+    summaryFn.mockResolvedValue({
+      ...emptySummary(),
+      executions_collected: 5,
+      executions_unresolved: 5,
+      today: {
+        ...emptyToday(),
+        pending_attribution: {
+          ...emptyToday().pending_attribution,
+          grace_minutes: 30,
+          grace_count: 5,
+          grace_fills: [],
+          other_today: 0,
+        },
+      },
+      provisional: null,
+    })
+    renderIt()
+    const pending = await screen.findByTestId('today-pending')
+    expect(pending).toHaveTextContent('5 execution(s) await attribution')
+    expect(within(pending).queryByTestId('today-provisional-link')).not.toBeInTheDocument()
   })
 })
 

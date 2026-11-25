@@ -14,6 +14,8 @@ import type {
   PendingAttribution,
   PeriodRow,
   PriceStatus,
+  ProvisionalBlock,
+  ProvisionalOpenPosition,
   RiskBlock,
   SampleContext,
 } from '@/api/discretionaryPnl'
@@ -757,6 +759,62 @@ export function pendingAttributionLines(pending: PendingAttribution | undefined)
   return lines
 }
 
+/** True when the server sent provisional fills worth listing (trades, open quantities or orphans). */
+export function hasProvisionalData(block: ProvisionalBlock | null | undefined): boolean {
+  if (!block) return false
+  return block.trades.length > 0 || block.open_positions.length > 0 || block.orphans.length > 0
+}
+
+/** Same instrument, same direction, same broker, account, exchange and product. */
+function sameIdentity(a: DiscretionaryPosition, b: ProvisionalOpenPosition): boolean {
+  return (
+    a.broker === b.broker &&
+    a.account === b.account &&
+    a.exchange === b.exchange &&
+    a.symbol === b.symbol &&
+    a.product === b.product &&
+    a.direction === b.direction
+  )
+}
+
+/**
+ * Note for a confirmed open-position row when provisional executions hold quantity in the same
+ * instrument and direction. Shows both quantities side by side and never adds them: the
+ * provisional quantity is not confirmed and is in no position or P&L figure. Null when nothing
+ * matches (a different direction gives no note).
+ */
+export function openPositionProvisionalNote(
+  position: DiscretionaryPosition,
+  provisional: ProvisionalBlock | null | undefined
+): string | null {
+  if (!provisional) return null
+  const matches = provisional.open_positions.filter((p) => sameIdentity(position, p))
+  if (matches.length === 0) return null
+  const qty = matches.reduce((sum, p) => sum + p.open_qty, 0)
+  return `${fmtQty(position.open_qty)} confirmed qty + ${fmtQty(qty)} provisional qty awaiting attribution.`
+}
+
+/**
+ * Executions awaiting the attribution window (the server's grace count) against the other
+ * provisional fills, which are outside that window. Counts only; both come from the payload.
+ */
+export function provisionalCounts(
+  provisional: ProvisionalBlock | null | undefined,
+  pending: PendingAttribution | undefined
+): { awaiting: number; historical: number } {
+  const awaiting = pending?.grace_count ?? 0
+  const historical = Math.max(0, (provisional?.fills ?? 0) - awaiting)
+  return { awaiting, historical }
+}
+
+/** "2 execution(s) awaiting attribution; 5 historical fill(s) outside the 30-minute window." */
+export function attributionCountsLine(awaiting: number, historical: number): string | null {
+  const parts: string[] = []
+  if (awaiting > 0) parts.push(`${awaiting} execution(s) awaiting attribution`)
+  if (historical > 0) parts.push(`${historical} historical fill(s) outside the 30-minute window`)
+  return parts.length > 0 ? `${parts.join('; ')}.` : null
+}
+
 // ---------------------------------------------------------------- dashboard additions
 
 /** Backend timestamps are naive IST ("2026-11-17 09:46:18"); IST is UTC+05:30 all year. */
@@ -1261,6 +1319,44 @@ export function excursionIndex(
   if (!excursions || (summaryBuildId && excursions.build_id !== summaryBuildId)) return map
   for (const p of excursions.positions) map.set(p.id, p)
   return map
+}
+
+/** "TCS (NSE)": an instrument is symbol plus exchange. */
+export function instrumentLabel(symbol: string | null, exchange: string | null): string {
+  return `${symbol ?? 'unknown'}${exchange ? ` (${exchange})` : ''}`
+}
+
+/** A fraction as a whole percent ("62%"); an em dash when unknown. Capture is a gross-points ratio. */
+export function fmtCapture(fraction: number | null | undefined): string {
+  if (fraction == null || Number.isNaN(fraction)) return '—'
+  return `${(fraction * 100).toFixed(0)}%`
+}
+
+const CAPTURE_REASON_WORDS: Record<string, string> = {
+  net_unavailable: 'net result unknown (no charges)',
+  not_net_winner: 'not a net winner',
+  excursion_unavailable: 'price data not available',
+  insufficient_candle_coverage: 'no full candle between first and last fill',
+  mfe_not_positive: 'no favourable move recorded',
+  data_inconsistency: 'exit outside the recorded price path',
+}
+
+/** Why positions are outside the capture figures: ["6 not a net winner", ...]. */
+export function captureExclusionPhrases(
+  excluded: Partial<Record<string, number>> | null | undefined
+): string[] {
+  return Object.entries(excluded ?? {})
+    .filter(([, n]) => (n ?? 0) > 0)
+    .map(([code, n]) => `${n} ${CAPTURE_REASON_WORDS[code] ?? code.replace(/_/g, ' ')}`)
+}
+
+/** Distinct instruments among the positions that have MAE / MFE (what pooled points would mix). */
+export function availableInstrumentCount(positions: ExcursionPosition[] | undefined): number {
+  const keys = new Set<string>()
+  for (const p of positions ?? []) {
+    if (p.status === 'available') keys.add(`${p.symbol}|${p.exchange}`)
+  }
+  return keys.size
 }
 
 // ---------------------------------------------------------------- per-position equity curve

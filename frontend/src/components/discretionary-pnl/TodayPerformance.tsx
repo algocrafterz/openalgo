@@ -2,7 +2,12 @@ import { Clock } from 'lucide-react'
 import type { DiscretionaryToday } from '@/api/discretionaryPnl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { pendingAttributionLines, pnlTextClass, todayUnrealized } from '@/lib/discretionaryPnlView'
+import {
+  attributionCountsLine,
+  pendingAttributionLines,
+  pnlTextClass,
+  todayUnrealized,
+} from '@/lib/discretionaryPnlView'
 import { cn } from '@/lib/utils'
 
 type Money = (value: number) => string
@@ -18,14 +23,27 @@ export function TodayLine({
   today,
   formatCurrency,
   onShowToday,
+  provisionalShown,
+  historicalFills = 0,
 }: {
   today: DiscretionaryToday
   formatCurrency: Money
   /** Makes today the report date; omitted when the page cannot, or today already is. */
   onShowToday?: () => void
+  /** True when the server sent provisional executions: 'no closed trades' then reads 'no confirmed closed trades'. */
+  provisionalShown?: boolean
+  /** Provisional fills outside the attribution window (from the server's counts); 0 omits the clause. */
+  historicalFills?: number
 }) {
   const unrealized = todayUnrealized(today)
-  const pending = pendingAttributionLines(today.pending_attribution)
+  const pendingBase = pendingAttributionLines(today.pending_attribution)
+  const counts = attributionCountsLine(today.pending_attribution?.grace_count ?? 0, historicalFills)
+  // the counts line is added only when it tells the two groups apart (historical fills exist)
+  const pending = historicalFills > 0 && counts ? [counts, ...pendingBase] : pendingBase
+  const executionsPending =
+    (today.pending_attribution?.grace_count ?? 0) > 0 ||
+    (today.pending_attribution?.other_today ?? 0) > 0 ||
+    !!provisionalShown
   const m = today.metrics ?? {}
   const nothingClosed = today.completed_positions === 0 && today.exit_legs === 0
   const priced = unrealized.kind === 'complete' || unrealized.kind === 'partial'
@@ -54,7 +72,10 @@ export function TodayLine({
       <p className="flex flex-wrap items-baseline gap-x-1.5 text-sm" data-testid="today-summary">
         <span>Today ({today.session_date}): </span>
         {nothingClosed ? (
-          <span>no closed trades, {today.open_positions} open.</span>
+          <span>
+            {executionsPending ? 'no confirmed closed trades' : 'no closed trades'},{' '}
+            {today.open_positions} open.
+          </span>
         ) : (
           <span>
             net{' '}

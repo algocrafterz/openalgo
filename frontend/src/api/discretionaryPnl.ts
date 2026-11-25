@@ -330,6 +330,103 @@ export interface ProvisionalOpenPosition {
   overlap_note?: string | null
 }
 
+export type IntradayStatus = 'confirmed' | 'partially_reconciled' | 'provisional'
+
+export interface IntradayPosition {
+  broker: string
+  account: string
+  exchange: string
+  symbol: string
+  product: string
+  direction: 'LONG' | 'SHORT'
+  quantity: number
+  avg_entry: number
+  opened_at: string | null
+  opened_session?: string | null
+  status: IntradayStatus
+  confirmed_fills: number
+  pending_fills: number
+  realized_so_far_confirmed: number
+  realized_so_far_provisional: number
+  ltp: number | null
+  price_status: string
+  /** Null when there is no reliable price: never zero. */
+  unrealized: number | null
+  unrealized_reason: string | null
+  opening_unknown: boolean
+  not_checked_against_broker: boolean
+}
+
+export interface IntradayClosedLeg {
+  broker: string
+  account: string
+  exchange: string
+  symbol: string
+  product: string
+  direction: 'LONG' | 'SHORT'
+  quantity: number
+  entry_price: number
+  exit_price: number
+  opened_at: string | null
+  closed_at: string | null
+  realized_gross: number
+  charges: number | null
+  charges_estimated: boolean
+  status: 'confirmed' | 'provisional'
+  confirmed_fills: number
+  pending_fills: number
+}
+
+export interface IntradayUnmatched {
+  fill_ref: number | null
+  broker: string
+  account: string
+  exchange: string
+  symbol: string
+  product: string
+  side: string
+  qty: number
+  price: number
+  fill_time: string | null
+  session_date: string | null
+  reason: string
+  reason_text: string
+  today: boolean
+}
+
+export interface IntradayTotals {
+  confirmed_realized: number
+  provisional_realized: number
+  unrealized: number | null
+  priced_positions: number
+  unpriced_positions: number
+  confirmed_charges: number
+  estimated_charges: number
+  charges_unavailable_legs: number
+  total_gross: number
+  total_net: number | null
+  total_complete: boolean
+  partial_reason: string | null
+  basis: string
+  confirmed_legs: number
+  provisional_legs: number
+  open_positions: number
+  confirmed_fills: number
+  pending_fills: number
+}
+
+export interface IntradayBlock {
+  session_date: string
+  definition: string
+  basis: string
+  not_checked_against_broker: boolean
+  quotes_requested: boolean
+  positions: IntradayPosition[]
+  closed: IntradayClosedLeg[]
+  unmatched: IntradayUnmatched[]
+  totals: IntradayTotals
+}
+
 export interface ProvisionalBlock {
   definition?: string
   fills: number
@@ -736,6 +833,8 @@ export interface DiscretionarySummary {
   data_quality?: DataQuality | null
   /** Unresolved fills replayed as if manual; never in any total. Absent from older servers. */
   provisional?: ProvisionalBlock | null
+  /** Today's confirmed and pending fills replayed together; read only. Absent from older servers. */
+  intraday?: IntradayBlock | null
   market_hours_source?: 'calendar' | 'clock' | 'mixed' | string
   withheld: Record<string, string>
   labels?: Record<string, string>
@@ -838,7 +937,52 @@ export interface ExcursionPosition {
   mae_amount: number | null
   mfe_amount: number | null
   minute_bar_precision: boolean
+  /**
+   * Capture = realised points / MFE points, one basis (average entry in force at each exit), a
+   * fraction. Only for a net winner with reliable candle coverage and MFE above 0; otherwise
+   * null with `capture_reason`. The fields below are absent from a server older than this
+   * change.
+   */
   profit_capture: number | null
+  /** Gross points per unit realised, average entry in force at each exit. */
+  realized_points?: number | null
+  /** MFE points minus realised points; present with capture only. */
+  giveback_points?: number | null
+  capture_reason?: CaptureReason | null
+  capture_reason_text?: string | null
+  /** Full-candle bars used between the first and last fill minutes, of those expected. */
+  bars_used?: number | null
+  bars_expected?: number | null
+}
+
+export type CaptureReason =
+  | 'net_unavailable'
+  | 'not_net_winner'
+  | 'excursion_unavailable'
+  | 'insufficient_candle_coverage'
+  | 'mfe_not_positive'
+  | 'data_inconsistency'
+
+/** Capture statistics of ONE instrument; n = captured, N = positions, n + excluded = N. */
+export interface InstrumentCapture {
+  positions: number
+  captured: number
+  excluded: Partial<Record<CaptureReason, number>>
+  excluded_total: number
+  /** Fraction (0.62 = 62%). */
+  median_capture: number | null
+  median_giveback_points: number | null
+  mae_over_half: { count: number; denominator: number; share: number | null }
+  basis: string
+}
+
+export interface InstrumentExcursions {
+  symbol: string | null
+  exchange: string | null
+  available: number
+  winners: ExcursionGroup
+  losers: ExcursionGroup
+  capture: InstrumentCapture
 }
 
 export interface ExcursionDist {
@@ -854,9 +998,19 @@ export interface ExcursionGroup {
   mfe_amount: ExcursionDist
 }
 
+/** Points are pooled across instruments only when one instrument is in scope (null otherwise). */
+export interface ExcursionScopeGroup {
+  mae_points: ExcursionDist | null
+  mfe_points: ExcursionDist | null
+  mae_amount: ExcursionDist
+  mfe_amount: ExcursionDist
+}
+
 export interface ExcursionAggregates {
-  winners: ExcursionGroup & { profit_capture: ExcursionDist }
-  losers: ExcursionGroup
+  winners: ExcursionScopeGroup & { profit_capture: ExcursionDist | null }
+  losers: ExcursionScopeGroup
+  instrument_count?: number
+  instruments?: InstrumentExcursions[]
   coverage: {
     available: number
     total: number

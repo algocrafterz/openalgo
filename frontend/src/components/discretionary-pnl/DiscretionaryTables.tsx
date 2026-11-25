@@ -6,6 +6,7 @@ import type {
   DiscretionaryTrade,
   ExcursionPosition,
   PeriodRow,
+  ProvisionalBlock,
 } from '@/api/discretionaryPnl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -22,6 +23,7 @@ import {
   CATEGORY_LABEL,
   categoryReasonText,
   chargesBadge,
+  fmtCapture,
   fmtDistance,
   fmtPoints,
   fmtPositionAge,
@@ -31,6 +33,7 @@ import {
   fmtStamp,
   fmtWinRate,
   netIncomplete,
+  openPositionProvisionalNote,
   type PriceBadge,
   pnlTextClass,
   priceBadge,
@@ -233,6 +236,10 @@ function CategoryBadge({ trade }: { trade: DiscretionaryTrade }) {
 export const MFE_TOOLTIP =
   'largest favourable price move while open, from 1-minute bars (a lower bound); price move x quantity open at that moment; a market measurement, not achievable profit'
 
+/** What the MAE amount is: the move against you times the quantity open at that moment. */
+export const MAE_TOOLTIP =
+  'largest adverse price move while open, from 1-minute bars (a lower bound); price move x quantity open at that moment'
+
 /** MAE or MFE of a closed row: points per unit, a dash (with the reason) when not available. */
 function ExcursionCell({
   position,
@@ -263,11 +270,38 @@ function ExcursionCell({
     field === 'mfe'
       ? `${amount != null ? `${formatCurrency(amount)}: ` : ''}${MFE_TOOLTIP}`
       : amount != null
-        ? `${formatCurrency(amount)} on the full size`
+        ? `${formatCurrency(amount)}: ${MAE_TOOLTIP}`
         : undefined
   return (
     <span title={title} data-testid={`${field}-value`}>
       {fmtDistance(points)}
+    </span>
+  )
+}
+
+/**
+ * Capture (a percent) or giveback (points) of a closed row; a dash with the reason when the
+ * position is not counted (not a net winner, no candle coverage, ...), never 0.
+ */
+function CaptureValue({
+  position,
+  field,
+}: {
+  position: ExcursionPosition | undefined
+  field: 'capture' | 'giveback'
+}) {
+  const value = field === 'capture' ? position?.profit_capture : position?.giveback_points
+  if (value == null) {
+    const reason = position?.capture_reason_text ?? 'not available for this position'
+    return (
+      <span className="text-muted-foreground" title={reason} data-testid={`${field}-unavailable`}>
+        —
+      </span>
+    )
+  }
+  return (
+    <span data-testid={`${field}-value`}>
+      {field === 'capture' ? fmtCapture(value) : fmtDistance(value)}
     </span>
   )
 }
@@ -477,10 +511,7 @@ export function ClosedTradesTable({
                           {fmtPoints(t.points_per_unit)}
                         </span>
                       </DetailItem>
-                      <DetailItem
-                        label="MAE"
-                        title="Largest adverse price move while open, from 1-minute bars (a lower bound)"
-                      >
+                      <DetailItem label="MAE" title={MAE_TOOLTIP}>
                         <ExcursionCell
                           position={ex}
                           field="mae"
@@ -495,6 +526,15 @@ export function ClosedTradesTable({
                           loaded={excursionsLoaded}
                           formatCurrency={formatCurrency}
                         />
+                      </DetailItem>
+                      <DetailItem
+                        label="Capture"
+                        title="Realised points / MFE, gross points on the average entry in force at each exit. Net winners with candle coverage only."
+                      >
+                        <CaptureValue position={ex} field="capture" />
+                      </DetailItem>
+                      <DetailItem label="Giveback" title="MFE minus realised points, per unit">
+                        <CaptureValue position={ex} field="giveback" />
                       </DetailItem>
                       <DetailItem label="Category">
                         <CategoryBadge trade={t} />
@@ -543,9 +583,12 @@ export function OpenPositionsTable({
   positions,
   formatCurrency,
   nowMs,
+  provisional,
 }: {
   positions: DiscretionaryPosition[]
   formatCurrency: Money
+  /** Provisional executions: a row with provisional quantity in the same instrument gets a note. */
+  provisional?: ProvisionalBlock | null
   /** Clock for the Age column (tests pin it); defaults to now. */
   nowMs?: number
 }) {
@@ -584,7 +627,17 @@ export function OpenPositionsTable({
             </TableCell>
             <TableCell>{p.broker}</TableCell>
             <TableCell>{p.account || '—'}</TableCell>
-            <TableCell className="font-medium">{p.symbol}</TableCell>
+            <TableCell className="font-medium">
+              {p.symbol}
+              {openPositionProvisionalNote(p, provisional) && (
+                <p
+                  className="text-xs font-normal text-amber-700 dark:text-amber-500 [.analyzer_&]:text-amber-500"
+                  data-testid="open-provisional-note"
+                >
+                  {openPositionProvisionalNote(p, provisional)}
+                </p>
+              )}
+            </TableCell>
             <TableCell>
               <DirectionBadge direction={p.direction} />
             </TableCell>

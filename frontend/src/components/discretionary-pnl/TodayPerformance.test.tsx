@@ -141,6 +141,23 @@ describe('TodayLine', () => {
     expect(screen.queryByTestId('today-net')).not.toBeInTheDocument()
   })
 
+  it('has no link to a provisional panel, whether or not provisional data exists', () => {
+    const today = emptyToday({
+      pending_attribution: {
+        ...emptyToday().pending_attribution,
+        grace_count: 1,
+        grace_fills: [grace()],
+      },
+    })
+    const { rerender } = render(<TodayLine today={today} formatCurrency={money} />)
+    expect(screen.getByTestId('today-pending')).toBeInTheDocument()
+    expect(screen.queryByTestId('today-provisional-link')).not.toBeInTheDocument()
+    rerender(<TodayLine today={today} formatCurrency={money} provisionalShown />)
+    expect(screen.getByTestId('today-pending')).toBeInTheDocument()
+    expect(screen.queryByTestId('today-provisional-link')).not.toBeInTheDocument()
+    expect(screen.queryByText('See provisional figures')).not.toBeInTheDocument()
+  })
+
   it("offers to show today's trades only when the page can make today the report date", async () => {
     const onShow = vi.fn()
     const { rerender } = render(<TodayLine today={emptyToday()} formatCurrency={money} />)

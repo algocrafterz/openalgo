@@ -34,6 +34,7 @@ import {
   drawdownReconciliation,
   excursionIndex,
   filterChoices,
+  hasProvisionalData,
   isEmptyBook,
   ledgerIsEmpty,
   MONTHLY_TABLE_DETAIL,
@@ -48,6 +49,7 @@ import {
   netEquitySeries,
   pendingAttributionLines,
   periodProfile,
+  provisionalCounts,
   rangeEndsBeforeReliableStart,
   reliableStartNotice,
   requestedStartDate,
@@ -68,6 +70,7 @@ import { DiscretionaryHeader } from './DiscretionarySummary'
 import { ClosedTradesTable, OpenPositionsTable, PeriodTable } from './DiscretionaryTables'
 import { EquityCurveCard } from './EquityCurveCard'
 import { ExcursionPanel } from './ExcursionPanel'
+import { hasIntradayData, IntradayPanel } from './IntradayPanel'
 import { PnlCalendar } from './PnlCalendar'
 import { TodayLine } from './TodayPerformance'
 import { type SelectedTrade, TradeFillsDialog } from './TradeFillsDialog'
@@ -334,6 +337,11 @@ export function DiscretionaryPerformance({
         <label htmlFor="discretionary-quotes" className="text-sm cursor-pointer">
           Fetch live prices
         </label>
+        {summary?.market_hours_source && (
+          <span className="text-xs text-muted-foreground" data-testid="market-hours-source">
+            (market hours from {summary.market_hours_source})
+          </span>
+        )}
       </div>
     </div>
   )
@@ -351,11 +359,16 @@ export function DiscretionaryPerformance({
       today.partially_closed_positions > 0 ||
       Math.abs(today.realized_gross) > 0 ||
       pendingAttributionLines(today.pending_attribution).length > 0)
+  const provisionalShown = hasProvisionalData(summary?.provisional)
   const todayNode = summary?.today ? (
     // the current session, whatever the period; same build as everything below
     <TodayLine
       today={summary.today}
       formatCurrency={formatCurrency}
+      provisionalShown={provisionalShown}
+      historicalFills={
+        provisionalCounts(summary.provisional, summary.today.pending_attribution).historical
+      }
       onShowToday={
         onSelectDate && !todayIsRange
           ? () => onSelectDate(summary.today?.session_date ?? todayIst())
@@ -583,7 +596,11 @@ export function DiscretionaryPerformance({
               <CardTitle>Open positions</CardTitle>
             </CardHeader>
             <CardContent>
-              <OpenPositionsTable positions={summary.positions} formatCurrency={formatCurrency} />
+              <OpenPositionsTable
+                positions={summary.positions}
+                formatCurrency={formatCurrency}
+                provisional={summary.provisional}
+              />
               {summary.positions_truncated > 0 && (
                 <p className="mt-2 text-xs text-muted-foreground">
                   Showing {summary.positions.length} of {summary.positions_total} positions.
@@ -763,23 +780,34 @@ export function DiscretionaryPerformance({
 
       {summary && (
         <p className="text-sm">
-          {summary.period.start === summary.period.end ? 'Report date' : 'Report period'}:{' '}
+          {summary.period.start !== summary.period.end
+            ? 'Report period'
+            : period === '1d'
+              ? 'Latest day with closed trades'
+              : 'Report date'}
+          :{' '}
           <span className="font-medium">
             {summary.period.start === summary.period.end
               ? fmtDate(summary.period.start)
               : `${fmtDate(summary.period.start)} - ${fmtDate(summary.period.end)}`}
           </span>
-          {summary.market_hours_source && (
-            <span className="text-muted-foreground">
-              {' '}
-              (market hours from {summary.market_hours_source})
-            </span>
-          )}
           {summaryQuery.isPlaceholderData && (
             <span className="text-muted-foreground"> updating...</span>
           )}
         </p>
       )}
+
+      {summary &&
+        period === '1d' &&
+        summary.today?.session_date &&
+        summary.period.start === summary.period.end &&
+        summary.today.session_date !== summary.period.end && (
+          <p className="text-xs text-muted-foreground" data-testid="date-presentation-note">
+            {hasIntradayData(summary.intraday)
+              ? `Today intraday (${fmtDate(summary.today.session_date)}) is shown below. Cards, charts and statistics above cover ${fmtDate(summary.period.end)}.`
+              : `Cards, charts and statistics cover ${fmtDate(summary.period.end)}, not today (${fmtDate(summary.today.session_date)}).`}
+          </p>
+        )}
 
       {reliableNotice && (
         <p
@@ -822,6 +850,10 @@ export function DiscretionaryPerformance({
       {!populated && unmatchedNode}
 
       {!populated && todayNode}
+
+      {period === '1d' && summary && (
+        <IntradayPanel intraday={summary.intraday} formatCurrency={formatCurrency} />
+      )}
 
       {body}
 

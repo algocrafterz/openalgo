@@ -4,6 +4,7 @@ import {
   emptySummary,
   emptyToday,
   position,
+  provisional,
   summary,
 } from '@/test/discretionaryFixtures'
 import * as view from './discretionaryPnlView'
@@ -18,6 +19,7 @@ import {
   fmtClock,
   fmtProfitFactor,
   fmtWinRate,
+  hasProvisionalData,
   holdingRows,
   isEmptyBook,
   netDefinitionText,
@@ -369,7 +371,7 @@ describe('total card', () => {
     expect(card.value).toBe(297.5)
     expect(card.label).toBe('Net realized + unrealized (partial: 2 positions unpriced)')
     expect(card.incomplete).toBe(true)
-    expect(`${card.label} ${card.hint}`).not.toMatch(/not included/)
+    expect(`${card.label} ${card.hint}`).not.toMatch(/Nothing on this panel is included/)
   })
 
   it('flags an incomplete net on every kind', () => {
@@ -1146,5 +1148,17 @@ describe('unresolved reasons', () => {
     expect(reasonText('before_coverage')).toBe('Fill dated before attribution coverage began')
     expect(reasonText('within_grace', '2026-11-19')).not.toContain('19 Nov')
     expect(reasonText('brand_new_code', '2026-11-19')).toBe('brand new code')
+  })
+})
+
+describe('provisional data helpers', () => {
+  it('has data only when trades, open positions or orphans exist', () => {
+    expect(hasProvisionalData(null)).toBe(false)
+    expect(hasProvisionalData(undefined)).toBe(false)
+    expect(hasProvisionalData(provisional({ trades: [], open_positions: [], orphans: [] }))).toBe(
+      false
+    )
+    expect(hasProvisionalData(provisional())).toBe(true)
+    expect(hasProvisionalData(provisional({ trades: [], orphans: [{ id: 1 }] }))).toBe(true)
   })
 })

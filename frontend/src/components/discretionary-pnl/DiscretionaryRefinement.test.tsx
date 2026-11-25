@@ -232,7 +232,7 @@ describe('summary header', () => {
     renderIt({ period: '1d' })
     await screen.findByTestId('discretionary-summary')
     expect(screen.queryByTestId('today-line')).not.toBeInTheDocument()
-    expect(screen.getByText(/Report date:/)).toBeInTheDocument()
+    expect(screen.getByText(/Latest day with closed trades:/)).toBeInTheDocument()
   })
 
   it('drops the Today line for a historical date when today has no activity', async () => {
@@ -562,7 +562,8 @@ describe('MAE / MFE presentation', () => {
     panel(
       excursions({
         positions: [
-          excursionPosition({ id: 1 }),
+          // one instrument: points are never plotted across instruments
+          excursionPosition({ id: 1, symbol: 'INFY' }),
           excursionPosition({
             id: 2,
             net_pnl: -30,
@@ -571,7 +572,7 @@ describe('MAE / MFE presentation', () => {
             symbol: 'INFY',
             direction: 'SHORT',
           }),
-          excursionPosition({ id: 3, net_pnl: 0 }),
+          excursionPosition({ id: 3, net_pnl: 0, symbol: 'INFY' }),
         ],
       })
     )
@@ -596,7 +597,7 @@ describe('MAE / MFE presentation', () => {
     await userEvent.unhover(loser)
     expect(within(scatter).queryByTestId('scatter-tooltip')).not.toBeInTheDocument()
     within(scatter).getByTestId('scatter-winner').focus()
-    expect(await within(scatter).findByTestId('scatter-tooltip')).toHaveTextContent('RELIANCE Long')
+    expect(await within(scatter).findByTestId('scatter-tooltip')).toHaveTextContent('INFY Long')
   })
 
   it('offers the plotted values as a table for keyboard and screen reader users', () => {
