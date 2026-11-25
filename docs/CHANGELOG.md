@@ -13,6 +13,24 @@ fix, live in [docs/releases](releases/).
 The Performance page for trades you place by hand at your broker now reports
 from completed positions, net of estimated charges.
 
+- The 1D view has a new Today intraday section. It combines today's confirmed
+  executions with executions that still await attribution into one position
+  per instrument. During the session you see the open quantity, average
+  entry, realised and unrealised figures without waiting for the 30-minute
+  attribution window.
+- Figures that include pending executions are provisional estimates from
+  broker executions. They can change when attribution finishes, and a fill
+  placed by a strategy can appear there for a short time. Each position shows
+  Confirmed, Partially reconciled or Provisional.
+- Unrealised P&L shows only when a current price is available. Otherwise it
+  reads n/a, never zero, and the total is marked partial. The positions are not
+  checked against your broker's position book.
+- The section is read-only and places or changes no orders. Confirmed P&L, the
+  history and the 30-minute attribution rule are unchanged. Executions from
+  earlier sessions that are still unresolved are listed in a collapsed block
+  and do not change today's position. Restart OpenAlgo to load the backend
+  change (`summary.intraday`).
+
 - A calendar shows net P&L for each day of a month. Select a day to open its
   report.
 - The equity curve takes a range (report period, 1M, 3M, 6M or All) and shows
@@ -34,7 +52,8 @@ from completed positions, net of estimated charges.
   those. A figure OpenAlgo cannot compute is left out, not shown as zero or as
   "insufficient data".
 - Removed because they were not reliable: profit capture (exit efficiency) and
-  the gross daily drawdown shown when the net drawdown is missing.
+  the gross daily drawdown shown when the net drawdown is missing. Profit
+  capture comes back in a later entry below, with a new definition.
 - The page sets no minimum trade count. It is a review of your own decisions,
   not a strategy test, so every table and figure appears as soon as it can be
   computed and states its own count (for example "over 12 completed trades" or
@@ -51,6 +70,32 @@ from completed positions, net of estimated charges.
   trades may be missing and points to Refresh.
 - The cost figure now reads "estimated charges as % of winners' gross profit",
   which is what it divides.
+
+- MAE and MFE are now labelled conservative lower bounds. For the minute that
+  holds a fill, OpenAlgo uses the fill price, not the candle high or low, so
+  the true excursion can be larger. No upper bound is calculated.
+- Profit capture is back, with a new definition that replaces the removed
+  one. Realised points, capture and giveback are gross points per unit,
+  measured against the average entry in force at each exit. Only net winners
+  with at least one full candle between their first and last fill are
+  counted. The page shows "n of N" and the reason
+  for each position left out. A capture above 100% is excluded as a data
+  inconsistency, never clipped.
+- Capture, giveback and the points averages are now per instrument, as a
+  median for each instrument, with the share of trades where MAE was more than
+  half of MFE. Points are no longer pooled across instruments. When the range
+  holds more than one instrument, the pooled points averages and the MAE/MFE
+  scatter are not shown.
+- API: `profit_capture` keeps its name and now uses this definition. Its value
+  is unchanged for a position whose entries all come before its first exit.
+  New fields: `realized_points`, `giveback_points`, `capture_reason`,
+  `capture_reason_text`, `bars_used`, `bars_expected` and
+  `aggregates.instruments`. The excursions CSV has five new columns at the end:
+  `realized_points`, `giveback_points`, `capture_reason`, `bars_used`,
+  `bars_expected`. Restart OpenAlgo to load the backend change.
+- Still not modelled: an upper bound of MAE and MFE, and any segment other
+  than NSE cash equity. Capture needs candle coverage. A small sample is
+  indicative only. Multi-instrument capture is tested on synthetic data only.
 
 Not available, because OpenAlgo does not store the data: R-multiple, stop
 adherence, drawdown percent, Sharpe, Sortino and setup attribution. These need
