@@ -188,18 +188,18 @@ def test_the_real_tracker_copy_still_loads_and_lists(tmp_path, monkeypatch, caps
     copy = str(tmp_path / "bugs.json")
     shutil.copy(REAL, copy)
     data = store.load(copy)
-    assert len(data["bugs"]) == 23
+    assert len(data["bugs"]) == 24
     monkeypatch.setattr(store, "TRACKER_PATH", copy)
-    today = date(2026, 11, 15)
+    today = date(2026, 11, 25)
     for bug in data["bugs"]:
         assert store.age_days(bug, today) >= 0
         store.is_overdue(bug, today)
         store.awaiting_verification(bug)
         assert bug.get("owner", "") == ""
     assert main(["list", "--all", "--json"]) == 0
-    assert len(json.loads(capsys.readouterr().out)) == 23
+    assert len(json.loads(capsys.readouterr().out)) == 24
     assert main(["list", "--all"]) == 0
-    assert "23 bug(s)" in capsys.readouterr().out
+    assert "24 bug(s)" in capsys.readouterr().out
     # an old record takes an edit without losing history
     before = len(data["bugs"][0]["history"])
     bug = store.update(data["bugs"][0]["id"], owner="x", path=copy)

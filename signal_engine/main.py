@@ -6,6 +6,13 @@ import math
 import os
 import sqlite3
 import sys
+
+# `python -m signal_engine.main` loads this file as `__main__` and nothing registers it under its own
+# name, so tracker.py's lazy `from signal_engine.main import ...` would load a SECOND copy of it with
+# its own empty tracker, exit locks and risk engine (2026-11-25). Alias it before any import below
+# can reach back into this module.
+if __name__ == "__main__":
+    sys.modules["signal_engine.main"] = sys.modules["__main__"]
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -397,6 +404,9 @@ async def _handle_exit_locked(signal) -> None:
     pos.claimed_exit = (tp_level or "EXIT") if is_full_exit else ""
     exit_sent_at = datetime.now(IST).replace(microsecond=0)  # broker stamps are whole seconds
     exit_order, trade_result = await _place_exit_order(pos, exit_qty)
+    if trade_result.settled:
+        pos.exit_pending = False  # the poll books the close from the fill already recorded
+        return
     if trade_result.status != OrderStatus.TIMEOUT:
         pos.claimed_exit = ""
 
@@ -992,7 +1002,7 @@ async def _position_shows_exit(pos, quantity: int, copies: int) -> tuple[bool, i
     return own is not None and own == expected, own, expected
 
 
-async def _adopt_if_proven(pos, action: str, quantity: int, result):
+async def _adopt_if_proven(pos, action: str, quantity: int, result, hold=None):
     """Adopt an order as the confirmed exit only when the broker position shows it.
 
     (TradeResult, "") when adopted; (None, why) when the exit must stay held. A completed copy is
@@ -1017,6 +1027,9 @@ async def _adopt_if_proven(pos, action: str, quantity: int, result):
             f"order(s) {list(_candidate_ids(result))} on the book, but the broker position "
             f"{own} does not show the exit (expected {expected})"
         )
+    if hold is not None and order_reconcile.get_uncertain(pos.strategy, pos.symbol) is not hold:
+        # Another path settled the hold: its corrective order is not sent twice.
+        return None, "the hold was settled by another path"
     order_reconcile.clear_uncertain(pos.strategy, pos.symbol)
     if result.duplicate_ids:
         await _handle_duplicate_exit_fills(pos, action, quantity, result)
@@ -1151,6 +1164,25 @@ async def _handle_duplicate_exit_fills(pos, action: str, quantity: int, result) 
     )
 
 
+def _exit_settled(pos, order_id: str = "") -> TradeResult:
+    """The earlier exit was confirmed filled by another path while this one read the book.
+
+    That path records the close from the fill, so this exit sends nothing, saves no row and logs
+    no failure. `settled` tells the caller to leave the position to that record. A second order
+    beside a filled exit would reverse the position.
+    """
+    logger.warning(
+        f"EXIT {pos.symbol} [{pos.strategy}]: the earlier exit order was confirmed filled at the "
+        "broker; no second exit sent, the close is recorded from that fill"
+    )
+    return TradeResult(
+        order_id=order_id,
+        status=OrderStatus.TIMEOUT,
+        message=f"the earlier exit for {pos.symbol} [{pos.strategy}] was confirmed filled",
+        settled=True,
+    )
+
+
 async def _settle_prior_uncertain_exit(exit_order, pos) -> TradeResult | None:
     """Before any new exit order: resolve an earlier exit that was left unconfirmed.
 
@@ -1171,6 +1203,9 @@ async def _settle_prior_uncertain_exit(exit_order, pos) -> TradeResult | None:
         strategy=pending.strategy,
         exclude=_booked_ids_today(pending.symbol),
     )
+    gone = order_reconcile.get_uncertain(pos.strategy, pos.symbol) is not pending
+    if gone and result.outcome == order_reconcile.FILLED:
+        return _exit_settled(pos, result.order_id)  # another path settled this fill
     if result.outcome == order_reconcile.ABSENT and order_reconcile.watch_open(pending, datetime.now(IST)):
         return await _hold_uncertain_exit(
             exit_order, pos, "the earlier copy may still land: inside its late-fill window"
@@ -1187,9 +1222,13 @@ async def _settle_prior_uncertain_exit(exit_order, pos) -> TradeResult | None:
             f"earlier order {result.order_id or '?'} filled {pending.quantity}, not {exit_order.quantity}",
             _candidate_ids(result),
         )
-    adopted, why = await _adopt_if_proven(pos, pending.action, pending.quantity, result)
+    adopted, why = await _adopt_if_proven(
+        pos, pending.action, pending.quantity, result, hold=pending
+    )
     if adopted is not None:
         return adopted
+    if order_reconcile.get_uncertain(pos.strategy, pos.symbol) is not pending:
+        return _exit_settled(pos, result.order_id)
     return await _hold_uncertain_exit(exit_order, pos, why, _candidate_ids(result))
 
 
@@ -2444,6 +2483,20 @@ async def _entry_held_by_unresolved_order(signal) -> bool:
         strategy=pending.strategy,
         exclude=_booked_ids_today(pending.symbol),
     )
+    if order_reconcile.get_uncertain(signal.strategy, signal.symbol) is not pending:
+        # The sweep settled this hold during the book read and adopts the fill itself. Adopting it
+        # here as well would register the position and place its stop twice; a new entry waits.
+        reason = (
+            "an earlier order for this stock was settled while this entry was checking it; "
+            "entry declined to avoid potentially doubling the position"
+        )
+        logger.warning(
+            f"Entry for {signal.symbol} [{signal.strategy}] declined: an earlier order for this "
+            "stock was settled while this entry was checking it, and a second entry could "
+            "double the position. Check the position."
+        )
+        await _decline(signal, stage="unconfirmed_order", reason=reason)
+        return True
     if result.outcome == order_reconcile.UNCERTAIN:
         logger.critical(
             f"ENTRY blocked for {signal.symbol} [{signal.strategy}]: an earlier {pending.kind} "
@@ -2534,6 +2587,21 @@ async def _apply_late_partial_exit(pos, pending, order_id: str = "") -> None:
     )
 
 
+def _hold_taken_over(pending) -> bool:
+    """True when another path has settled `pending`, or is settling it now.
+
+    An exit hold whose leg's exit lock is held is being settled by a signal path: it reads the
+    book itself and decides, so the sweep leaves the hold untouched and looks again next cycle.
+    Synchronous on purpose: nothing may run between this check and the sweep's decision.
+    """
+    if order_reconcile.get_uncertain(pending.strategy, pending.symbol) is not pending:
+        return True
+    if pending.kind == "ENTRY":
+        return False
+    lock = _exit_locks.get(_exit_lock_key(pending.symbol, pending.strategy))
+    return lock is not None and lock.locked()
+
+
 async def sweep_unresolved_orders() -> None:
     """Resolve timed-out orders left UNCERTAIN, from the tracker poll once the broker answers.
 
@@ -2559,6 +2627,8 @@ async def sweep_unresolved_orders() -> None:
             strategy=pending.strategy,
             exclude=_booked_ids_today(pending.symbol),
         )
+        if _hold_taken_over(pending):
+            continue  # another path settles this hold: it acts once, not twice
         if result.outcome == order_reconcile.UNCERTAIN:
             if order_reconcile.alert_due(pending, now, _UNRESOLVED_ALERT_SECONDS):
                 logger.critical(
@@ -2573,6 +2643,8 @@ async def sweep_unresolved_orders() -> None:
             # The exit is proven absent; the stop comes back only on the broker's own proof that
             # the tracked position is still open in full (same side, same size).
             decision = await _absent_exit_decision(pending, now)
+            if _hold_taken_over(pending):
+                continue  # another path took the hold while the broker position was read
             if decision == "hold":
                 continue
         _clear_unresolved(pending.strategy, pending.symbol)
@@ -2704,17 +2776,34 @@ async def _restore_stop_after_absent_exit(pending) -> None:
     pos = tracker.find_position(pending.symbol, pending.strategy)
     if pos is None or not pos.sl_order_id:
         return
-    status = (await fetch_order_status(pos.sl_order_id, pos.strategy)).lower()
-    if status in ("", "trigger pending", "open", "pending"):
-        return  # unknown, or still working: never stack a second stop
-    pos.sl_order_id = ""
-    pos.sl_retry_count = 0
-    pos.last_sl_retry_at = None
-    pos.exit_pending = False
-    logger.critical(
-        f"EXIT {pending.symbol} [{pending.strategy}] is not on the broker and its stop is {status}: "
-        "the position is open, restoring its stop"
-    )
+    # Hold the leg's exit lock across the stop-status read. A new EXIT or TP signal for this leg
+    # that ran during the await would set exit_pending and start cancelling the stop, and the
+    # write-back below would then clear that ownership under it. A lock already held means an exit
+    # owns the leg now: it re-reads the state itself, so the restore is skipped. `async with` can
+    # still wait (a released lock may have a waiter that has not run yet), so everything is read
+    # again once the lock is held and again after the status read.
+    lock = _get_exit_lock(pending.symbol, pending.strategy)
+    if lock.locked():
+        logger.info(
+            f"EXIT {pending.symbol} [{pending.strategy}]: an exit is running, stop restore skipped"
+        )
+        return
+    async with lock:
+        status = (await fetch_order_status(pos.sl_order_id, pos.strategy)).lower()
+        if status in ("", "trigger pending", "open", "pending"):
+            return  # unknown, or still working: never stack a second stop
+        if tracker.find_position(pending.symbol, pending.strategy) is not pos:
+            return  # closed or replaced while waiting: nothing left to protect
+        if order_reconcile.get_uncertain(pending.strategy, pending.symbol) is not None:
+            return  # a new exit was sent and left unconfirmed meanwhile: it owns the position
+        pos.sl_order_id = ""
+        pos.sl_retry_count = 0
+        pos.last_sl_retry_at = None
+        pos.exit_pending = False
+        logger.critical(
+            f"EXIT {pending.symbol} [{pending.strategy}] is not on the broker and its stop is {status}: "
+            "the position is open, restoring its stop"
+        )
 
 
 async def _notify_entry_outcome(signal, trade_result, rr: float) -> None:

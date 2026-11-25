@@ -6,18 +6,19 @@
       "title": "Timed-out exit that later fills is booked under the cancelled stop id and labelled SL",
       "kind": "BUG",
       "severity": "HIGH",
-      "status": "fixed",
+      "status": "open",
       "area": "signal_engine",
       "strategies": [
         "EVWAP-EARLY-PY"
       ],
       "first_seen": "2026-10-27",
-      "last_seen": "2026-10-30",
+      "last_seen": "2026-11-25",
       "occurrences": [
         "2026-10-27",
         "2026-10-28",
         "2026-10-29",
-        "2026-10-30"
+        "2026-10-30",
+        "2026-11-25"
       ],
       "impact": "P&L is right, but the ledger names the wrong order and calls a trailing-stop exit a stop-loss, so reviews and EOD ledger checks fail daily.",
       "evidence": [
@@ -25,7 +26,8 @@
         "10-29 ADANIENT row 3270 under cancelled stop 26102934224208",
         "10-30 JSWENERGY row 3392, ADANIENT row 3404",
         "trades.db rows 3391-3392 (JSWENERGY) and 3403-3404 (ADANIENT): TIMEOUT exit with empty order_id, then SUCCESS close under SL order ids 26103035121544 and 26103035119260 labelled 'Closed by tracker (SL)'",
-        "eod ledger check FAIL: 2 broker fills with no matching engine order (ADANIENT, JSWENERGY); logs say exit orders 26103036923667 and 26103038430811 completed at the broker"
+        "eod ledger check FAIL: 2 broker fills with no matching engine order (ADANIENT, JSWENERGY); logs say exit orders 26103036923667 and 26103038430811 completed at the broker",
+        "2026-11-25: 10 rows in trades.db booked under the cancelled stop's order id (ids 5032, 5076, 5098, 5100, 5101, 5102, 5103, 5104, 5107, 5109; SUNPHARMA, PAYTM, AXISBANK, NTPC, RELIANCE, LT, MCX, HINDALCO, TCS, PFC). Fix adae1b78a did not take effect on the live engine: the sweep ran on a second, empty copy of the position tracker (BUG-040)."
       ],
       "root_cause": "The FILLED branch of sweep_unresolved_orders (main.py) never gave the filled exit id to the tracked position; book_close() then wrote pos.sl_order_id (the cancelled stop), and _poll_close_exit_types() defaulted the label to SL.",
       "fix": "Sweep sets pos.sl_order_id to the filled exit; a full exit records its label in TrackedPosition.claimed_exit before sending, and the poll books the close under it (adae1b78a).",
@@ -117,10 +119,20 @@
           "at": "2026-11-13T18:36:56+05:30",
           "status": "fixed",
           "note": "[eod-cron-2026-11-13] 2026-11-13: not exercised. 0 'Timeout sending order' and 0 EXIT UNCERTAIN (execution-health-2026-11-13.md); the 46 positions in the eod ledger show no timed-out exit later filled; pages match fills with 0.0 difference."
+        },
+        {
+          "at": "2026-11-25T21:28:56+05:30",
+          "status": "open",
+          "note": "seen on 2026-11-25: recurrence after being fixed, reopened automatically"
+        },
+        {
+          "at": "2026-11-25T21:29:02+05:30",
+          "status": "open",
+          "note": "2026-11-25: 10 rows in trades.db booked under the cancelled stop's order id (ids 5032, 5076, 5098, 5100, 5101, 5102, 5103, 5104, 5107, 5109; SUNPHARMA, PAYTM, AXISBANK, NTPC, RELIANCE, LT, MCX, HINDALCO, TCS, PFC). The recorded fix adae1b78a did not take effect on the live engine: the sweep's 'pos.sl_order_id = result.order_id' ran on a second, empty copy of the position tracker (engine started as python -m signal_engine.main, so tracker.py's lazy imports of signal_engine.main loaded a second module), see BUG-040. Second gap, separate from BUG-040: in 6 of the 10 the tracker poll booked the close before the sweep ran, so even a working sweep would have been too late for those. Not yet fixed by the BUG-040 change."
         }
       ],
       "created_at": "2026-10-31T14:15:18+05:30",
-      "updated_at": "2026-11-13T18:36:56+05:30",
+      "updated_at": "2026-11-25T21:29:02+05:30",
       "plain": "When the broker was slow to confirm a sale, the system wrote the wrong order number on the trade and called it a stop-loss exit. The money was right; the record was wrong."
     },
     {
@@ -1416,6 +1428,92 @@
       ],
       "created_at": "2026-11-13T15:45:36+05:30",
       "updated_at": "2026-11-13T15:45:36+05:30"
+    },
+    {
+      "id": "BUG-040",
+      "title": "After an exit is proven absent the stop is never restored: the engine's own helpers run on a second, empty copy of the position tracker",
+      "plain": "When an exit order was cancelled by the sandbox for lack of a quote, the engine said it had nothing to protect and never put the stop back. Six positions stayed without a stop for 90 to 100 minutes.",
+      "kind": "BUG",
+      "severity": "HIGH",
+      "status": "in_progress",
+      "owner": "",
+      "area": "signal_engine",
+      "strategies": [
+        "EVWAP-EARLY-PY"
+      ],
+      "first_seen": "2026-11-18",
+      "last_seen": "2026-11-25",
+      "occurrences": [
+        "2026-11-18",
+        "2026-11-19",
+        "2026-11-23",
+        "2026-11-25"
+      ],
+      "impact": "Six positions (ICICIBANK, KOTAKBANK, M&M, HDFCBANK, SBIN, COALINDIA) had no stop-loss from about 13:25 until the 14:45 time exit on 2026-11-25 (indicative cost about -1596, price at send time, may be stale). Ten late exit fills were booked under the cancelled stop's order id (see BUG-001). With the fix the engine as launched also behaves differently in four places that used to run on the second copy: the time exit now waits for or skips a leg a signal exit holds (E-06), a released entry watch frees its slot on the real risk engine, an entry adopted after a timeout is tracked and given its stop on the real tracker and risk engine, and the own-position proof subtracts other strategies' shares from the broker net. Each is covered by a subprocess test that runs main as __main__.",
+      "evidence": [
+        "2026-11-25: 6 EVWAP-EARLY-PY exits (ICICIBANK, KOTAKBANK, M&M, HDFCBANK, SBIN, COALINDIA) auto-cancelled by the sandbox for no quote at 13:24:41.",
+        "Engine log 13:25:02-13:25:28: 'absent after the watch and nothing is tracked ... hold released' for each, though all six were tracked.",
+        "Positions stayed without a stop 90-100 minutes until the 14:45 time exit. Same log line seen 2026-11-18, 11-19, 11-23.",
+        "Reproduced 2026-11-25 with a subprocess run of signal_engine.main as __main__: two module objects, import of signal_engine.main returns a different module and a different tracker (test_main_single_instance.py, RED on old code).",
+        "2026-11-18 13:01:44 analyze log: 'absent after the watch and nothing is tracked' for TATAPOWER, JSWENERGY, BEL (EVWAP-EARLY-PY); signal_engine_analyze_2026-11-18.log, 3 lines.",
+        "2026-11-19 14:36:06-14:36:09 analyze log: same line for KALYANKJIL, LICI, SBIN, JSWENERGY, ADANIENT, HINDALCO (EVWAP-EARLY-PY), 6 lines.",
+        "2026-11-23 12:59:28 analyze log: same line for HINDALCO, ETERNAL, PAYTM (EVWAP-EARLY-PY) and INFY (ORB-PY), 4 lines. Only the log line is verified for these three days; whether each position stayed without a stop was not checked."
+      ],
+      "root_cause": "The engine starts as python -m signal_engine.main, so main.py is loaded as __main__ and nothing registers it as signal_engine.main. tracker.py's lazy imports (sweep_unresolved_orders, _release_exit_lock, _send_exit_with_retries, _get_exit_lock, _exit_time_left) loaded a second copy of main.py. That copy had its own empty PositionTracker, its own exit-lock table, its own RiskEngine and its own RiskStore. Sweep: find_position on the empty tracker returned None, so _absent_exit_decision logged 'nothing is tracked' and returned restore, _restore_stop_after_absent_exit did nothing, claimed_exit was never cleared (so _reconcile_stops and _retry_missing_sl skipped the position) and the FILLED branch wrote pos.sl_order_id on a position that was not the real one. Other effects of the same split: the time exit and a signal exit held DIFFERENT exit locks (E-06 protection void for the engine as launched); a released entry watch went to the second copy's risk engine, so the slot count the entry gates read was not updated; fetch_own_position on the empty tracker did not subtract other strategies' quantity. Late-entry adoption: the second copy's _adopt_untracked_entry did place a real broker stop, but nothing tracked, booked or exited that position (it sat in the second copy's tracker, which no poll reads). Its record_trade went to the second copy's RiskEngine and saved stale trades_today/open_positions to risk.db (RiskStore.save is a whole-row INSERT..ON CONFLICT DO UPDATE keyed strategy, mode, trade_date; live mode is pooled under PORTFOLIO). The primary engine rewrote its own row at its next write, so the stale values did not persist, but adopted entries never reached the real counters: trades_today/open_positions undercounted by 2 on 2026-11-18 EVWAP-EARLY-PY (24 recorded vs 26 closes; adoptions AXISBANK 11:21:52, LAURUSLABS 11:22:25) and by 1 on 2026-11-25 ORB-PY (ITC adopted 10:31:39; risk 3 vs 4 entries in trades.db). Loss and net-P&L counters matched the logged closes in 28 of 28 strategy-days from 11-17 to 11-25. Intermediate values cannot be recovered (risk.db keeps no history). Days before 11-17 were not audited (adoptions also logged on 10-28 and 11-04). Fix: alias sys.modules['signal_engine.main'] to the running __main__ module right after 'import sys' in main.py, so every import reaches the one module. Races closed in the same change: (1) _restore_stop_after_absent_exit awaited the stop-status read with no lock, so a new EXIT or TP signal on the same leg could set exit_pending during the await and the write-back then cleared it; it now holds the leg's exit lock across the read, skips when a signal exit already holds it, and re-checks that the position is still the tracked one and that no new unconfirmed exit exists. (2) The sweep and a signal path could both settle the same unconfirmed-order hold: a duplicate-fill corrective order sent twice, or a late entry adopted twice (second stop, second record_trade). The sweep now skips an exit hold whose leg's exit lock is held (a signal exit is settling it) and leaves the hold untouched for the next cycle; every path also acts only while the hold it read is still the registered one. A first version of this fix made the signal exit give up when the sweep had cleared its hold, which could drop an EXIT after the sweep found it absent; that was caught in review before release and replaced by the lock skip. A signal exit that loses a FILLED hold to another path now reports the exit as confirmed filled (no second order, no trades row, no failure log, nothing counted as an unconfirmed exit); with an ABSENT hold it decides from its own read as before. A new entry that loses its hold to the sweep is declined with a warning and a recorded reason (stage unconfirmed_order) instead of silently.",
+      "fix": "",
+      "fix_commit": "",
+      "fix_explanation": "",
+      "verification": "",
+      "sources": [
+        "signal_engine/tests/test_main_single_instance.py",
+        "signal_engine/logs/signal_engine_analyze_2026-11-18.log",
+        "signal_engine/logs/signal_engine_analyze_2026-11-19.log",
+        "signal_engine/logs/signal_engine_analyze_2026-11-23.log"
+      ],
+      "history": [
+        {
+          "at": "2026-11-25T19:36:15+05:30",
+          "status": "open",
+          "note": "recorded"
+        },
+        {
+          "at": "2026-11-25T20:22:17+05:30",
+          "status": "in_progress",
+          "note": "open -> in_progress: fix on branch fix/tracker-instance-dup, uncommitted worktree"
+        },
+        {
+          "at": "2026-11-25T20:44:29+05:30",
+          "status": "in_progress",
+          "note": "Phase 2: added the sweep race closure and four new subprocess tests (lock sharing, slot release, adoption, shared net position); fix is uncommitted in worktree fix/tracker-instance-dup, awaiting approval"
+        },
+        {
+          "at": "2026-11-25T21:28:47+05:30",
+          "status": "in_progress",
+          "note": "seen on 2026-11-18"
+        },
+        {
+          "at": "2026-11-25T21:28:47+05:30",
+          "status": "in_progress",
+          "note": "seen on 2026-11-19"
+        },
+        {
+          "at": "2026-11-25T21:28:47+05:30",
+          "status": "in_progress",
+          "note": "seen on 2026-11-23"
+        },
+        {
+          "at": "2026-11-25T21:28:47+05:30",
+          "status": "in_progress",
+          "note": "Phase 3: risk.db finding, earlier dates verified from the analyze logs, settle-race guards"
+        },
+        {
+          "at": "2026-11-25T23:27:04+05:30",
+          "status": "in_progress",
+          "note": "Phase 4: sweep skips an exit-locked leg, settled-exit outcome, visible entry decline, restore write-back re-check; fix still uncommitted in worktree fix/tracker-instance-dup"
+        }
+      ],
+      "created_at": "2026-11-25T19:36:15+05:30",
+      "updated_at": "2026-11-25T23:27:04+05:30"
     }
   ]
 }
