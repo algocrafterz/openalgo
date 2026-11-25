@@ -2204,6 +2204,8 @@ class PositionTracker:
         from signal_engine.main import _send_exit_with_retries
 
         result = await _send_exit_with_retries(exit_order, pos)
+        if result.settled:
+            return  # the earlier exit filled and another path records the close
         if result.status == OrderStatus.TIMEOUT:
             logger.critical(
                 f"No-progress market exit for {pos.symbol} is unconfirmed ({result.message}); "

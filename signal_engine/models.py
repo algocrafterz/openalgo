@@ -105,6 +105,10 @@ class TradeResult(BaseModel):
     #: True when the core refused this send because an identical order is still being placed
     #: (HTTP 409 or the response's ``inflight`` flag). Not persisted.
     inflight: bool = False
+    #: True when an earlier unconfirmed exit was found filled by another path, which records the
+    #: close from that fill: nothing is booked, saved or logged as a failure for this result.
+    #: Not persisted.
+    settled: bool = False
 
 
 class ValidationResult(BaseModel):
