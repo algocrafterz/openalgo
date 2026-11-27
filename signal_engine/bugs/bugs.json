@@ -129,6 +129,11 @@
           "at": "2026-11-25T21:29:02+05:30",
           "status": "open",
           "note": "2026-11-25: 10 rows in trades.db booked under the cancelled stop's order id (ids 5032, 5076, 5098, 5100, 5101, 5102, 5103, 5104, 5107, 5109; SUNPHARMA, PAYTM, AXISBANK, NTPC, RELIANCE, LT, MCX, HINDALCO, TCS, PFC). The recorded fix adae1b78a did not take effect on the live engine: the sweep's 'pos.sl_order_id = result.order_id' ran on a second, empty copy of the position tracker (engine started as python -m signal_engine.main, so tracker.py's lazy imports of signal_engine.main loaded a second module), see BUG-040. Second gap, separate from BUG-040: in 6 of the 10 the tracker poll booked the close before the sweep ran, so even a working sweep would have been too late for those. Not yet fixed by the BUG-040 change."
+        },
+        {
+          "at": "2026-11-27T15:27:10+05:30",
+          "status": "open",
+          "note": "2026-11-27: second gap found. The tracker poll (every cycle) books a leg that closed at the broker while its exit was held unconfirmed, before the sweep (every ~30 s) settles the hold, so the EXIT row carries the cancelled stop's id (2026-11-26: trades.db rows 5163-5168, 5170, 5210, 5214, 5215, 10 of 53 exits; 2026-11-25: 5032, 5076, 5098, 5100-5104, 5107, 5109, 10 of 56; 2026-11-27: 0 of 31). Fill price, quantity and P&L were right. Branch fix/bug001-exit-orderid (not committed, not running): PositionTracker._adopt_held_exit_id reads the order book for a held full exit and books the close under that order's id (TrackedPosition.exit_order_id, used only for the EXIT row's order_id; sl_order_id still names the stop, so the close label TIME, SQUAREOFF or SL is what it was before); record-only, no order sent, cancelled or skipped differently. Tests: signal_engine/tests/test_exit_orderid_poll_vs_sweep.py. Production verification PENDING: needs a day with a held exit that fills after the poll sees the position flat; the EXIT row must carry the exit order id, not the stop's. Status stays open."
         }
       ],
       "created_at": "2026-10-31T14:15:18+05:30",
