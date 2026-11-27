@@ -284,6 +284,10 @@ class TrackedPosition:
     time_exit_left_open: bool = False  # the time exit could not close it; the broker still holds it
     stop_filled_in_cancel: bool = False  # a stop filled while the exit sweep cancelled it
     claimed_exit: str = ""  # label of a full exit sent but unconfirmed (timed out); "" = none
+    # The held exit's own order id, found by the poll (BUG-001). Read only where the closing EXIT
+    # row's order_id is written. sl_order_id keeps naming the stop, which the close label, the
+    # stop-status read and the cancel all depend on.
+    exit_order_id: str = ""
     fill_price: float = 0.0  # Actual broker fill price for the entry order (0 = unknown)
     original_quantity: int = 0  # Set by register() — qty at entry, unchanged through partial exits
     realized_pnl: float = (
@@ -719,6 +723,10 @@ class PositionTracker:
 
         Time exit does not use this: it books its own close and attributes P&L
         across positions rather than per close.
+
+        The EXIT row's order id is pos.exit_order_id when set (the held exit the poll adopted,
+        BUG-001), else pos.sl_order_id. pos.sl_order_id still drives the stop-status read, the
+        cancel and the close label in _record_closed_trade; the exit's id never does.
         """
         base_price = pos.fill_price if pos.fill_price > 0 else pos.entry_price
         total_pnl = pos.realized_pnl + pnl_delta
@@ -754,7 +762,7 @@ class PositionTracker:
             exit_price=exit_price,
             total_pnl=total_pnl,
             exit_types=exit_types,
-            order_id=pos.sl_order_id,
+            order_id=pos.exit_order_id or pos.sl_order_id,
         )
         self.record_exit(
             pnl=pnl_delta,
@@ -1422,7 +1430,13 @@ class PositionTracker:
                 # signal exit cannot start between the proof and the booking.
                 if entry is None and not await self._absent_row_proven_flat(key, pos):
                     return False
+                held_exit = await self._adopt_held_exit_id(key, pos)
                 closed = await self._book_broker_close(key, pos, age, _settings, entry)
+                if closed and held_exit is not None:
+                    # The close is booked under the exit's own id: the hold has nothing left to
+                    # settle. Identity check: a path that replaced the hold meanwhile keeps it.
+                    if order_reconcile.get_uncertain(pos.strategy, pos.symbol) is held_exit:
+                        order_reconcile.clear_uncertain(pos.strategy, pos.symbol)
             return closed
         finally:
             if closed:
@@ -1431,6 +1445,54 @@ class PositionTracker:
                 self._positions.pop(key, None)
             else:
                 pos.exit_pending = False
+
+    async def _adopt_held_exit_id(self, key: str, pos):
+        """Name the closing order of a leg whose full exit is held unconfirmed (BUG-001).
+
+        The exit path cancels the stop and sends a MARKET exit. When that exit is not confirmed
+        in time it is held (order_reconcile) and the stop's id stays in pos.sl_order_id. The
+        position can then close at the broker before the sweep has settled the hold, and the
+        close would be booked under that cancelled stop (10 of 56 exits on 2026-11-25, 10 of 53
+        on 2026-11-26). So read the order book for the held exit, as the sweep does, and when a
+        completed copy is there, record its id in pos.exit_order_id. Returns the hold when the
+        id was adopted, else None: the close is then booked as before, under the stop.
+
+        The id goes to the EXIT row only. pos.sl_order_id still names the stop, so the stop
+        status read, the cancel, the fill-price source and the close label (TIME, SQUAREOFF, SL
+        from _closing_label) are exactly what they were. Writing the exit's id into sl_order_id
+        would make _record_closed_trade read it as a filled stop and label every unclaimed
+        hold (a time exit left open, a bad-fill close) "SL".
+
+        Records the id only. No order is sent, cancelled or skipped, and the close is still
+        decided from the broker's flat position.
+        """
+        pending = order_reconcile.get_uncertain(pos.strategy, pos.symbol)
+        if pending is None or pending.kind != "EXIT":
+            return None
+        if pending.since.date() != datetime.now(IST).date() or pending.quantity < pos.quantity:
+            return None  # a stale hold, or a partial exit: its id never closes the position
+        try:
+            result = await order_reconcile.reconcile_timed_out_order(
+                symbol=pending.symbol, action=pending.action, quantity=pending.quantity,
+                since=pending.since, fetch_orderbook=fetch_orderbook, attempts=1, delay=0.0,
+                strategy=pending.strategy,
+                exclude=frozenset(db.fetch_order_ids_today(pending.symbol)),
+            )
+        except Exception:
+            logger.exception(f"{key}: could not read the order book for its held exit")
+            return None
+        if result.outcome != order_reconcile.FILLED or not result.order_id or result.duplicate_ids:
+            return None  # not proven, or duplicate copies: the sweep handles those
+        if order_reconcile.get_uncertain(pos.strategy, pos.symbol) is not pending:
+            return None  # the sweep or a signal path settled the hold while the book was read
+        if self._positions.get(key) is not pos:
+            return None
+        pos.exit_order_id = result.order_id
+        logger.info(
+            f"{key}: closed at the broker by its held exit {result.order_id}; booking the close "
+            "under that order, not the cancelled stop"
+        )
+        return pending
 
     async def _book_shared_symbol_stop_fill(self, key: str, pos, entry, _settings) -> bool:
         """Book a leg whose own stop filled although the symbol's net quantity is not zero (E-08).
