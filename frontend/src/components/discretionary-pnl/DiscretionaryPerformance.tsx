@@ -8,6 +8,7 @@ import {
   exportCsvUrl,
 } from '@/api/discretionaryPnl'
 import type { PerformancePeriod } from '@/api/strategyPnl'
+import { MarketStateCard } from '@/components/strategy-pnl/MarketStateCard'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -856,6 +857,17 @@ export function DiscretionaryPerformance({
       )}
 
       {body}
+
+      {populated && (
+        <MarketStateCard
+          source="discretionary"
+          period={period}
+          range={range}
+          clientMode="live"
+          discretionary={{ ...queryFilters, category }}
+          formatCurrency={formatCurrency}
+        />
+      )}
 
       <UnresolvedDialog
         open={unresolvedOpen}

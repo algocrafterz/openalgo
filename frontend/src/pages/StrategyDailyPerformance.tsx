@@ -23,6 +23,7 @@ import { HoldBuckets } from '@/components/strategy-pnl/HoldBuckets'
 import { HoldStatsRow } from '@/components/strategy-pnl/HoldStats'
 import { ExcursionCard, GradeBadge, InsightsPanel } from '@/components/strategy-pnl/InsightsPanel'
 import { PortfolioComparison } from '@/components/strategy-pnl/PortfolioComparison'
+import { MarketStateCard } from '@/components/strategy-pnl/MarketStateCard'
 import { MetricCard } from '@/components/strategy-pnl/MetricCard'
 import { ValidationBadge, ValidationStatusCard } from '@/components/strategy-pnl/ValidationStatusCard'
 import { SessionSummary } from '@/components/strategy-pnl/SessionSummary'
@@ -1149,6 +1150,18 @@ export default function StrategyDailyPerformance() {
             byWeekday={daily.by_weekday ?? []}
             formatCurrency={formatCurrency}
           />
+
+          {!isToday && (
+            <MarketStateCard
+              source="strategy"
+              period={period}
+              range={range}
+              filter={filter}
+              clientMode={clientMode}
+              enabled={queriesEnabled && capitalReady}
+              formatCurrency={formatCurrency}
+            />
+          )}
         </>
       )}
 

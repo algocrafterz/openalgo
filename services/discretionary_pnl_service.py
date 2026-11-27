@@ -3003,6 +3003,38 @@ def get_performance(
     return out
 
 
+def get_completed_trade_rows(
+    period: str = "30d",
+    start: str | None = None,
+    end: str | None = None,
+    broker: str | None = None,
+    symbol: str | None = None,
+    account: str | None = None,
+    category: str = "all",
+) -> dict:
+    """Completed trades of one scope as plain rows for read-only grouping (Market State).
+
+    The scope is resolved exactly as ``get_performance`` resolves it (same snapshot, period,
+    filters and category), but the rows are not cut to TABLE_LIMIT. Each row carries the
+    trade's close date, its gross ``realized_pnl`` and its estimated ``cost`` (the trade's
+    ``charges``; None when unavailable). Nothing is recomputed. Raises ValueError for a bad
+    category and FilterError for a bad period or range, like ``get_performance``.
+    """
+    check_category(category)
+    filters = _clean_filters(broker, account, symbol)
+    snap = _snapshot(filters, trades=True, positions=True, orphans=True, links=True)
+    scope = _scope(snap, period, start, end, category)
+    rows = [
+        {
+            "trade_date": t["trade_date"],
+            "realized_pnl": float(t["realized_pnl"]),
+            "cost": None if t.get("charges") is None else float(t["charges"]),
+        }
+        for t in scope["trades"]
+    ]
+    return {"start_date": str(scope["s"]), "end_date": str(scope["e"]), "rows": rows}
+
+
 # ---------------------------------------------------------------- MAE / MFE (lazy)
 
 # Positions whose bars are read per request (the most recent ones); the rest of a larger scope

@@ -644,6 +644,90 @@ async function unwrap<T extends { status: 'success' | 'error'; message?: string 
   }
 }
 
+/** Trend and volatility classes of the Market State Analysis, from NIFTY 50 daily bars. */
+export type MarketStateDimension = 'trend' | 'volatility'
+
+export interface MarketStateRow {
+  /** Class name, or 'Unclassified'. */
+  name: string
+  trades: number
+  /** Wins on gross P&L. */
+  wins: number
+  win_rate: number | null
+  gross_pnl: number | null
+  charges_estimated: number | null
+  /** Null unless every trade of the row has an estimated charge. */
+  net_pnl: number | null
+  avg_net_per_trade: number | null
+  profit_factor: number | null
+  net_coverage: { costed: number; total: number }
+  small_sample: boolean
+}
+
+export interface MarketStateMethodology {
+  benchmark: string
+  trend: string
+  volatility: string
+  attribution: string
+  min_bars_trend: number
+  min_bars_volatility: number
+  max_bar_age_days: number
+  small_sample_trades: number
+  small_sample_text: string
+}
+
+export interface MarketStateDataStatus {
+  state: 'ok' | 'no_data'
+  bars: number
+  dropped_bars: number
+  first_bar: string | null
+  last_bar: string | null
+}
+
+export interface MarketStateUnclassified {
+  trades: number
+  reasons: Record<string, number>
+}
+
+export interface MarketStateResponse {
+  status: 'success' | 'error'
+  message?: string
+  benchmark?: string
+  methodology?: MarketStateMethodology
+  basis_note?: string
+  source?: 'strategy' | 'discretionary'
+  mode?: 'live' | 'analyze'
+  period?: PerformancePeriod
+  start_date?: string
+  end_date?: string
+  trades_count?: number
+  trend?: MarketStateRow[]
+  volatility?: MarketStateRow[]
+  unclassified?: Record<MarketStateDimension, MarketStateUnclassified>
+  data_status?: MarketStateDataStatus
+}
+
+export interface TodayMarketState {
+  status: 'success' | 'error'
+  message?: string
+  benchmark?: string
+  session_date?: string
+  trend?: string | null
+  volatility?: string | null
+  label_status?: 'classified' | 'partial' | 'unclassified'
+  as_of?: string | null
+  reason?: string | null
+  data_status?: MarketStateDataStatus
+}
+
+/** The Discretionary page's own filters, passed through so the card matches the page. */
+export interface MarketStateDiscretionaryScope {
+  broker?: string
+  account?: string
+  symbol?: string
+  category?: string
+}
+
 export const strategyPnlApi = {
   get: async (): Promise<StrategyPnlResponse> => {
     try {
@@ -686,6 +770,41 @@ export const strategyPnlApi = {
       'Failed to fetch strategy comparison'
     )
   },
+
+  /**
+   * Closed trades grouped by the NIFTY 50 daily market state. The mode is the server's, so
+   * it is never sent; the page keeps it in the query key only so a switch refetches.
+   */
+  marketState: (
+    source: 'strategy' | 'discretionary',
+    period: PerformancePeriod,
+    range?: DateRange,
+    filter?: StrategyFilter,
+    discretionary?: MarketStateDiscretionaryScope
+  ): Promise<MarketStateResponse> => {
+    if (source === 'strategy' && isNoneSelection(filter)) {
+      return Promise.reject(new Error(NOTHING_SELECTED))
+    }
+    const params = periodParams(period, range, source === 'strategy' ? filter : undefined)
+    params.set('source', source)
+    if (source === 'discretionary' && discretionary) {
+      for (const key of ['broker', 'account', 'symbol', 'category'] as const) {
+        const value = discretionary[key]
+        if (value && value !== 'all') params.set(key, value)
+      }
+    }
+    return unwrap(
+      webClient.get<MarketStateResponse>(`/api/strategy-pnl/market-state?${params.toString()}`),
+      'Could not load the market state analysis. Please try again.'
+    )
+  },
+
+  /** The market state that applies to the current session (read-only context). */
+  marketStateToday: (): Promise<TodayMarketState> =>
+    unwrap(
+      webClient.get<TodayMarketState>('/api/strategy-pnl/market-state/today'),
+      "Could not load today's market state."
+    ),
 
   excursions: (
     strategy: StrategySelection,

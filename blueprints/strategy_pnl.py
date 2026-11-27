@@ -18,6 +18,7 @@ from werkzeug.utils import redirect
 from database.auth_db import get_api_key_for_tradingview, get_auth_token
 from database.settings_db import get_analyze_mode
 from limiter import limiter
+from services import market_state_report_service as market_state_report
 from services.strategy_book_reconciler import get_data_health, schedule_reconcile
 from services.strategy_daily_performance_service import (
     get_daily_performance,
@@ -138,6 +139,9 @@ def _strategy_filter():
 
 MAX_CAPITAL = 1_000_000_000_000  # 1 lakh crore rupees
 
+# Discretionary filters the market-state route passes through: broker, symbol, account, category.
+_DISC_SCOPE_ARGS = ("broker", "symbol", "account", "category")
+
 
 def _parse_capital():
     """Read the optional `capital` query value (rupees).
@@ -228,6 +232,98 @@ def strategy_pnl_daily_excursions():
         ttl=_PNL_READ_TTL_S,
     )
     return jsonify(_with_data_health(response, status_code)), status_code
+
+
+@strategy_pnl_bp.route("/api/strategy-pnl/market-state", methods=["GET"])
+@check_session_validity
+@limiter.limit(STRATEGY_PNL_READ_LIMIT)
+def strategy_pnl_market_state():
+    """Closed trades grouped by the NIFTY 50 daily market state (trend and volatility).
+
+    Read-only. `source` is `strategy` (default, the mode comes from the server) or
+    `discretionary`. The strategy filter, `period`, `start` and `end` work as on the daily route."""
+    source = request.args.get("source", market_state_report.SOURCE_STRATEGY).strip()
+    if source not in market_state_report.VALID_SOURCES:
+        message = "Choose a source: strategy or discretionary."
+        return jsonify({"status": "error", "message": message}), 400
+    strategy, include, exclude, error = _strategy_filter()
+    if error:
+        return error
+    capital, capital_error = _parse_capital()
+    if capital_error:
+        return capital_error
+    period = request.args.get("period", "30d")
+    start = request.args.get("start")
+    end = request.args.get("end")
+    names = (
+        tuple(sorted(([strategy] if strategy else []) + include)),
+        tuple(sorted(exclude)),
+    )
+
+    if source == market_state_report.SOURCE_DISCRETIONARY:
+        from blueprints.discretionary_pnl import discretionary_enabled
+
+        if not discretionary_enabled():
+            message = "Discretionary performance is turned off."
+            return jsonify({"status": "error", "message": message}), 404
+        scope = tuple(request.args.get(k, "").strip() or None for k in _DISC_SCOPE_ARGS)
+        mode = "live"
+        key = ("market-state", session["user"], source, mode, *names, period, start, end, capital)
+        key += scope
+
+        def fetch():
+            from services.discretionary_pnl_service import FilterError
+
+            try:
+                body = market_state_report.get_discretionary_market_state(
+                    period, start, end, scope[0], scope[1], scope[2], scope[3] or "all"
+                )
+            except FilterError as exc:
+                return False, {"status": "error", "message": str(exc)}, 400
+            except ValueError:
+                return False, {"status": "error", "message": "Choose a valid trade category."}, 400
+            except Exception:
+                logger.exception("Market state analysis failed")
+                message = "Could not build the market state analysis."
+                return False, {"status": "error", "message": message}, 500
+            return True, body, 200
+
+    else:
+        mode = "analyze" if get_analyze_mode() else "live"
+        key = ("market-state", session["user"], source, mode, *names, period, start, end, capital)
+
+        def fetch():
+            try:
+                return market_state_report.get_strategy_market_state(
+                    strategy, period, start, end, include=include, exclude=exclude, mode=mode
+                )
+            except Exception:
+                logger.exception("Market state analysis failed")
+                message = "Could not build the market state analysis."
+                return False, {"status": "error", "message": message}, 500
+
+    _success, response, status_code = _pnl_flights.do(key, fetch, ttl=_PNL_READ_TTL_S)
+    return jsonify(response), status_code
+
+
+@strategy_pnl_bp.route("/api/strategy-pnl/market-state/today", methods=["GET"])
+@check_session_validity
+@limiter.limit(STRATEGY_PNL_READ_LIMIT)
+def strategy_pnl_market_state_today():
+    """The NIFTY 50 daily market state that applies to the current session (the previous
+    completed trading day), or Unclassified with a reason. Read-only context."""
+    key = ("market-state-today", session["user"])
+
+    def fetch():
+        try:
+            return True, market_state_report.get_today_state(), 200
+        except Exception:
+            logger.exception("Today's market state failed")
+            message = "Could not read today's market state."
+            return False, {"status": "error", "message": message}, 500
+
+    _success, response, status_code = _pnl_flights.do(key, fetch, ttl=_PNL_READ_TTL_S)
+    return jsonify(response), status_code
 
 
 @strategy_pnl_bp.route("/api/strategy-pnl/compare", methods=["GET"])

@@ -24,6 +24,7 @@ import { StrategyModeBadge } from '@/components/StrategyModeBadge'
 import { HoldStatsRow } from '@/components/strategy-pnl/HoldStats'
 import { SessionSummary } from '@/components/strategy-pnl/SessionSummary'
 import { SessionTrades } from '@/components/strategy-pnl/SessionTrades'
+import { TodayMarketStateLine } from '@/components/strategy-pnl/TodayMarketStateLine'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -471,6 +472,7 @@ export default function StrategyPnL() {
             Performance page for history. Live and Sandbox (Analyze mode) trades are tracked
             separately.
           </p>
+          <TodayMarketStateLine />
         </div>
         <Button variant="outline" size="sm" onClick={refresh} disabled={isFetching}>
           <RefreshCw className={cn('h-4 w-4 mr-2', isFetching && 'animate-spin')} />
