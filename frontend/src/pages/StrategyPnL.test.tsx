@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
 import type { StrategyLeg, StrategyPnl } from '@/api/strategyPnl'
 import StrategyPnL from './StrategyPnL'
@@ -52,7 +53,9 @@ describe('StrategyPnL legs table', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(
       <QueryClientProvider client={client}>
-        <StrategyPnL />
+        <MemoryRouter>
+          <StrategyPnL />
+        </MemoryRouter>
       </QueryClientProvider>
     )
     await userEvent.click(await screen.findByRole('button', { name: /ORB/ }))
